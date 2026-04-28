@@ -19,9 +19,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "bun test"
+    "test": "bun test src"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0",
     "@wifo/factory-core": "workspace:*"
   },
   "devDependencies": {
