@@ -1,0 +1,33 @@
+{
+  "name": "@wifo/factory-core",
+  "version": "0.0.0",
+  "description": "Universal spec format, schema, parser, and lint CLI for software factories",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "factory": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && bun run scripts/emit-json-schema.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "yaml": "^2.5.0",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "ajv": "^8.17.0"
+  }
+}
