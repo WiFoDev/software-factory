@@ -1,0 +1,30 @@
+{
+  "name": "@wifo/factory-harness",
+  "version": "0.0.0",
+  "description": "Scenario runner for software-factory specs — runs `test:` satisfaction lines and scores `judge:` lines via LLM",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "factory-harness": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@wifo/factory-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14"
+  }
+}
