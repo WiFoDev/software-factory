@@ -50,6 +50,12 @@ importers:
         specifier: ^1.1.14
         version: 1.3.13
 
+  packages/twin:
+    devDependencies:
+      '@types/bun':
+        specifier: ^1.1.14
+        version: 1.3.13
+
 packages:
 
   '@anthropic-ai/sdk@0.40.1':
