@@ -29,20 +29,50 @@ Tests: `<module>.test.ts` next to source, mirroring `packages/core`.
 
 ### Public API
 
+The full public surface from `src/index.ts` — 19 names total. The DoD's "matches §2" check is a strict equality between this list and what `index.ts` exports. Every other symbol stays internal to the package.
+
 ```ts
+// Orchestrator
 export { runHarness } from './runner.js';
+
+// Test runner
 export { runTestSatisfaction } from './runners/test.js';
-export { runJudgeSatisfaction, type JudgeClient } from './runners/judge.js';
+export type { TestRunnerOptions } from './runners/test.js';
+
+// Judge runner — both factories are public:
+//   anthropicJudgeClient(client) — adapter wrapping an existing SDK instance (DI / tests / custom transport)
+//   createDefaultJudgeClient()   — convenience: reads ANTHROPIC_API_KEY, lazy-imports SDK, calls the adapter
+export {
+  RECORD_JUDGMENT_TOOL,
+  anthropicJudgeClient,
+  createDefaultJudgeClient,
+  runJudgeSatisfaction,
+} from './runners/judge.js';
+export type {
+  JudgeClient,
+  JudgeRunnerOptions,
+  Judgment,
+  ScenarioContext,
+} from './runners/judge.js';
+
+// Parser + formatter
 export { parseTestLine } from './parse-test-line.js';
+export type { ParsedTestLine } from './parse-test-line.js';
 export { formatReport } from './format.js';
+export type { ReporterKind } from './format.js';
+
+// Top-level types
 export type {
   HarnessReport,
-  ScenarioResult,
-  SatisfactionResult,
-  SatisfactionStatus,    // 'pass' | 'fail' | 'error' | 'skipped'
+  ReportStatus,                  // 'pass' | 'fail' | 'error'
   RunHarnessOptions,
+  SatisfactionResult,
+  SatisfactionStatus,            // 'pass' | 'fail' | 'error' | 'skipped'
+  ScenarioResult,
 } from './types.js';
 ```
+
+**Intentionally not exported** (internal cycle-breakers, status-fold helpers, runner internals): `JudgeClientLike`, `RunHarnessInternalOptions`, `stripAnsi`, `tailDetail`, `aggregateStatus`, `reportStatusFrom`. They keep their definitions in their files but don't re-export from `index.ts` — every public name is a future refactor cost, and these don't earn it for v0.0.1.
 
 ### Data model
 
