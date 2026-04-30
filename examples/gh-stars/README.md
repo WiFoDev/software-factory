@@ -1,13 +1,11 @@
 # example-gh-stars
 
-A scaffold for trying the v0.0.2 `[implement → validate]` loop end-to-end. **Nothing is implemented yet** — the point is to walk the loop:
+A walkthrough of the factory-runtime `[implement → validate]` loop. Two specs:
 
-1. you have a spec at `docs/specs/gh-stars-v1.md`
-2. `factory-runtime run` invokes the agent (`claude -p`) which writes the implementation
-3. validate runs `bun test` against the agent's output
-4. inspect the provenance via `factory-context`
+- **`docs/specs/gh-stars-v1.md`** — the v0.0.2 single-shot demo: a `getStargazers(repo, opts?)` helper with caching + rate-limit handling. Small enough to converge in one iteration.
+- **`docs/specs/gh-stars-v2.md`** *(v0.0.3)* — extends v1 with **pagination**, **ETag/conditional caching**, and **retry-with-backoff on 5xx**. Designed to require iteration 2+ — the closed-loop demo for v0.0.3.
 
-The spec's `getStargazers(repo, opts?)` helper is non-trivial enough to exercise the v0.0.2 cost cap, twin env-var plumbing, and the `factory-implement-report` payload — but small enough to converge in a single iteration on a good agent run.
+The v0.0.3 unattended loop drives `[implement → validate]` repeatedly (default `--max-iterations 5`) with the prior validate-report threaded into the next iteration's implement prompt. Run it once, walk away.
 
 ## Setup (one-time)
 
@@ -42,15 +40,32 @@ pnpm exec factory spec lint docs/specs/
 
 ### 2. Run the loop (agent writes `src/`, validate runs the tests)
 
+**v0.0.2 single-shot (one iteration):**
+
 ```sh
-pnpm exec factory-runtime run docs/specs/gh-stars-v1.md --no-judge --context-dir ./.factory
+pnpm exec factory-runtime run docs/specs/gh-stars-v1.md \
+  --no-judge \
+  --max-iterations 1 \
+  --context-dir ./.factory
 ```
+
+**v0.0.3 unattended loop (recommended for v2):**
+
+```sh
+pnpm exec factory-runtime run docs/specs/gh-stars-v2.md \
+  --no-judge \
+  --max-total-tokens 1000000 \
+  --context-dir ./.factory
+```
+
+`--max-iterations` defaults to **5** in v0.0.3; `--max-total-tokens` defaults to 500_000. If your task uses long prompts, bump to ~1_000_000 (the default 500k ÷ 5 iterations = 100k/iter is the same as the per-phase cap, so they coexist tightly under defaults — see runtime README "default-budget tightness").
 
 What happens:
 
-- **Iteration 1, implement phase**: the runtime spawns `claude -p --allowedTools "Read,Edit,Write,Bash" --bare --output-format json` with the spec source on stdin. The agent reads the spec, edits files in `examples/gh-stars/`, runs `bun test src` to verify, and exits.
-- **Iteration 1, validate phase**: the harness runs `bun test src/gh-stars.test.ts -t "..."` for each `test:` line in the spec.
-- **Convergence**: if validate passes, exit code 0. If it fails, exit code 1 with a typed report — re-run manually after the agent's next attempt (v0.0.3 will do this automatically).
+- **Iteration 1, implement phase**: the runtime spawns `claude -p --allowedTools "Read,Edit,Write,Bash" --output-format json` with the spec source on stdin. The agent reads the spec, edits files in `examples/gh-stars/`, runs `bun test src` to verify, and exits.
+- **Iteration 1, validate phase**: the harness runs `bun test src/gh-stars-v2.test.ts -t "..."` for each `test:` line in the spec.
+- **Iteration 2+ (v0.0.3)**: if validate fails, the runtime threads the prior validate-report's failed scenarios into the next iteration's implement prompt under a `# Prior validate report` section, and runs implement → validate again. Up to `--max-iterations` times.
+- **Convergence**: when validate passes, exit code 0. The CLI summary names the run id; `factory-context tree <runId>` walks the multi-iteration ancestry.
 
 ### 3. Inspect the provenance
 
@@ -64,12 +79,12 @@ The `factory-implement-report` record carries the full prompt, the `result` text
 
 ### 4. Iterate
 
-If the agent didn't converge in iteration 1:
+In v0.0.3, the runtime auto-iterates up to `--max-iterations` (default 5). If you hit `no-converge`, raise `--max-iterations` or fix the spec — the agent already has the prior failures threaded into its prompt for each retry.
+
+If you want to manually re-run from the current disk state (e.g., after editing the spec):
 
 ```sh
-# Re-run — the agent picks up from the current disk state, no cross-iteration
-# context plumbing in v0.0.2 (that's v0.0.3).
-pnpm exec factory-runtime run docs/specs/gh-stars-v1.md --no-judge --context-dir ./.factory
+pnpm exec factory-runtime run docs/specs/gh-stars-v2.md --no-judge --context-dir ./.factory
 ```
 
 ### 5. Archive the spec
@@ -80,9 +95,11 @@ pnpm exec factory-runtime run docs/specs/gh-stars-v1.md --no-judge --context-dir
 
 Sweeps the spec into `docs/specs/done/`.
 
-## v0.0.2 knobs worth knowing
+## Knobs worth knowing
 
-- `--max-prompt-tokens 100000` — hard cap on `usage.input_tokens` (default `100000`). Overruns terminate the run with a typed report.
+- `--max-iterations 5` *(v0.0.3 default)* — autonomous loop budget. Set to `1` to recreate v0.0.2's single-shot.
+- `--max-total-tokens 500000` *(v0.0.3 default)* — whole-run cap on summed `tokens.input + tokens.output` across every implement. **Bump to `1_000_000` for long-prompt tasks** (default ÷ 5 iterations ≈ 100k/iter, same as the per-phase cap — they coexist tightly).
+- `--max-prompt-tokens 100000` — per-phase cap on `usage.input_tokens` (v0.0.2). Overruns terminate that iteration with `runtime/cost-cap-exceeded`.
 - `--claude-bin <path>` — override the `claude` executable (useful for testing or for pinning a specific install).
 - `--twin-mode <record|replay|off>` — sets `WIFO_TWIN_MODE` on the spawned subprocess. The spec's `Constraints / Decisions` notes that the tests use injected fetch (so the twin isn't required for convergence), but if you implement against the real GitHub API, set up `wrapFetch` from `@wifo/factory-twin` in your test setup using these env vars.
 - `--twin-recordings-dir <path>` — explicit directory for HTTP recordings (default `./.factory/twin-recordings`).
@@ -109,4 +126,5 @@ examples/gh-stars/
 - The `.factory/` directory holds the run records. It's gitignored — diffable history lives in commits, not in agent runs.
 - `--no-judge` skips the LLM-judged satisfaction lines so you don't need a separate Anthropic API key for the loop to work (the agent itself uses your `claude` subscription).
 - The agent has `Read,Edit,Write,Bash` access in this directory. Use git as your undo button: `git status` after each run, commit the parts you like, `git restore` the parts you don't.
-- If the agent's run hits the cost cap, the `factory-implement-report` is still persisted with status `'error'` and the agent's `result` text — useful for debugging what burned the budget.
+- If the agent's run hits a cost cap, the `factory-implement-report` is still persisted (parents=[runId,...]) with the agent's `result` text — useful for debugging what burned the budget. Per-phase cap → `runtime/cost-cap-exceeded`. Whole-run cap → `runtime/total-cost-cap-exceeded`.
+- v0.0.3 multi-iteration provenance: `factory-context tree <iter2-validate-report-id>` walks back through `iter2-validate → iter2-implement → iter1-validate → iter1-implement → factory-run`.

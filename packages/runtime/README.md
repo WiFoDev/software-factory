@@ -2,9 +2,20 @@
 
 Phase-graph runtime for software-factory. Composes `@wifo/factory-core`, `@wifo/factory-harness`, `@wifo/factory-twin`, and `@wifo/factory-context` into an end-to-end pipeline that executes a graph of phases against a parsed spec, persists provenance to the context store, and iterates until convergence or the iteration budget is exhausted.
 
-v0.0.1 shipped one built-in phase: `validatePhase`. **v0.0.2 adds `implementPhase`** — an agent-driven phase that subprocesses out to `claude -p` (subscription auth, no `ANTHROPIC_API_KEY` required), captures the agent's output and disk delta into a `factory-implement-report` record, and enforces a hard cost cap on input tokens. The CLI's default graph is now `[implement → validate]`; `--no-implement` preserves the v0.0.1 behavior.
+v0.0.1 shipped one built-in phase: `validatePhase`. v0.0.2 added `implementPhase` (single-shot agent). **v0.0.3 closes the loop**: `--max-iterations` defaults to **5**, iteration N+1's implement sees iteration N's validate-report (failed scenarios threaded into the prompt), the parent chain extends across iterations so `factory-context tree` walks the full ancestry, and a whole-run `--max-total-tokens` cap (default 500_000) bounds total cost. One spec goes in, the runtime drives `[implement → validate]` until convergence or budget, no human in the middle.
 
 Requires Node 22+ and (for the default graph) the `claude` CLI on PATH, signed in via your Claude Pro/Max subscription.
+
+## v0.0.3 release notes
+
+- **`--max-iterations` default flipped 1 → 5.** Existing v0.0.2 callers who omit the flag will see up to 5 iterations on real-claude runs. Pair with `--max-total-tokens` to bound cost.
+- **Cross-iteration record threading.** Iteration N+1's `implementPhase` builds its prompt with a new `# Prior validate report` section listing only iteration N's failed scenarios (id + name + failureDetail). Iter 1 omits the section. The prior validate-report's id is on `factory-implement-report.payload.priorValidateReportId`, and on the record's `parents = [runId, priorValidateReportId]`. `factory-validate-report.parents = [runId, sameIterImplementReportId]`. `factory-context tree <validate-report-id>` walks the full chain back to runId.
+- **Whole-run cost cap.** New `RunOptions.maxTotalTokens?: number` (default 500_000) sums `tokens.input + tokens.output` across every implement invocation in the run. Overrun aborts with `RuntimeError({ code: 'runtime/total-cost-cap-exceeded' })`. Per-phase `maxPromptTokens` from v0.0.2 still applies. New CLI flag `--max-total-tokens <n>`.
+- **One new `RuntimeErrorCode`**: `'runtime/total-cost-cap-exceeded'` (10 codes total). The CLI's `--max-total-tokens 0` exits 2 with stderr label `runtime/invalid-max-total-tokens:` — a string format only, **not** a `RuntimeErrorCode` value (programmatic `RunOptions.maxTotalTokens` is unvalidated; non-positive values trip the cap on first implement).
+- **`PhaseContext` gains `inputs: readonly ContextRecord[]`.** Populated by the runtime: same-iter predecessors for non-root phases; prior-iter terminal outputs for root phases on iter ≥ 2; empty for root iter 1. Phases consume by filtering on `record.type` (built-ins look for `factory-validate-report` / `factory-implement-report`). Custom user phases that don't read `ctx.inputs` are unaffected.
+- **`ctx.inputs` ≠ `factory-phase.parents`.** They share the same-iter predecessors but `ctx.inputs` additionally includes prior-iter terminal outputs for root phases on iter ≥ 2; `factory-phase.parents` does NOT. This preserves v0.0.2's `--no-implement` record-set parity (every iter's `factory-phase` still has `parents = [runId]`).
+- **Default-budget tightness.** 500_000 cap ÷ 5 iterations ≈ 100k/iter, matching the per-phase cap. Tasks with longer prompts will trip one or the other immediately — bump `--max-total-tokens` to ~1_000_000 if you expect long iterations.
+- **Deferred to v0.0.4+**: `explorePhase`/`planPhase` separation, holdout-aware automated convergence, worktree sandbox, streaming cost monitoring, scheduler.
 
 ## Programmatic usage
 
@@ -26,7 +37,7 @@ const report = await run({ spec, graph, contextStore: store, options: { maxItera
 console.log(report.status, report.runId);
 ```
 
-### v0.0.2: agent + validate
+### v0.0.2 / v0.0.3: agent + validate
 
 ```ts
 import { definePhaseGraph, implementPhase, validatePhase, run } from '@wifo/factory-runtime';
@@ -36,7 +47,7 @@ const graph = definePhaseGraph(
   [
     implementPhase({
       cwd,
-      maxPromptTokens: 100_000,
+      maxPromptTokens: 100_000, // per-phase cap
       // Default: 'record' mode at <cwd>/.factory/twin-recordings/
       // Set to 'off' to disable env-var plumbing entirely.
     }),
@@ -45,9 +56,39 @@ const graph = definePhaseGraph(
   [['implement', 'validate']],
 );
 
-const report = await run({ spec, graph, contextStore: store });
+// v0.0.3: maxIterations defaults to 5; maxTotalTokens defaults to 500_000.
+const report = await run({
+  spec,
+  graph,
+  contextStore: store,
+  options: {
+    // maxIterations: 5,                // default
+    // maxTotalTokens: 1_000_000,       // raise above default 500k for longer-prompt tasks
+  },
+});
 // report.status: 'converged' | 'no-converge' | 'error'
+// report.iterationCount: 1..maxIterations (the actual count taken)
 ```
+
+### Custom phases reading `ctx.inputs` (v0.0.3)
+
+Built-in phases consume `ctx.inputs` automatically. To write a custom phase that reads same-iteration predecessors and (for root phases) the prior iteration's terminal outputs:
+
+```ts
+import { definePhase } from '@wifo/factory-runtime';
+
+const myPhase = definePhase('my-phase', async (ctx) => {
+  const priorValidate = ctx.inputs.find((r) => r.type === 'factory-validate-report');
+  if (priorValidate !== undefined) {
+    // We're on iter ≥ 2 in an [..., validate, my-phase] graph or
+    // [..., my-phase] root-cycle — react to prior failures here.
+  }
+  // ...
+  return { status: 'pass', records: [] };
+});
+```
+
+Note: `ctx.inputs` and `factory-phase.parents` are NOT the same list. `ctx.inputs` includes prior-iter terminal outputs for root phases on iter ≥ 2; `factory-phase.parents` does NOT. The split preserves v0.0.2 record-set parity in `--no-implement` mode.
 
 ## CLI
 
@@ -55,12 +96,13 @@ const report = await run({ spec, graph, contextStore: store });
 factory-runtime run <spec-path> [flags]
 
 Flags:
-  --max-iterations <n>             Max iterations (default: 1; v0.0.3 may flip)
+  --max-iterations <n>             Max iterations (default: 5)
+  --max-total-tokens <n>           Whole-run cap on summed agent tokens (default: 500000)
   --context-dir <path>              Context store directory (default: ./context)
   --scenario <ids>                  Comma-separated scenario ids (e.g. S-1,S-2,H-1)
   --no-judge                        Skip judge satisfactions in the harness
   --no-implement                    Drop the implement phase (v0.0.1 [validate]-only graph)
-  --max-prompt-tokens <n>           Hard cap on agent input tokens (default: 100000)
+  --max-prompt-tokens <n>           Per-phase cap on agent input tokens (default: 100000)
   --claude-bin <path>               Path to the claude executable (default: 'claude' on PATH)
   --twin-mode <record|replay|off>   Twin recording mode (default: record)
   --twin-recordings-dir <path>      Twin recordings dir (default: <cwd>/.factory/twin-recordings)
@@ -71,8 +113,8 @@ Both `implementPhase` and `validatePhase` receive `cwd: process.cwd()` from the 
 Exit codes:
 - `0` — converged (every phase passed)
 - `1` — no-converge (a phase kept failing within the iteration budget)
-- `2` — usage error (bad flags, missing positional, invalid `--max-iterations`, invalid `--max-prompt-tokens`, invalid `--twin-mode`)
-- `3` — operational error (spec not found, parse error, IO error, agent failure, cost-cap exceeded)
+- `2` — usage error (bad flags, missing positional, invalid `--max-iterations`, invalid `--max-prompt-tokens`, invalid `--max-total-tokens`, invalid `--twin-mode`)
+- `3` — operational error (spec not found, parse error, IO error, agent failure, per-phase or whole-run cost-cap exceeded)
 
 The CLI prints a one-line summary to stdout that includes the `runId`:
 
@@ -87,8 +129,9 @@ interface PhaseContext {
   spec: Spec;
   contextStore: ContextStore;
   log: (line: string) => void;
-  runId: string;          // id of the factory-run record
-  iteration: number;      // 1-indexed; v0.0.2 phases adapt across iterations (cross-iter context plumbing lands in v0.0.3)
+  runId: string;                    // id of the factory-run record
+  iteration: number;                // 1-indexed
+  inputs: readonly ContextRecord[]; // v0.0.3 — records the runtime threads in (see v0.0.3 release notes for population rules)
 }
 
 interface PhaseResult {
@@ -175,8 +218,8 @@ Both `implementPhase` and `validatePhase` see the same env (since validate's `bu
 |---|---|---|---|
 | `factory-run` | `[]` | runtime, once at start | Run-level metadata (specId, graphPhases, maxIterations, startedAt) |
 | `factory-phase` | `[runId, ...inputRecordIds]` | runtime, once per phase invocation | Phase-event log (phaseName, iteration, status, durationMs, outputRecordIds, failureDetail?) |
-| `factory-validate-report` | `[runId]` | `validatePhase`, once per invocation | The full `HarnessReport` payload |
-| `factory-implement-report` *(v0.0.2)* | `[runId]` | `implementPhase`, once per invocation that gets past the spawn | The agent's run record |
+| `factory-validate-report` *(v0.0.3 extends parents)* | `[runId, ...(sameIterImplementReportId ? [sameIterImplementReportId] : [])]` | `validatePhase`, once per invocation | The full `HarnessReport` payload |
+| `factory-implement-report` *(v0.0.2; v0.0.3 extends parents)* | `[runId, ...(priorValidateReportId ? [priorValidateReportId] : [])]` | `implementPhase`, once per invocation that gets past the spawn | The agent's run record |
 
 `factory-implement-report` payload shape:
 
@@ -205,10 +248,25 @@ Both `implementPhase` and `validatePhase` see the same env (since validate's `bu
     total: number;
   };
   failureDetail?: string;       // populated on status='fail' or status='error'
+  priorValidateReportId?: string; // v0.0.3 — id of the prior iter's validate-report when threaded
 }
 ```
 
-The DAG is `factory-run → factory-implement-report`, `factory-run → factory-validate-report`, plus the parallel `factory-run → factory-phase` chain (one per phase invocation). The `factory-phase` records' `outputRecordIds` cross-reference the implement/validate reports so `factory-context tree <runId>` shows the full provenance.
+The DAG starts as `factory-run → factory-implement-report`, `factory-run → factory-validate-report`, plus the parallel `factory-run → factory-phase` chain. v0.0.3 extends with cross-iteration edges:
+
+```
+factory-run
+  ├── factory-phase (impl, iter 1)  [parents: runId]
+  ├── factory-phase (val,  iter 1)  [parents: runId, impl1]
+  ├── factory-implement-report (iter 1)  [parents: runId]
+  ├── factory-validate-report  (iter 1)  [parents: runId, impl1]
+  ├── factory-phase (impl, iter 2)  [parents: runId]
+  ├── factory-phase (val,  iter 2)  [parents: runId, impl2]
+  ├── factory-implement-report (iter 2)  [parents: runId, val1]   ← cross-iter
+  └── factory-validate-report  (iter 2)  [parents: runId, impl2]
+```
+
+`factory-context tree <iter2-validate-report-id>` walks back through the entire chain to runId.
 
 `result` is always populated when the report is persisted (success and failure path alike) — separate from `failureDetail`. The "what did the agent say it did?" question always resolves to `result`; "what went wrong?" resolves to `failureDetail`.
 
@@ -222,7 +280,9 @@ A "convergence" pass is computed across each iteration's phases:
 
 Convergence is **generic** across phase names — the runtime never inspects `phase.name` to decide.
 
-**Default `maxIterations: 1`.** v0.0.2 still uses the human-triggered single-shot model; iteration auto-loop is v0.0.3. Without cross-iteration context plumbing, iteration 2 in v0.0.2 sees the same prompt as iteration 1 (the agent picks up from disk, not from the prior validate-report). v0.0.3 will plumb prior-iteration validate-reports into the next implementPhase prompt.
+**Default `maxIterations: 5`** (v0.0.3 — was 1 in v0.0.2). The runtime drives `[implement → validate]` until convergence or budget, threading the prior validate-report into the next implement's prompt + payload + parents. Iteration N+1's implement sees a `# Prior validate report` section listing only iteration N's failed scenarios.
+
+**Default `maxTotalTokens: 500_000`** (v0.0.3). Sums `tokens.input + tokens.output` across every implement in the run. Overrun aborts with `RuntimeError({ code: 'runtime/total-cost-cap-exceeded' })`, mirroring the v0.0.2 per-phase cap chain (factory-phase persisted with status='error', implement-report on disk via parents=[runId]).
 
 ## Errors
 
@@ -237,7 +297,9 @@ type RuntimeErrorCode =
   // v0.0.2 additions:
   | 'runtime/cost-cap-exceeded'
   | 'runtime/agent-failed'
-  | 'runtime/invalid-max-prompt-tokens';
+  | 'runtime/invalid-max-prompt-tokens'
+  // v0.0.3 addition:
+  | 'runtime/total-cost-cap-exceeded';
 ```
 
 Match with `instanceof` + `.code`:
@@ -261,4 +323,4 @@ try {
 
 ## Status
 
-v0.0.2 — runtime + `validatePhase` + `implementPhase` (single-shot agent). The default CLI graph is `[implement → validate]`; `--no-implement` preserves the v0.0.1 `[validate]`-only behavior. v0.0.3 will add iteration auto-loop, cross-iteration record threading, and (maybe) holdout-aware convergence and `explorePhase`/`planPhase` separation.
+v0.0.3 — closed autonomous loop. Default `[implement → validate]`, default `--max-iterations 5`, default `--max-total-tokens 500_000`. Cross-iteration prompt threading + parent-chain extension are in. Deferred to v0.0.4+: `explorePhase` / `planPhase` separation, holdout-aware automated convergence, worktree sandbox, streaming cost monitoring, scheduler.

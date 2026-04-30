@@ -388,9 +388,13 @@ describe('run() — v0.0.3 ctx.inputs threading', () => {
       } catch {
         // already registered
       }
-      const id = await ctx.contextStore.put('iter-output', { iter: ctx.iteration }, {
-        parents: [ctx.runId],
-      });
+      const id = await ctx.contextStore.put(
+        'iter-output',
+        { iter: ctx.iteration },
+        {
+          parents: [ctx.runId],
+        },
+      );
       const rec = await ctx.contextStore.get(id);
       if (rec === null) throw new Error('record vanished');
       return { status: calls < 3 ? 'fail' : 'pass', records: [rec] };
@@ -405,13 +409,9 @@ describe('run() — v0.0.3 ctx.inputs threading', () => {
     expect(calls).toBe(3);
     expect(seenByIter[0]).toEqual([]);
     expect(seenByIter[1]?.length).toBe(1);
-    expect(
-      (seenByIter[1]?.[0]?.payload as { iter: number } | undefined)?.iter,
-    ).toBe(1);
+    expect((seenByIter[1]?.[0]?.payload as { iter: number } | undefined)?.iter).toBe(1);
     expect(seenByIter[2]?.length).toBe(1);
-    expect(
-      (seenByIter[2]?.[0]?.payload as { iter: number } | undefined)?.iter,
-    ).toBe(2);
+    expect((seenByIter[2]?.[0]?.payload as { iter: number } | undefined)?.iter).toBe(2);
   });
 
   test('REGRESSION: factory-phase.parents does NOT receive prior-iter terminal outputs (parity with v0.0.2 in --no-implement-style root-only graphs)', async () => {
@@ -425,9 +425,13 @@ describe('run() — v0.0.3 ctx.inputs threading', () => {
       } catch {
         // already registered
       }
-      const id = await ctx.contextStore.put('only-out', { iter: ctx.iteration }, {
-        parents: [ctx.runId],
-      });
+      const id = await ctx.contextStore.put(
+        'only-out',
+        { iter: ctx.iteration },
+        {
+          parents: [ctx.runId],
+        },
+      );
       const rec = await ctx.contextStore.get(id);
       if (rec === null) throw new Error('vanished');
       return { status: 'fail', records: [rec] };
@@ -457,7 +461,9 @@ describe('run() — v0.0.3 whole-run cost cap', () => {
       try {
         ctx.contextStore.register(
           'factory-implement-report',
-          z.object({ tokens: z.object({ input: z.number(), output: z.number() }).passthrough() }).passthrough(),
+          z
+            .object({ tokens: z.object({ input: z.number(), output: z.number() }).passthrough() })
+            .passthrough(),
         );
       } catch {
         // already registered (across run() calls in the same store)
@@ -507,9 +513,7 @@ describe('run() — v0.0.3 whole-run cost cap', () => {
     expect(phaseRecs.length).toBe(2);
 
     // iter 2 phase is the one with status='error' carrying the total-cost-cap-exceeded detail
-    const iter2Phase = phaseRecs.find(
-      (r) => (r.payload as { iteration: number }).iteration === 2,
-    );
+    const iter2Phase = phaseRecs.find((r) => (r.payload as { iteration: number }).iteration === 2);
     expect(iter2Phase).toBeDefined();
     const iter2Payload = iter2Phase?.payload as {
       status: string;

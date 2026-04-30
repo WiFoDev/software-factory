@@ -636,8 +636,7 @@ async function makePriorValidateRecord(
   tryRegister(store, 'factory-validate-report', FactoryValidateReportSchema);
   const summary = { pass: 0, fail: 0, error: 0, skipped: 0 };
   for (const s of scenarios) summary[s.status]++;
-  const reportStatus =
-    summary.error > 0 ? 'error' : summary.fail > 0 ? 'fail' : 'pass';
+  const reportStatus = summary.error > 0 ? 'error' : summary.fail > 0 ? 'fail' : 'pass';
   const id = await store.put(
     'factory-validate-report',
     {
@@ -952,8 +951,8 @@ describe('run() — v0.0.3 multi-iter integration (fail-then-pass)', () => {
         const iter2Impl = implReports.find(
           (r) => (r.payload as { iteration: number }).iteration === 2,
         );
-        const iter1Val = valReports.find(
-          (r) => (r.payload as { scenarios: { status: string }[] }).scenarios.some(
+        const iter1Val = valReports.find((r) =>
+          (r.payload as { scenarios: { status: string }[] }).scenarios.some(
             (s) => s.status === 'fail',
           ),
         );

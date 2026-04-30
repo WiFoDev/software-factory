@@ -427,7 +427,16 @@ describe('factory-runtime CLI — v0.0.3 --max-total-tokens', () => {
   test('--max-total-tokens 0 → exit 2 with runtime/invalid-max-total-tokens stderr label', async () => {
     const cap = makeIo();
     await invoke(
-      ['run', ALL_PASS, '--no-judge', '--no-implement', '--max-total-tokens', '0', '--context-dir', ctxDir],
+      [
+        'run',
+        ALL_PASS,
+        '--no-judge',
+        '--no-implement',
+        '--max-total-tokens',
+        '0',
+        '--context-dir',
+        ctxDir,
+      ],
       cap.io,
     );
     expect(cap.exitCode()).toBe(2);
@@ -459,7 +468,15 @@ describe('factory-runtime CLI — v0.0.3 --max-total-tokens', () => {
   test('--max-total-tokens=-5 → exit 2 (negative needs `=` form per parseArgs)', async () => {
     const cap = makeIo();
     await invoke(
-      ['run', ALL_PASS, '--no-judge', '--no-implement', '--max-total-tokens=-5', '--context-dir', ctxDir],
+      [
+        'run',
+        ALL_PASS,
+        '--no-judge',
+        '--no-implement',
+        '--max-total-tokens=-5',
+        '--context-dir',
+        ctxDir,
+      ],
       cap.io,
     );
     expect(cap.exitCode()).toBe(2);
