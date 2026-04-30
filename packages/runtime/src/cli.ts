@@ -7,6 +7,7 @@ import { createContextStore } from '@wifo/factory-context';
 import { SpecParseError, parseSpec } from '@wifo/factory-core';
 import { RuntimeError } from './errors.js';
 import { definePhaseGraph } from './graph.js';
+import { implementPhase, type ImplementPhaseOptions } from './phases/implement.js';
 import { validatePhase } from './phases/validate.js';
 import { run } from './runtime.js';
 
@@ -14,10 +15,15 @@ const USAGE = `Usage:
   factory-runtime run <spec-path> [flags]
 
 Flags:
-  --max-iterations <n>     Max iterations (default: 1; v0.0.2 may flip to 3 or 5)
-  --context-dir <path>     Context store directory (default: ./context)
-  --scenario <ids>         Comma-separated scenario ids (e.g. S-1,S-2,H-1)
-  --no-judge               Skip judge satisfactions in the harness
+  --max-iterations <n>             Max iterations (default: 1; v0.0.3 may flip)
+  --context-dir <path>              Context store directory (default: ./context)
+  --scenario <ids>                  Comma-separated scenario ids (e.g. S-1,S-2,H-1)
+  --no-judge                        Skip judge satisfactions in the harness
+  --no-implement                    Drop the implement phase (v0.0.1 [validate]-only graph)
+  --max-prompt-tokens <n>           Hard cap on agent input tokens (default: 100000)
+  --claude-bin <path>               Path to the claude executable (default: 'claude' on PATH)
+  --twin-mode <record|replay|off>   Twin recording mode (default: record)
+  --twin-recordings-dir <path>      Twin recordings dir (default: <cwd>/.factory/twin-recordings)
 `;
 
 export interface CliIo {
@@ -64,6 +70,11 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
         'context-dir': { type: 'string' },
         scenario: { type: 'string' },
         'no-judge': { type: 'boolean' },
+        'no-implement': { type: 'boolean' },
+        'max-prompt-tokens': { type: 'string' },
+        'claude-bin': { type: 'string' },
+        'twin-mode': { type: 'string' },
+        'twin-recordings-dir': { type: 'string' },
       },
       allowPositionals: true,
       strict: true,
@@ -152,16 +163,94 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
     throw err;
   }
 
-  // Build the default validate-only graph. Harness cwd defaults to process.cwd()
-  // (the project root, where the user invoked the CLI from) so test paths in
-  // satisfaction lines (e.g. `src/foo.test.ts`) resolve naturally — same as if
-  // the user ran `bun test src/foo.test.ts` directly.
-  const phase = validatePhase({
+  // --no-implement: drop back to the v0.0.1 [validate]-only graph. The
+  // implement-tuning flags (--max-prompt-tokens, --claude-bin, --twin-*) are
+  // inert in this mode (no warning emitted).
+  const noImplement = parsed.values['no-implement'] === true;
+
+  // --max-prompt-tokens: positive integer or fail with exit 2. Manual stderr
+  // line mirrors the --max-iterations pattern; the CLI does not construct
+  // RuntimeError directly (that fires for programmatic implementPhase callers).
+  const maxPromptTokensRaw = parsed.values['max-prompt-tokens'];
+  let maxPromptTokens: number | undefined;
+  if (typeof maxPromptTokensRaw === 'string') {
+    const n = Number.parseInt(maxPromptTokensRaw, 10);
+    if (!Number.isFinite(n) || n <= 0 || String(n) !== maxPromptTokensRaw.trim()) {
+      io.stderr(
+        `runtime/invalid-max-prompt-tokens: --max-prompt-tokens must be a positive integer (got '${maxPromptTokensRaw}')\n${USAGE}`,
+      );
+      io.exit(2);
+      return;
+    }
+    maxPromptTokens = n;
+  }
+
+  // --twin-mode: validate set membership (record|replay|off). The 'off'
+  // value drives `opts.twin = 'off'`; others drive `opts.twin = { mode, ... }`.
+  const twinModeRaw = parsed.values['twin-mode'];
+  let twinOption: ImplementPhaseOptions['twin'];
+  if (typeof twinModeRaw === 'string') {
+    if (twinModeRaw === 'off') {
+      twinOption = 'off';
+    } else if (twinModeRaw === 'record' || twinModeRaw === 'replay') {
+      const recordingsDirRaw = parsed.values['twin-recordings-dir'];
+      twinOption = {
+        mode: twinModeRaw,
+        ...(typeof recordingsDirRaw === 'string'
+          ? { recordingsDir: resolve(process.cwd(), recordingsDirRaw) }
+          : {}),
+      };
+    } else {
+      io.stderr(
+        `runtime/invalid-twin-mode: --twin-mode must be one of 'record', 'replay', 'off' (got '${twinModeRaw}')\n${USAGE}`,
+      );
+      io.exit(2);
+      return;
+    }
+  } else if (typeof parsed.values['twin-recordings-dir'] === 'string') {
+    // Allow --twin-recordings-dir without --twin-mode (defaults to record).
+    twinOption = {
+      recordingsDir: resolve(process.cwd(), parsed.values['twin-recordings-dir']),
+    };
+  }
+
+  // --claude-bin: explicit binary path for the agent subprocess.
+  const claudeBin =
+    typeof parsed.values['claude-bin'] === 'string' ? parsed.values['claude-bin'] : undefined;
+
+  // Build the graph. Both phases pin cwd: process.cwd() so the agent's edits
+  // and the harness's bun test invocation resolve against the same tree.
+  const validate = validatePhase({
     cwd: process.cwd(),
     ...(scenarioIds !== undefined ? { scenarioIds } : {}),
     ...(parsed.values['no-judge'] === true ? { noJudge: true } : {}),
   });
-  const graph = definePhaseGraph([phase], []);
+
+  let graph: ReturnType<typeof definePhaseGraph>;
+  if (noImplement) {
+    graph = definePhaseGraph([validate], []);
+  } else {
+    let implement: ReturnType<typeof implementPhase>;
+    try {
+      implement = implementPhase({
+        cwd: process.cwd(),
+        ...(maxPromptTokens !== undefined ? { maxPromptTokens } : {}),
+        ...(claudeBin !== undefined ? { claudePath: claudeBin } : {}),
+        ...(twinOption !== undefined ? { twin: twinOption } : {}),
+      });
+    } catch (err) {
+      // implementPhase only throws RuntimeError({ code: 'runtime/invalid-max-prompt-tokens' })
+      // synchronously; the CLI flag validator above should catch this first,
+      // but we map any factory-call-time error to exit 3 defensively.
+      if (err instanceof RuntimeError) {
+        io.stderr(`${err.message}\n`);
+        io.exit(3);
+        return;
+      }
+      throw err;
+    }
+    graph = definePhaseGraph([implement, validate], [['implement', 'validate']]);
+  }
 
   const store = createContextStore({ dir: contextDir });
 

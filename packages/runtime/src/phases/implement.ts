@@ -637,12 +637,17 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
     }
 
     // Cost-cap check (post-hoc): if exceeded, override to 'error', overwrite
-    // failureDetail, persist the report so the user sees what was wasted, then
-    // throw.
+    // failureDetail (with the descriptive 'cost-cap-exceeded:' prefix on the
+    // persisted report), persist the report so the user sees what was wasted,
+    // then throw RuntimeError with the numeric body alone — RuntimeError's
+    // `.message` automatically prepends `runtime/cost-cap-exceeded: `, so
+    // doubling the descriptive prefix would produce noise in the CLI's detail
+    // line.
     const overran = tokensInput > maxPromptTokens;
+    const costCapDetailBody = `input_tokens=${tokensInput} > maxPromptTokens=${maxPromptTokens}`;
     if (overran) {
       status = 'error';
-      failureDetail = `cost-cap-exceeded: input_tokens=${tokensInput} > maxPromptTokens=${maxPromptTokens}`;
+      failureDetail = `cost-cap-exceeded: ${costCapDetailBody}`;
     }
 
     const durationMs = Math.round(performance.now() - t0);
@@ -684,7 +689,7 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
       // parents=[runId] (discoverable via `factory-context tree <runId>`),
       // even though it's not in factory-phase.outputRecordIds because the
       // phase threw before returning.
-      throw new RuntimeError('runtime/cost-cap-exceeded', failureDetail ?? '');
+      throw new RuntimeError('runtime/cost-cap-exceeded', costCapDetailBody);
     }
 
     const record = await ctx.contextStore.get(id);
