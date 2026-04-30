@@ -1,0 +1,17 @@
+{
+  "name": "example-gh-stars",
+  "version": "0.0.0",
+  "description": "Walk-through example for the v0.0.2 [implement → validate] loop: scope → run → iterate against a GitHub stargazers CLI with caching + rate-limit handling",
+  "private": true,
+  "type": "module",
+  "scripts": {},
+  "dependencies": {
+    "@wifo/factory-context": "workspace:*",
+    "@wifo/factory-core": "workspace:*",
+    "@wifo/factory-runtime": "workspace:*",
+    "@wifo/factory-twin": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14"
+  }
+}
