@@ -2,6 +2,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { type Dirent, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import type { ContextRecord } from '@wifo/factory-context';
+import type { Spec } from '@wifo/factory-core';
 import type { TwinMode } from '@wifo/factory-twin';
 import { RuntimeError } from '../errors.js';
 import { definePhase } from '../graph.js';
@@ -269,11 +271,116 @@ function numOrUndef(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
+// v0.0.3 — Prior validate report section bounds.
+const PRIOR_DETAIL_PER_LINE_BYTES_CAP = 1024; // 1 KB per scenario bullet's failureDetail
+const PRIOR_SECTION_TOTAL_BYTES_CAP = 50 * 1024; // 50 KB section total
+const TRUNCATION_SUFFIX = '… [truncated]';
+
+interface PriorScenarioSatisfaction {
+  detail?: unknown;
+  status?: unknown;
+}
+interface PriorScenarioRecord {
+  scenarioId?: unknown;
+  status?: unknown;
+  satisfactions?: unknown;
+}
+interface PriorValidatePayload {
+  scenarios?: unknown;
+}
+
+/**
+ * Resolve a scenario's name from the spec's scenarios then holdouts. Falls
+ * back to a literal '(name not in spec)' marker when the id is unknown.
+ */
+function resolveScenarioName(spec: Spec, scenarioId: string): string {
+  for (const s of spec.scenarios) if (s.id === scenarioId) return s.name;
+  for (const h of spec.holdouts) if (h.id === scenarioId) return h.name;
+  return '(name not in spec)';
+}
+
+/**
+ * Build the failureDetail body for one prior-failed scenario by joining
+ * non-empty SatisfactionResult.detail strings with `; `. Empty → marker.
+ * Truncated to 1 KB with a trailing marker.
+ */
+function buildPriorScenarioDetail(rec: PriorScenarioRecord): string {
+  const sats = Array.isArray(rec.satisfactions) ? rec.satisfactions : [];
+  const parts: string[] = [];
+  for (const s of sats) {
+    const sat = s as PriorScenarioSatisfaction;
+    if (typeof sat.detail !== 'string') continue;
+    const trimmed = sat.detail.trim();
+    if (trimmed === '') continue;
+    parts.push(trimmed);
+  }
+  const joined = parts.length === 0 ? '(no detail recorded)' : parts.join('; ');
+  if (Buffer.byteLength(joined, 'utf8') <= PRIOR_DETAIL_PER_LINE_BYTES_CAP) return joined;
+  // Truncate to fit cap minus suffix bytes.
+  const suffixBytes = Buffer.byteLength(TRUNCATION_SUFFIX, 'utf8');
+  const targetBytes = Math.max(0, PRIOR_DETAIL_PER_LINE_BYTES_CAP - suffixBytes);
+  // Walk down byte length until we fit.
+  let cut = joined.length;
+  while (cut > 0 && Buffer.byteLength(joined.slice(0, cut), 'utf8') > targetBytes) cut--;
+  return `${joined.slice(0, cut)}${TRUNCATION_SUFFIX}`;
+}
+
+interface PriorSectionResult {
+  text: string; // empty string when no section should be emitted
+  truncated: boolean; // true when section-total cap forced a tail trim
+}
+
+/**
+ * Compose the `# Prior validate report` section from the prior validate-report
+ * payload. Emits only failed scenarios (status !== 'pass'), preserving the
+ * payload's order. Returns empty `text` when no failures (or no record).
+ */
+function buildPriorValidateSection(
+  spec: Spec,
+  priorPayload: PriorValidatePayload,
+): PriorSectionResult {
+  const scenarios = Array.isArray(priorPayload.scenarios) ? priorPayload.scenarios : [];
+  const bullets: string[] = [];
+  for (const raw of scenarios) {
+    const rec = raw as PriorScenarioRecord;
+    if (typeof rec.scenarioId !== 'string') continue;
+    if (rec.status === 'pass') continue; // failed = anything not pass; skipped is also dropped (per spec — only fail/error are surfaced)
+    if (rec.status !== 'fail' && rec.status !== 'error') continue;
+    const name = resolveScenarioName(spec, rec.scenarioId);
+    const detail = buildPriorScenarioDetail(rec);
+    bullets.push(`- **${rec.scenarioId} — ${name}**: ${detail}`);
+  }
+  if (bullets.length === 0) return { text: '', truncated: false };
+
+  const header = [
+    '# Prior validate report',
+    '',
+    'The previous iteration validated and reported the following failed',
+    'scenarios. Read them carefully — your task is to make them pass without',
+    'breaking the ones that already passed.',
+    '',
+  ];
+  const acc: string[] = [...header];
+  let usedBytes = Buffer.byteLength(acc.join('\n'), 'utf8');
+  let truncated = false;
+  for (const b of bullets) {
+    const next = Buffer.byteLength(`${b}\n`, 'utf8');
+    if (usedBytes + next > PRIOR_SECTION_TOTAL_BYTES_CAP) {
+      truncated = true;
+      break;
+    }
+    acc.push(b);
+    usedBytes += next;
+  }
+  return { text: acc.join('\n'), truncated };
+}
+
 function buildPrompt(args: {
   specSource: string;
   cwd: string;
   iteration: number;
   promptExtra?: string;
+  priorSection?: string;
 }): string {
   const lines = [
     'You are an automated coding agent in a software factory. Your task is to',
@@ -286,6 +393,11 @@ function buildPrompt(args: {
     '',
     args.specSource,
     '',
+  ];
+  if (args.priorSection !== undefined && args.priorSection !== '') {
+    lines.push(args.priorSection, '');
+  }
+  lines.push(
     '# Working directory',
     '',
     args.cwd,
@@ -312,7 +424,7 @@ function buildPrompt(args: {
     `This is iteration ${args.iteration} of the run. The factory will run the validate phase next.`,
     '',
     'When you are confident the implementation is complete, finish your turn.',
-  ];
+  );
   if (args.promptExtra !== undefined && args.promptExtra !== '') {
     lines.push('', '# Extra instructions', '', args.promptExtra);
   }
@@ -562,10 +674,28 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const twin = resolveTwin(opts.twin, cwd);
 
+    // v0.0.3 — extract the prior iteration's factory-validate-report from
+    // ctx.inputs (populated by the runtime for root phases on iter ≥ 2). The
+    // record's id flows into payload.priorValidateReportId AND extends the
+    // implement-report's parents. The payload's failed scenarios feed the
+    // # Prior validate report prompt section.
+    const priorValidateRecord: ContextRecord | undefined = ctx.inputs.find(
+      (r) => r.type === 'factory-validate-report',
+    );
+    const priorValidateReportId = priorValidateRecord?.id;
+    const priorSection =
+      priorValidateRecord !== undefined
+        ? buildPriorValidateSection(ctx.spec, priorValidateRecord.payload as PriorValidatePayload)
+        : { text: '', truncated: false };
+    if (priorSection.truncated) {
+      ctx.log('[runtime] truncated prior-validate section');
+    }
+
     const prompt = buildPrompt({
       specSource: ctx.spec.raw.source,
       cwd,
       iteration: ctx.iteration,
+      ...(priorSection.text !== '' ? { priorSection: priorSection.text } : {}),
       ...(opts.promptExtra !== undefined ? { promptExtra: opts.promptExtra } : {}),
     });
 
@@ -669,11 +799,14 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
         total: tokensTotal,
       },
       ...(failureDetail !== undefined ? { failureDetail } : {}),
+      ...(priorValidateReportId !== undefined ? { priorValidateReportId } : {}),
     };
 
-    const id = await ctx.contextStore.put('factory-implement-report', payload, {
-      parents: [ctx.runId],
-    });
+    // v0.0.3 — parents extend with the prior iteration's validate-report id
+    // when one was threaded via ctx.inputs.
+    const parents =
+      priorValidateReportId !== undefined ? [ctx.runId, priorValidateReportId] : [ctx.runId];
+    const id = await ctx.contextStore.put('factory-implement-report', payload, { parents });
 
     if (overran) {
       // Persist before throwing. The runtime catches this as factory-phase

@@ -622,6 +622,279 @@ describe('implementPhase — twin env vars (S-5)', () => {
   });
 });
 
+// ----- v0.0.3: prior validate-report threading --------------------------
+
+async function makePriorValidateRecord(
+  store: ReturnType<typeof createContextStore>,
+  runId: string,
+  scenarios: ReadonlyArray<{
+    scenarioId: string;
+    status: 'pass' | 'fail' | 'error' | 'skipped';
+    detail?: string;
+  }>,
+): Promise<{ id: string; record: NonNullable<Awaited<ReturnType<typeof store.get>>> }> {
+  tryRegister(store, 'factory-validate-report', FactoryValidateReportSchema);
+  const summary = { pass: 0, fail: 0, error: 0, skipped: 0 };
+  for (const s of scenarios) summary[s.status]++;
+  const reportStatus =
+    summary.error > 0 ? 'error' : summary.fail > 0 ? 'fail' : 'pass';
+  const id = await store.put(
+    'factory-validate-report',
+    {
+      specId: 'runtime-smoke-needs-impl',
+      startedAt: new Date().toISOString(),
+      durationMs: 100,
+      scenarios: scenarios.map((s) => ({
+        scenarioId: s.scenarioId,
+        status: s.status,
+        satisfactions:
+          s.detail !== undefined ? [{ kind: 'test', detail: s.detail, status: s.status }] : [],
+      })),
+      summary,
+      status: reportStatus,
+    },
+    { parents: [runId] },
+  );
+  const record = await store.get(id);
+  if (record === null) throw new Error('vanished');
+  return { id, record };
+}
+
+describe('implementPhase — v0.0.3 prior validate-report threading', () => {
+  test('iter 1 (no prior in ctx.inputs): prompt has no Prior section; payload.priorValidateReportId undefined; parents=[runId]', async () => {
+    const { ctx, runId } = await setupCtx();
+    const phase = implementPhase({
+      cwd: workDir,
+      claudePath: FAKE_CLAUDE,
+      twin: 'off',
+    });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const result = await phase.run(ctx);
+      expect(result.status).toBe('pass');
+      const rec = result.records[0];
+      expect(rec).toBeDefined();
+      const payload = rec?.payload as {
+        prompt: string;
+        priorValidateReportId?: string;
+      };
+      expect(payload.prompt).not.toContain('# Prior validate report');
+      expect(payload.priorValidateReportId).toBeUndefined();
+      expect(rec?.parents).toEqual([runId]);
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('iter 2 (prior in ctx.inputs): prompt has Prior section with failed scenarios only; payload.priorValidateReportId set; parents=[runId, priorId]', async () => {
+    const { ctx, runId } = await setupCtx();
+    // Build a synthetic prior validate-report and inject it via ctx.inputs
+    const { id: priorId, record: priorRec } = await makePriorValidateRecord(
+      ctx.contextStore,
+      runId,
+      [
+        { scenarioId: 'S-1', status: 'pass' },
+        { scenarioId: 'S-2', status: 'fail', detail: 'expected 42, got undefined' },
+        { scenarioId: 'S-3', status: 'error', detail: 'TypeError: x is not a function' },
+      ],
+    );
+    const ctxWithPrior: PhaseContext = { ...ctx, iteration: 2, inputs: [priorRec] };
+
+    const phase = implementPhase({
+      cwd: workDir,
+      claudePath: FAKE_CLAUDE,
+      twin: 'off',
+    });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const result = await phase.run(ctxWithPrior);
+      expect(result.status).toBe('pass');
+      const rec = result.records[0];
+      const payload = rec?.payload as {
+        prompt: string;
+        priorValidateReportId?: string;
+      };
+
+      // Section emitted with failed scenarios only (S-2, S-3); S-1 (pass) excluded.
+      // Use the bullet prefix `- **` to disambiguate from the spec source's own
+      // scenario headings (which use `**S-N**` without the leading `- `).
+      expect(payload.prompt).toContain('# Prior validate report');
+      expect(payload.prompt).toContain('- **S-2');
+      expect(payload.prompt).toContain('expected 42, got undefined');
+      expect(payload.prompt).toContain('- **S-3');
+      expect(payload.prompt).toContain('TypeError: x is not a function');
+      expect(payload.prompt).not.toContain('- **S-1');
+
+      // Section sits between # Spec and # Working directory.
+      const specIdx = payload.prompt.indexOf('# Spec\n');
+      const priorIdx = payload.prompt.indexOf('# Prior validate report');
+      const workingIdx = payload.prompt.indexOf('# Working directory');
+      expect(specIdx).toBeGreaterThan(-1);
+      expect(priorIdx).toBeGreaterThan(specIdx);
+      expect(workingIdx).toBeGreaterThan(priorIdx);
+
+      expect(payload.priorValidateReportId).toBe(priorId);
+      expect(rec?.parents).toEqual([runId, priorId]);
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('all-pass prior validate-report (defensive case): section omitted; priorValidateReportId still set (record was found in ctx.inputs)', async () => {
+    const { ctx, runId } = await setupCtx();
+    const { id: priorId, record: priorRec } = await makePriorValidateRecord(
+      ctx.contextStore,
+      runId,
+      [{ scenarioId: 'S-1', status: 'pass' }],
+    );
+    const ctxWithPrior: PhaseContext = { ...ctx, iteration: 2, inputs: [priorRec] };
+
+    const phase = implementPhase({
+      cwd: workDir,
+      claudePath: FAKE_CLAUDE,
+      twin: 'off',
+    });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const result = await phase.run(ctxWithPrior);
+      const rec = result.records[0];
+      const payload = rec?.payload as {
+        prompt: string;
+        priorValidateReportId?: string;
+      };
+      expect(payload.prompt).not.toContain('# Prior validate report');
+      // The record was found in ctx.inputs even though it had no failures —
+      // payload.priorValidateReportId reflects discovery, not section emission.
+      expect(payload.priorValidateReportId).toBe(priorId);
+      expect(rec?.parents).toEqual([runId, priorId]);
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('per-line truncation: detail > 1KB is truncated with ellipsis marker', async () => {
+    const { ctx, runId } = await setupCtx();
+    const huge = 'x'.repeat(2000);
+    const { record: priorRec } = await makePriorValidateRecord(ctx.contextStore, runId, [
+      { scenarioId: 'S-1', status: 'fail', detail: huge },
+    ]);
+    const ctxWithPrior: PhaseContext = { ...ctx, iteration: 2, inputs: [priorRec] };
+    const phase = implementPhase({
+      cwd: workDir,
+      claudePath: FAKE_CLAUDE,
+      twin: 'off',
+    });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const result = await phase.run(ctxWithPrior);
+      const payload = result.records[0]?.payload as { prompt: string };
+      expect(payload.prompt).toContain('# Prior validate report');
+      expect(payload.prompt).toContain('… [truncated]');
+      // The bullet's content (between the bullet's `: ` and the truncation marker)
+      // is bounded by 1KB minus the marker bytes.
+      const bulletStart = payload.prompt.indexOf('**S-1');
+      const bulletEnd = payload.prompt.indexOf('\n', bulletStart);
+      const bulletLine = payload.prompt.slice(bulletStart, bulletEnd);
+      expect(Buffer.byteLength(bulletLine, 'utf8')).toBeLessThan(1100);
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('section-total truncation: when bullets sum > 50KB, tail is dropped + [runtime] log line emitted', async () => {
+    const { ctx, runId } = await setupCtx();
+    // Each fail scenario's body caps at ~1KB → 60 fails ≈ 60+ KB → exceeds 50KB total.
+    const fails = Array.from({ length: 60 }, (_, i) => ({
+      scenarioId: `S-${i + 1}`,
+      status: 'fail' as const,
+      detail: 'x'.repeat(900),
+    }));
+    const { record: priorRec } = await makePriorValidateRecord(ctx.contextStore, runId, fails);
+    const logLines: string[] = [];
+    const ctxWithPrior: PhaseContext = {
+      ...ctx,
+      iteration: 2,
+      inputs: [priorRec],
+      log: (l) => logLines.push(l),
+    };
+    const phase = implementPhase({
+      cwd: workDir,
+      claudePath: FAKE_CLAUDE,
+      twin: 'off',
+    });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const result = await phase.run(ctxWithPrior);
+      const payload = result.records[0]?.payload as { prompt: string };
+      expect(payload.prompt).toContain('# Prior validate report');
+      // The section is bounded — not all 60 bullets present (bound by 50KB).
+      const bulletCount = (payload.prompt.match(/^- \*\*S-/gm) ?? []).length;
+      expect(bulletCount).toBeLessThan(60);
+      expect(bulletCount).toBeGreaterThan(0);
+      expect(logLines).toContain('[runtime] truncated prior-validate section');
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('scenario-name resolution: scenarios → holdouts → fallback', async () => {
+    const { ctx, runId } = await setupCtx();
+    const { record: priorRec } = await makePriorValidateRecord(ctx.contextStore, runId, [
+      { scenarioId: 'S-1', status: 'fail', detail: 'first' }, // exists in spec.scenarios
+      { scenarioId: 'H-1', status: 'fail', detail: 'second' }, // not in scenarios; not in holdouts (needs-impl.md has neither H-1)
+      { scenarioId: 'NOPE', status: 'fail', detail: 'third' }, // unknown
+    ]);
+    const ctxWithPrior: PhaseContext = { ...ctx, iteration: 2, inputs: [priorRec] };
+    const phase = implementPhase({
+      cwd: workDir,
+      claudePath: FAKE_CLAUDE,
+      twin: 'off',
+    });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const result = await phase.run(ctxWithPrior);
+      const payload = result.records[0]?.payload as { prompt: string };
+      // S-1 resolves to its actual scenario name from needs-impl.md
+      expect(payload.prompt).toMatch(/\*\*S-1 — .+\*\*: first/);
+      // H-1 / NOPE fall back to the marker
+      expect(payload.prompt).toContain('**H-1 — (name not in spec)**: second');
+      expect(payload.prompt).toContain('**NOPE — (name not in spec)**: third');
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+});
+
 describe('implementPhase — integration with validatePhase', () => {
   test('implement (success, edits src/needs-impl.ts) followed by validate (passes) — both reports persisted with parents=[runId]', async () => {
     const { ctx, runId } = await setupCtx();
