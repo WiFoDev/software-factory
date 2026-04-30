@@ -422,3 +422,101 @@ describe('factory-runtime CLI — --no-implement parity (H-2)', () => {
     expect(types).toEqual(new Set(['factory-run', 'factory-phase', 'factory-validate-report']));
   });
 });
+
+describe('factory-runtime CLI — v0.0.3 --max-total-tokens', () => {
+  test('--max-total-tokens 0 → exit 2 with runtime/invalid-max-total-tokens stderr label', async () => {
+    const cap = makeIo();
+    await invoke(
+      ['run', ALL_PASS, '--no-judge', '--no-implement', '--max-total-tokens', '0', '--context-dir', ctxDir],
+      cap.io,
+    );
+    expect(cap.exitCode()).toBe(2);
+    expect(cap.stderr()).toContain('runtime/invalid-max-total-tokens');
+    expect(cap.stderr()).toContain('must be a positive integer');
+    expect(cap.stderr()).toContain("(got '0')");
+  });
+
+  test('--max-total-tokens abc → exit 2 with runtime/invalid-max-total-tokens stderr label', async () => {
+    const cap = makeIo();
+    await invoke(
+      [
+        'run',
+        ALL_PASS,
+        '--no-judge',
+        '--no-implement',
+        '--max-total-tokens',
+        'abc',
+        '--context-dir',
+        ctxDir,
+      ],
+      cap.io,
+    );
+    expect(cap.exitCode()).toBe(2);
+    expect(cap.stderr()).toContain('runtime/invalid-max-total-tokens');
+    expect(cap.stderr()).toContain("(got 'abc')");
+  });
+
+  test('--max-total-tokens=-5 → exit 2 (negative needs `=` form per parseArgs)', async () => {
+    const cap = makeIo();
+    await invoke(
+      ['run', ALL_PASS, '--no-judge', '--no-implement', '--max-total-tokens=-5', '--context-dir', ctxDir],
+      cap.io,
+    );
+    expect(cap.exitCode()).toBe(2);
+    expect(cap.stderr()).toContain('runtime/invalid-max-total-tokens');
+    expect(cap.stderr()).toContain("(got '-5')");
+  });
+
+  test('valid --max-total-tokens passes through; overrunning fake-claude → exit 3 with total-cost-cap-exceeded detail line', async () => {
+    const cap = makeIo();
+    // Fake-claude in success mode reports tokens.input from FAKE_CLAUDE_TOKENS
+    // and tokens.output from FAKE_CLAUDE_OUTPUT_TOKENS. Sum must exceed cap to trip.
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '600';
+    process.env.FAKE_CLAUDE_OUTPUT_TOKENS = '400';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(ctxDir, '..', 'noop-write.txt');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'noop';
+    try {
+      await invoke(
+        [
+          'run',
+          NEEDS_IMPL,
+          '--no-judge',
+          '--claude-bin',
+          FAKE_CLAUDE,
+          '--twin-mode',
+          'off',
+          '--max-total-tokens',
+          '500',
+          '--max-iterations',
+          '1',
+          '--context-dir',
+          ctxDir,
+        ],
+        cap.io,
+      );
+
+      expect(cap.exitCode()).toBe(3);
+      expect(cap.stdout()).toContain("error during phase 'implement' iteration 1");
+      expect(cap.stdout()).toContain('runtime/total-cost-cap-exceeded');
+      expect(cap.stdout()).toContain('running_total=1000');
+      expect(cap.stdout()).toContain('maxTotalTokens=500');
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_OUTPUT_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('USAGE text shows --max-iterations default 5 and --max-total-tokens default 500000', async () => {
+    const cap = makeIo();
+    await invoke([], cap.io);
+    expect(cap.exitCode()).toBe(2);
+    expect(cap.stderr()).toContain('--max-iterations <n>');
+    expect(cap.stderr()).toContain('default: 5');
+    expect(cap.stderr()).toContain('--max-total-tokens <n>');
+    expect(cap.stderr()).toContain('default: 500000');
+  });
+});

@@ -15,12 +15,13 @@ const USAGE = `Usage:
   factory-runtime run <spec-path> [flags]
 
 Flags:
-  --max-iterations <n>             Max iterations (default: 1; v0.0.3 may flip)
+  --max-iterations <n>             Max iterations (default: 5)
+  --max-total-tokens <n>           Whole-run cap on summed agent tokens (default: 500000)
   --context-dir <path>              Context store directory (default: ./context)
   --scenario <ids>                  Comma-separated scenario ids (e.g. S-1,S-2,H-1)
   --no-judge                        Skip judge satisfactions in the harness
   --no-implement                    Drop the implement phase (v0.0.1 [validate]-only graph)
-  --max-prompt-tokens <n>           Hard cap on agent input tokens (default: 100000)
+  --max-prompt-tokens <n>           Per-phase cap on agent input tokens (default: 100000)
   --claude-bin <path>               Path to the claude executable (default: 'claude' on PATH)
   --twin-mode <record|replay|off>   Twin recording mode (default: record)
   --twin-recordings-dir <path>      Twin recordings dir (default: <cwd>/.factory/twin-recordings)
@@ -67,6 +68,7 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
       args,
       options: {
         'max-iterations': { type: 'string' },
+        'max-total-tokens': { type: 'string' },
         'context-dir': { type: 'string' },
         scenario: { type: 'string' },
         'no-judge': { type: 'boolean' },
@@ -106,6 +108,26 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
       return;
     }
     maxIterations = n;
+  }
+
+  // --max-total-tokens: positive integer or fail with exit 2. Mirrors
+  // --max-prompt-tokens validation. Note: the stderr label
+  // 'runtime/invalid-max-total-tokens' is a string format only — there is
+  // NO matching RuntimeErrorCode (locked: only one new code in v0.0.3,
+  // 'runtime/total-cost-cap-exceeded'). Programmatic RunOptions.maxTotalTokens
+  // is unvalidated; non-positive values trip the cap on first implement.
+  const maxTotalTokensRaw = parsed.values['max-total-tokens'];
+  let maxTotalTokens: number | undefined;
+  if (typeof maxTotalTokensRaw === 'string') {
+    const n = Number.parseInt(maxTotalTokensRaw, 10);
+    if (!Number.isFinite(n) || n <= 0 || String(n) !== maxTotalTokensRaw.trim()) {
+      io.stderr(
+        `runtime/invalid-max-total-tokens: --max-total-tokens must be a positive integer (got '${maxTotalTokensRaw}')\n${USAGE}`,
+      );
+      io.exit(2);
+      return;
+    }
+    maxTotalTokens = n;
   }
 
   // --scenario: comma-separated, trimmed, drop empties.
@@ -262,6 +284,7 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
       contextStore: store,
       options: {
         ...(maxIterations !== undefined ? { maxIterations } : {}),
+        ...(maxTotalTokens !== undefined ? { maxTotalTokens } : {}),
       },
     });
   } catch (err) {
