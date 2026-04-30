@@ -110,3 +110,39 @@ describe('validatePhase — cwd resolution', () => {
     expect(result.status).toBe('pass');
   });
 });
+
+describe('validatePhase — v0.0.3 parents extension', () => {
+  test('parents = [runId, sameIterImplId] when ctx.inputs holds a factory-implement-report', async () => {
+    const { ctx, runId } = await setupCtx(join(FIXTURES, 'all-pass.md'));
+    // Register a synthetic factory-implement-report-shaped record and inject
+    // it via ctx.inputs (no schema validation — just a record with the right type).
+    ctx.contextStore.register('factory-implement-report', z.unknown());
+    const synthImplId = await ctx.contextStore.put(
+      'factory-implement-report',
+      { synthetic: true, iteration: 1 },
+      { parents: [runId] },
+    );
+    const synthImplRec = await ctx.contextStore.get(synthImplId);
+    if (synthImplRec === null) throw new Error('vanished');
+    const ctxWithImpl: PhaseContext = { ...ctx, inputs: [synthImplRec] };
+
+    const phase = validatePhase({ cwd: FIXTURES, noJudge: true });
+    const result = await phase.run(ctxWithImpl);
+    expect(result.status).toBe('pass');
+    expect(result.records[0]?.parents).toEqual([runId, synthImplId]);
+  });
+
+  test('parents = [runId] in --no-implement-style flow (ctx.inputs has no implement-report)', async () => {
+    const { ctx, runId } = await setupCtx(join(FIXTURES, 'all-pass.md'));
+    // Inject some unrelated record type to confirm the filter is on type, not arity.
+    ctx.contextStore.register('unrelated', z.unknown());
+    const unrelatedId = await ctx.contextStore.put('unrelated', { x: 1 }, { parents: [runId] });
+    const unrelatedRec = await ctx.contextStore.get(unrelatedId);
+    if (unrelatedRec === null) throw new Error('vanished');
+    const ctxWithUnrelated: PhaseContext = { ...ctx, inputs: [unrelatedRec] };
+
+    const phase = validatePhase({ cwd: FIXTURES, noJudge: true });
+    const result = await phase.run(ctxWithUnrelated);
+    expect(result.records[0]?.parents).toEqual([runId]);
+  });
+});

@@ -42,9 +42,14 @@ export function validatePhase(opts: ValidatePhaseOptions = {}): Phase {
     };
 
     const report = await runHarness(ctx.spec, harnessOpts);
-    const id = await ctx.contextStore.put('factory-validate-report', report, {
-      parents: [ctx.runId],
-    });
+
+    // v0.0.3 — extend parents with the same-iteration implement-report id when
+    // the runtime threaded it via ctx.inputs (i.e. in the [implement → validate]
+    // graph). In --no-implement mode ctx.inputs has no implement-report and
+    // parents falls back to [runId] — preserving v0.0.2 record-set parity.
+    const sameIterImpl = ctx.inputs.find((r) => r.type === 'factory-implement-report');
+    const parents = sameIterImpl !== undefined ? [ctx.runId, sameIterImpl.id] : [ctx.runId];
+    const id = await ctx.contextStore.put('factory-validate-report', report, { parents });
     const record = await ctx.contextStore.get(id);
     if (record === null) {
       // Defensive — unreachable since put just succeeded.
