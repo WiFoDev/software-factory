@@ -87,6 +87,9 @@ importers:
       '@wifo/factory-harness':
         specifier: workspace:*
         version: link:../harness
+      '@wifo/factory-twin':
+        specifier: workspace:*
+        version: link:../twin
       zod:
         specifier: ^3.23.8
         version: 3.25.76
