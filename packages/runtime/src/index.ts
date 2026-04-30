@@ -4,9 +4,11 @@ export { run } from './runtime.js';
 // graph
 export { definePhase, definePhaseGraph } from './graph.js';
 
-// built-in phase
+// built-in phases
 export { validatePhase } from './phases/validate.js';
 export type { ValidatePhaseOptions } from './phases/validate.js';
+export { implementPhase } from './phases/implement.js';
+export type { ImplementPhaseOptions } from './phases/implement.js';
 
 // errors
 export { RuntimeError } from './errors.js';
