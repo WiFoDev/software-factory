@@ -1,0 +1,16 @@
+{
+  "name": "example-slugify",
+  "version": "0.0.0",
+  "description": "Walk-through example for the software-factory loop: scope → run → iterate against a small slugify(text) helper",
+  "private": true,
+  "type": "module",
+  "scripts": {},
+  "dependencies": {
+    "@wifo/factory-context": "workspace:*",
+    "@wifo/factory-core": "workspace:*",
+    "@wifo/factory-runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14"
+  }
+}

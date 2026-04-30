@@ -1,0 +1,4 @@
+node_modules
+.factory
+*.log
+.DS_Store
