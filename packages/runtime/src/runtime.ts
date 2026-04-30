@@ -18,7 +18,25 @@ import type {
   RunStatus,
 } from './types.js';
 
-const DEFAULT_MAX_ITERATIONS = 1;
+const DEFAULT_MAX_ITERATIONS = 5;
+const DEFAULT_MAX_TOTAL_TOKENS = 500_000;
+
+interface ImplementTokens {
+  input?: number;
+  output?: number;
+}
+
+function sumImplementTokens(records: ContextRecord[]): number {
+  let sum = 0;
+  for (const rec of records) {
+    if (rec.type !== 'factory-implement-report') continue;
+    const t = (rec.payload as { tokens?: ImplementTokens } | null | undefined)?.tokens;
+    if (t === undefined) continue;
+    sum += typeof t.input === 'number' && Number.isFinite(t.input) ? t.input : 0;
+    sum += typeof t.output === 'number' && Number.isFinite(t.output) ? t.output : 0;
+  }
+  return sum;
+}
 
 export interface RunArgs {
   spec: Spec;
@@ -78,6 +96,7 @@ export async function run(args: RunArgs): Promise<RunReport> {
       `must be a positive integer (got ${String(maxIterations)})`,
     );
   }
+  const maxTotalTokens = options.maxTotalTokens ?? DEFAULT_MAX_TOTAL_TOKENS;
   const log = options.log ?? defaultLog;
 
   tryRegister(contextStore, 'factory-run', FactoryRunSchema);
@@ -109,6 +128,14 @@ export async function run(args: RunArgs): Promise<RunReport> {
   const iterations: PhaseIterationResult[] = [];
   let runStatus: RunStatus = 'no-converge';
 
+  // v0.0.3: whole-run token budget accumulator. Sums tokens.input + tokens.output
+  // from every factory-implement-report produced across all iterations.
+  let runningTotalTokens = 0;
+
+  // v0.0.3: prior iteration's terminal-phase outputs, threaded into the next
+  // iteration's root phase via ctx.inputs (NOT via factory-phase.parents).
+  let priorIterationTerminalOutputs: ContextRecord[] = [];
+
   for (let iteration = 1; iteration <= maxIterations; iteration++) {
     const invocations: PhaseInvocationResult[] = [];
     const outputsByPhase = new Map<string, ContextRecord[]>();
@@ -124,14 +151,30 @@ export async function run(args: RunArgs): Promise<RunReport> {
         );
       }
 
-      // Build dedup-by-id input list from this iteration's predecessors.
-      const inputs: ContextRecord[] = [];
-      const seenInputIds = new Set<string>();
-      for (const predName of predecessors.get(phaseName) ?? []) {
+      // Same-iteration predecessor outputs (existing v0.0.2 logic). Flows into
+      // factory-phase.parents AND ctx.inputs.
+      const phasePredecessors = predecessors.get(phaseName) ?? [];
+      const sameIterInputs: ContextRecord[] = [];
+      const seenSameIterIds = new Set<string>();
+      for (const predName of phasePredecessors) {
         for (const rec of outputsByPhase.get(predName) ?? []) {
-          if (seenInputIds.has(rec.id)) continue;
-          seenInputIds.add(rec.id);
-          inputs.push(rec);
+          if (seenSameIterIds.has(rec.id)) continue;
+          seenSameIterIds.add(rec.id);
+          sameIterInputs.push(rec);
+        }
+      }
+
+      // Cross-iteration threading (v0.0.3). For root phases on iter ≥ 2,
+      // include the prior iteration's terminal outputs. This flows into
+      // ctx.inputs ONLY — NOT into factory-phase.parents (preserves v0.0.2
+      // record-set parity in --no-implement mode; pinned by H-3).
+      const ctxInputs: ContextRecord[] = [...sameIterInputs];
+      if (phasePredecessors.length === 0 && iteration > 1) {
+        const seen = new Set<string>(sameIterInputs.map((r) => r.id));
+        for (const rec of priorIterationTerminalOutputs) {
+          if (seen.has(rec.id)) continue;
+          seen.add(rec.id);
+          ctxInputs.push(rec);
         }
       }
 
@@ -146,12 +189,26 @@ export async function run(args: RunArgs): Promise<RunReport> {
           log,
           runId,
           iteration,
-          // T1: inputs is now required on PhaseContext. T2 will populate it
-          // with same-iter predecessors + prior-iter terminal for root phases.
-          inputs: [],
+          inputs: ctxInputs,
         });
         status = result.status;
         outputRecords = result.records;
+
+        // v0.0.3 whole-run cost cap. Sum tokens from any factory-implement-report
+        // in this phase's outputs and trip the cap if cumulative exceeds the
+        // limit. Throwing here lands in the same catch below — runtime persists
+        // factory-phase with status='error' and failureDetail naming the code,
+        // mirroring the v0.0.2 per-phase cost-cap chain.
+        const implementTokens = sumImplementTokens(outputRecords);
+        if (implementTokens > 0) {
+          runningTotalTokens += implementTokens;
+          if (runningTotalTokens > maxTotalTokens) {
+            throw new RuntimeError(
+              'runtime/total-cost-cap-exceeded',
+              `running_total=${runningTotalTokens} > maxTotalTokens=${maxTotalTokens}`,
+            );
+          }
+        }
       } catch (err) {
         status = 'error';
         outputRecords = [];
@@ -167,9 +224,11 @@ export async function run(args: RunArgs): Promise<RunReport> {
         outputRecordIds: outputRecords.map((r) => r.id),
         ...(failureDetail !== undefined ? { failureDetail } : {}),
       };
+      // factory-phase.parents uses sameIterInputs (NOT ctxInputs) so v0.0.2
+      // record-set parity is preserved across iterations in --no-implement mode.
       const phaseRecordId = await putOrWrap(contextStore, 'factory-phase', phasePayload, [
         runId,
-        ...inputs.map((r) => r.id),
+        ...sameIterInputs.map((r) => r.id),
       ]);
 
       outputsByPhase.set(phaseName, outputRecords);
@@ -185,6 +244,13 @@ export async function run(args: RunArgs): Promise<RunReport> {
         aborted = true;
         break;
       }
+    }
+
+    // After every iteration: stash the terminal phase's outputs so the next
+    // iteration's root phase can thread them via ctx.inputs.
+    const terminalName = graph.topoOrder[graph.topoOrder.length - 1];
+    if (terminalName !== undefined) {
+      priorIterationTerminalOutputs = outputsByPhase.get(terminalName) ?? [];
     }
 
     const iterationStatus = aborted ? 'error' : aggregateIterationStatus(invocations);

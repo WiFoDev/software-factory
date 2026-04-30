@@ -70,7 +70,7 @@ function makeSyntheticPhase(opts: {
 }
 
 describe('run() — smoke', () => {
-  test('default maxIterations is 1; single-shot pass converges', async () => {
+  test('default maxIterations is 5 (v0.0.3); single-shot pass still converges in iter 1', async () => {
     const store = createContextStore({ dir });
     const phase = makeSyntheticPhase({
       name: 'p1',
@@ -86,6 +86,12 @@ describe('run() — smoke', () => {
     expect(report.iterations[0]?.phases.length).toBe(1);
     expect(report.iterations[0]?.phases[0]?.phaseName).toBe('p1');
     expect(report.iterations[0]?.phases[0]?.status).toBe('pass');
+
+    // v0.0.3: persisted factory-run.payload.maxIterations reflects the resolved
+    // default (5), not the actual iteration count taken (1).
+    const runRec = await store.get(report.runId);
+    const runPayload = runRec?.payload as { maxIterations: number } | undefined;
+    expect(runPayload?.maxIterations).toBe(5);
   });
 
   test('persists factory-run with parents=[] and factory-phase chain', async () => {
@@ -339,6 +345,223 @@ describe('run() — RunReport shape', () => {
     // phaseRecordId actually exists on disk
     const rec = await store.get(inv?.phaseRecordId ?? '');
     expect(rec?.type).toBe('factory-phase');
+  });
+});
+
+describe('run() — v0.0.3 ctx.inputs threading', () => {
+  test('iter 1 root phase: ctx.inputs is empty', async () => {
+    const store = createContextStore({ dir });
+    const seen: { inputs?: ReadonlyArray<ContextRecord> } = {};
+    const phase = definePhase('root', async (ctx) => {
+      seen.inputs = ctx.inputs;
+      return { status: 'pass', records: [] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    await run({ spec: makeSpec(), graph, contextStore: store });
+    expect(seen.inputs).toEqual([]);
+  });
+
+  test('non-root phase on iter 1: ctx.inputs holds same-iter predecessor outputs', async () => {
+    const store = createContextStore({ dir });
+    const a = makeSyntheticPhase({ name: 'a', type: 'pred-out', payload: { v: 1 } });
+    const seen: { inputs?: ReadonlyArray<ContextRecord> } = {};
+    const b = definePhase('b', async (ctx) => {
+      seen.inputs = ctx.inputs;
+      return { status: 'pass', records: [] };
+    });
+    const graph = definePhaseGraph([a, b], [['a', 'b']]);
+    await run({ spec: makeSpec(), graph, contextStore: store });
+    expect(seen.inputs?.length).toBe(1);
+    expect(seen.inputs?.[0]?.type).toBe('pred-out');
+  });
+
+  test('root phase on iter ≥ 2: ctx.inputs holds prior iteration terminal outputs', async () => {
+    const store = createContextStore({ dir });
+    const seenByIter: ReadonlyArray<ContextRecord>[] = [];
+    let calls = 0;
+    const phase = definePhase('root', async (ctx) => {
+      seenByIter.push(ctx.inputs);
+      calls++;
+      // Produce one record per iteration, then fail twice to force iter 2 then iter 3.
+      try {
+        ctx.contextStore.register('iter-output', z.unknown());
+      } catch {
+        // already registered
+      }
+      const id = await ctx.contextStore.put('iter-output', { iter: ctx.iteration }, {
+        parents: [ctx.runId],
+      });
+      const rec = await ctx.contextStore.get(id);
+      if (rec === null) throw new Error('record vanished');
+      return { status: calls < 3 ? 'fail' : 'pass', records: [rec] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 5 },
+    });
+    expect(calls).toBe(3);
+    expect(seenByIter[0]).toEqual([]);
+    expect(seenByIter[1]?.length).toBe(1);
+    expect(
+      (seenByIter[1]?.[0]?.payload as { iter: number } | undefined)?.iter,
+    ).toBe(1);
+    expect(seenByIter[2]?.length).toBe(1);
+    expect(
+      (seenByIter[2]?.[0]?.payload as { iter: number } | undefined)?.iter,
+    ).toBe(2);
+  });
+
+  test('REGRESSION: factory-phase.parents does NOT receive prior-iter terminal outputs (parity with v0.0.2 in --no-implement-style root-only graphs)', async () => {
+    // Root-only graph iterating 3 times. ctx.inputs gets prior-iter outputs from
+    // iter 2 / iter 3 — but factory-phase.parents must stay [runId] across all
+    // iterations to preserve v0.0.2 record-set parity.
+    const store = createContextStore({ dir });
+    const phase = definePhase('only', async (ctx) => {
+      try {
+        ctx.contextStore.register('only-out', z.unknown());
+      } catch {
+        // already registered
+      }
+      const id = await ctx.contextStore.put('only-out', { iter: ctx.iteration }, {
+        parents: [ctx.runId],
+      });
+      const rec = await ctx.contextStore.get(id);
+      if (rec === null) throw new Error('vanished');
+      return { status: 'fail', records: [rec] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 3 },
+    });
+    expect(report.status).toBe('no-converge');
+    expect(report.iterationCount).toBe(3);
+
+    const phaseRecs = await store.list({ type: 'factory-phase' });
+    expect(phaseRecs.length).toBe(3);
+    for (const rec of phaseRecs) {
+      // Every iteration's factory-phase has parents === [runId] — no leak from ctx.inputs.
+      expect(rec.parents).toEqual([report.runId]);
+    }
+  });
+});
+
+describe('run() — v0.0.3 whole-run cost cap', () => {
+  function makeImplementProducer(tokens: { input: number; output: number }) {
+    return definePhase('implement', async (ctx) => {
+      try {
+        ctx.contextStore.register(
+          'factory-implement-report',
+          z.object({ tokens: z.object({ input: z.number(), output: z.number() }).passthrough() }).passthrough(),
+        );
+      } catch {
+        // already registered (across run() calls in the same store)
+      }
+      const id = await ctx.contextStore.put(
+        'factory-implement-report',
+        {
+          specId: ctx.spec.frontmatter.id,
+          iteration: ctx.iteration,
+          startedAt: new Date().toISOString(),
+          durationMs: 1,
+          cwd: '/tmp',
+          prompt: 'p',
+          allowedTools: 'Read',
+          claudePath: 'claude',
+          status: 'pass',
+          exitCode: 0,
+          result: '',
+          filesChanged: [],
+          toolsUsed: [],
+          tokens: { ...tokens, total: tokens.input + tokens.output },
+        },
+        { parents: [ctx.runId] },
+      );
+      const rec = await ctx.contextStore.get(id);
+      if (rec === null) throw new Error('vanished');
+      return { status: 'fail', records: [rec] };
+    });
+  }
+
+  test('tokens accumulate across iterations; overrun throws RuntimeError caught + persisted as factory-phase status=error', async () => {
+    const store = createContextStore({ dir });
+    // Each iter: 200k input + 50k output = 250k. Cap = 400k → trips on iter 2 (running_total=500k > 400k).
+    const phase = makeImplementProducer({ input: 200_000, output: 50_000 });
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 5, maxTotalTokens: 400_000 },
+    });
+
+    expect(report.status).toBe('error');
+    expect(report.iterationCount).toBe(2);
+
+    const phaseRecs = await store.list({ type: 'factory-phase' });
+    expect(phaseRecs.length).toBe(2);
+
+    // iter 2 phase is the one with status='error' carrying the total-cost-cap-exceeded detail
+    const iter2Phase = phaseRecs.find(
+      (r) => (r.payload as { iteration: number }).iteration === 2,
+    );
+    expect(iter2Phase).toBeDefined();
+    const iter2Payload = iter2Phase?.payload as {
+      status: string;
+      failureDetail?: string;
+      outputRecordIds: string[];
+    };
+    expect(iter2Payload.status).toBe('error');
+    expect(iter2Payload.failureDetail).toContain('runtime/total-cost-cap-exceeded');
+    expect(iter2Payload.failureDetail).toContain('running_total=500000');
+    expect(iter2Payload.failureDetail).toContain('maxTotalTokens=400000');
+    // The implement-report from iter 2 IS on disk (parents=[runId]) but factory-phase.outputRecordIds=[]
+    expect(iter2Payload.outputRecordIds).toEqual([]);
+
+    // The implement-report from iter 2 is reachable via runId parents.
+    const implReports = await store.list({ type: 'factory-implement-report' });
+    expect(implReports.length).toBe(2);
+    for (const r of implReports) {
+      expect(r.parents[0]).toBe(report.runId);
+    }
+  });
+
+  test('cap NOT tripped: cumulative under cap → run continues normally', async () => {
+    const store = createContextStore({ dir });
+    const phase = makeImplementProducer({ input: 50_000, output: 50_000 });
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 3, maxTotalTokens: 1_000_000 },
+    });
+    // 3 iterations × 100k = 300k cumulative, under 1M cap.
+    expect(report.status).toBe('no-converge');
+    expect(report.iterationCount).toBe(3);
+  });
+
+  test('default maxTotalTokens is 500_000 (cap trips around iter 5 with 100k/iter)', async () => {
+    const store = createContextStore({ dir });
+    const phase = makeImplementProducer({ input: 80_000, output: 30_000 });
+    const graph = definePhaseGraph([phase], []);
+    // 110k/iter with default 500k → cap trips when running_total>500k.
+    // After iter 1: 110k. iter 2: 220k. iter 3: 330k. iter 4: 440k. iter 5: 550k > 500k → trips.
+    const report = await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 5 }, // maxTotalTokens not set → default 500k
+    });
+    expect(report.status).toBe('error');
+    expect(report.iterationCount).toBe(5);
+    const lastPhase = report.iterations[4]?.phases[0];
+    expect(lastPhase?.status).toBe('error');
   });
 });
 
