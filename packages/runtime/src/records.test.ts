@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { ContextError, createContextStore } from '@wifo/factory-context';
 import { z } from 'zod';
 import {
+  FactoryImplementReportSchema,
   FactoryPhaseSchema,
   FactoryRunSchema,
   FactoryValidateReportSchema,
@@ -121,6 +122,94 @@ describe('FactoryValidateReportSchema', () => {
       summary: { pass: -1, fail: 0, error: 0, skipped: 0 },
       status: 'pass',
     });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe('FactoryImplementReportSchema', () => {
+  const baseValid = {
+    specId: 'foo',
+    specPath: 'docs/specs/foo.md',
+    iteration: 1,
+    startedAt: '2026-04-30T10:00:00.000Z',
+    durationMs: 1234,
+    cwd: '/tmp/proj',
+    prompt: '# Spec\n...\n',
+    allowedTools: 'Read,Edit,Write,Bash',
+    claudePath: '/usr/local/bin/claude',
+    status: 'pass' as const,
+    exitCode: 0,
+    result: 'I implemented impl() in src/needs-impl.ts',
+    filesChanged: [{ path: 'src/needs-impl.ts', diff: '@@ +export function impl ...' }],
+    toolsUsed: ['Read', 'Edit'],
+    tokens: { input: 5000, output: 200, total: 5200 },
+  };
+
+  test('accepts the success-path payload (status pass, result populated, failureDetail undefined)', () => {
+    const parsed = FactoryImplementReportSchema.safeParse(baseValid);
+    expect(parsed.success).toBe(true);
+  });
+
+  test('accepts the self-fail payload (status fail, result and failureDetail populated)', () => {
+    const parsed = FactoryImplementReportSchema.safeParse({
+      ...baseValid,
+      status: 'fail',
+      result: 'I could not complete the task',
+      failureDetail: 'I could not complete the task',
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test('accepts the cost-cap payload (status error, result populated, failureDetail starting with cost-cap-exceeded:)', () => {
+    const parsed = FactoryImplementReportSchema.safeParse({
+      ...baseValid,
+      status: 'error',
+      result: 'I edited src/needs-impl.ts despite the budget overrun',
+      failureDetail: 'cost-cap-exceeded: input_tokens=150000 > maxPromptTokens=100000',
+      tokens: { input: 150000, output: 200, total: 150200 },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test('accepts empty result string and signal field', () => {
+    const parsed = FactoryImplementReportSchema.safeParse({
+      ...baseValid,
+      result: '',
+      exitCode: null,
+      signal: 'SIGTERM',
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test('accepts optional cache token fields and computes total flexibly', () => {
+    const parsed = FactoryImplementReportSchema.safeParse({
+      ...baseValid,
+      tokens: { input: 5000, output: 200, cacheCreate: 100, cacheRead: 800, total: 6100 },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test('rejects missing required result', () => {
+    const { result: _, ...withoutResult } = baseValid;
+    const parsed = FactoryImplementReportSchema.safeParse(withoutResult);
+    expect(parsed.success).toBe(false);
+  });
+
+  test('rejects negative iteration', () => {
+    const parsed = FactoryImplementReportSchema.safeParse({ ...baseValid, iteration: 0 });
+    expect(parsed.success).toBe(false);
+  });
+
+  test('rejects non-int tokens.input', () => {
+    const parsed = FactoryImplementReportSchema.safeParse({
+      ...baseValid,
+      tokens: { input: 1.5, output: 200, total: 201.5 },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  test('rejects unknown status value', () => {
+    const parsed = FactoryImplementReportSchema.safeParse({ ...baseValid, status: 'unknown' });
     expect(parsed.success).toBe(false);
   });
 });

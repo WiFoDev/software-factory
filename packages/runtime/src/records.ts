@@ -33,9 +33,47 @@ export const FactoryValidateReportSchema = z.object({
   status: z.enum(['pass', 'fail', 'error']),
 });
 
+export const FactoryImplementReportSchema = z.object({
+  specId: z.string(),
+  specPath: z.string().optional(),
+  iteration: z.number().int().positive(),
+  startedAt: z.string(),
+  durationMs: z.number().int().nonnegative(),
+  cwd: z.string(),
+  prompt: z.string(),
+  allowedTools: z.string(),
+  claudePath: z.string(),
+  status: z.enum(['pass', 'fail', 'error']),
+  exitCode: z.number().int().nullable(),
+  signal: z.string().optional(),
+  // Always populated when the report is persisted (success or failure path);
+  // possibly empty string. Captures the agent's final message text from the
+  // JSON envelope independent of `is_error`/`failureDetail` semantics.
+  result: z.string(),
+  filesChanged: z.array(
+    z.object({
+      path: z.string(),
+      diff: z.string(),
+    }),
+  ),
+  toolsUsed: z.array(z.string()),
+  tokens: z.object({
+    input: z.number().int().nonnegative(),
+    output: z.number().int().nonnegative(),
+    cacheCreate: z.number().int().nonnegative().optional(),
+    cacheRead: z.number().int().nonnegative().optional(),
+    total: z.number().int().nonnegative(),
+  }),
+  // Populated only on status='fail' (mirrors `result` when the agent self-
+  // reports failure) or status='error' (the cost-cap-exceeded line, which
+  // overwrites any prior failureDetail). Independent of `result`.
+  failureDetail: z.string().optional(),
+});
+
 export type FactoryRunPayload = z.infer<typeof FactoryRunSchema>;
 export type FactoryPhasePayload = z.infer<typeof FactoryPhaseSchema>;
 export type FactoryValidateReportPayload = z.infer<typeof FactoryValidateReportSchema>;
+export type FactoryImplementReportPayload = z.infer<typeof FactoryImplementReportSchema>;
 
 /**
  * Register a record type, swallowing only `context/duplicate-registration`.

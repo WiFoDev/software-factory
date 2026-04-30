@@ -4,7 +4,11 @@ export type RuntimeErrorCode =
   | 'runtime/graph-unknown-phase'
   | 'runtime/graph-cycle'
   | 'runtime/invalid-max-iterations'
-  | 'runtime/io-error';
+  | 'runtime/io-error'
+  // v0.0.2 — implementPhase
+  | 'runtime/cost-cap-exceeded'
+  | 'runtime/agent-failed'
+  | 'runtime/invalid-max-prompt-tokens';
 
 export class RuntimeError extends Error {
   readonly code: RuntimeErrorCode;
