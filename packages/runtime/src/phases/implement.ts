@@ -64,9 +64,9 @@ export interface AgentSpawnResult {
 }
 
 /**
- * Spawn `claude -p --allowedTools <list> --bare --output-format json`,
- * write the prompt to its stdin, and resolve with the captured streams on
- * a clean exit (any exit code). Rejects with `RuntimeError({ code:
+ * Spawn `claude -p --allowedTools <list> --output-format json`, write the
+ * prompt to its stdin, and resolve with the captured streams on a clean
+ * exit (any exit code). Rejects with `RuntimeError({ code:
  * 'runtime/agent-failed' })` for every operational failure, with a
  * `failureDetail` prefix that names the specific reason:
  *   - agent-spawn-failed: ENOENT or other spawn error
@@ -77,12 +77,20 @@ export interface AgentSpawnResult {
  * surfaced via the resolved result's `exitCode` field. The caller decides
  * whether to throw on non-zero (T4 does, with the `agent-exit-nonzero`
  * prefix).
+ *
+ * The v0.0.2 spec called for `--bare` for reproducibility, but in claude
+ * 2.1+ `--bare` strictly disables OAuth/keychain reads — making it
+ * incompatible with the locked subscription-auth model (no API key). We
+ * drop `--bare` and rely on the rest of the locked surface
+ * (`--allowedTools`, headless `-p`, structured `--output-format json`)
+ * for reproducibility. The spec's intent (subscription auth, headless,
+ * structured capture) is preserved.
  */
 export function spawnAgent(opts: SpawnAgentOptions): Promise<AgentSpawnResult> {
   return new Promise<AgentSpawnResult>((resolvePromise, rejectPromise) => {
     const child = spawn(
       opts.claudePath,
-      ['-p', '--allowedTools', opts.allowedTools, '--bare', '--output-format', 'json'],
+      ['-p', '--allowedTools', opts.allowedTools, '--output-format', 'json'],
       {
         cwd: opts.cwd,
         env: opts.env,

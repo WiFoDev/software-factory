@@ -112,7 +112,9 @@ Runs `runHarness` against the spec and persists a `factory-validate-report` reco
 
 ### `implementPhase(opts?)` *(v0.0.2)*
 
-Subprocesses out to `claude -p --allowedTools "Read,Edit,Write,Bash" --bare --output-format json` with the prompt on stdin (subscription auth — no `ANTHROPIC_API_KEY`). Captures the agent's output and disk delta into a `factory-implement-report` record (`parents: [ctx.runId]`).
+Subprocesses out to `claude -p --allowedTools "Read,Edit,Write,Bash" --output-format json` with the prompt on stdin (subscription auth — no `ANTHROPIC_API_KEY`). Captures the agent's output and disk delta into a `factory-implement-report` record (`parents: [ctx.runId]`).
+
+> **Why no `--bare`?** The original v0.0.2 spec called for `--bare` for reproducibility, but in `claude` 2.1+ that flag strictly disables OAuth/keychain reads — making it incompatible with subscription auth. Since the user-facing goal is "no API key required, use your subscription," we drop `--bare`. The rest of the locked surface (headless `-p`, fixed `--allowedTools` allowlist, structured `--output-format json`) preserves the reproducibility intent.
 
 ```ts
 interface ImplementPhaseOptions {
