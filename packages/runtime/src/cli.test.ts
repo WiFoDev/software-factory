@@ -210,8 +210,8 @@ describe('factory-runtime CLI — default graph [implement → validate] (S-6)',
     // workdir for the duration of the call and assert the persisted
     // implement-report.payload.cwd matches.
     const work = mkdtempSync(join(tmpdir(), 'runtime-cli-impl-work-'));
-    const specMd = (await Bun.file(NEEDS_IMPL).text());
-    const testTs = (await Bun.file(join(RUNTIME_ROOT, 'test-fixtures/needs-impl.test.ts')).text());
+    const specMd = await Bun.file(NEEDS_IMPL).text();
+    const testTs = await Bun.file(join(RUNTIME_ROOT, 'test-fixtures/needs-impl.test.ts')).text();
     await Bun.write(join(work, 'needs-impl.md'), specMd);
     await Bun.write(join(work, 'needs-impl.test.ts'), testTs);
 
@@ -253,7 +253,10 @@ describe('factory-runtime CLI — default graph [implement → validate] (S-6)',
       let graphPhases: string[] | null = null;
       for (const fname of fileList) {
         const text = await Bun.file(join(ctxDir, fname)).text();
-        const rec = JSON.parse(text) as { type: string; payload: { cwd?: string; graphPhases?: string[] } };
+        const rec = JSON.parse(text) as {
+          type: string;
+          payload: { cwd?: string; graphPhases?: string[] };
+        };
         if (rec.type === 'factory-implement-report') {
           implementCwd = rec.payload.cwd ?? null;
         }
@@ -267,19 +270,19 @@ describe('factory-runtime CLI — default graph [implement → validate] (S-6)',
       expect(graphPhases).toEqual(['implement', 'validate']);
     } finally {
       process.chdir(prevCwd);
-      delete process.env.FAKE_CLAUDE_MODE;
-      delete process.env.FAKE_CLAUDE_TOKENS;
-      delete process.env.FAKE_CLAUDE_EDIT_FILE;
-      delete process.env.FAKE_CLAUDE_EDIT_CONTENT;
-      delete process.env.FAKE_CLAUDE_RESULT;
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_RESULT');
       await Bun.$`rm -rf ${work}`.quiet().nothrow();
     }
   });
 
   test('cost-cap overrun via --max-prompt-tokens 100 + fake-claude tokens=150000 → exit 3 with detail line', async () => {
     const work = mkdtempSync(join(tmpdir(), 'runtime-cli-costcap-work-'));
-    const specMd = (await Bun.file(NEEDS_IMPL).text());
-    const testTs = (await Bun.file(join(RUNTIME_ROOT, 'test-fixtures/needs-impl.test.ts')).text());
+    const specMd = await Bun.file(NEEDS_IMPL).text();
+    const testTs = await Bun.file(join(RUNTIME_ROOT, 'test-fixtures/needs-impl.test.ts')).text();
     await Bun.write(join(work, 'needs-impl.md'), specMd);
     await Bun.write(join(work, 'needs-impl.test.ts'), testTs);
 
@@ -309,14 +312,19 @@ describe('factory-runtime CLI — default graph [implement → validate] (S-6)',
 
       expect(cap.exitCode()).toBe(3);
       expect(cap.stdout()).toContain("factory-runtime: error during phase 'implement' iteration 1");
-      expect(cap.stdout()).toContain('detail: runtime/cost-cap-exceeded: input_tokens=150000 > maxPromptTokens=100');
+      expect(cap.stdout()).toContain(
+        'detail: runtime/cost-cap-exceeded: input_tokens=150000 > maxPromptTokens=100',
+      );
 
       // factory-implement-report exists on disk with status='error'.
       let foundError = false;
       const fileList = (await Bun.$`ls ${ctxDir}`.quiet().text()).trim().split('\n');
       for (const fname of fileList) {
         const text = await Bun.file(join(ctxDir, fname)).text();
-        const rec = JSON.parse(text) as { type: string; payload: { status?: string; failureDetail?: string } };
+        const rec = JSON.parse(text) as {
+          type: string;
+          payload: { status?: string; failureDetail?: string };
+        };
         if (rec.type === 'factory-implement-report') {
           expect(rec.payload.status).toBe('error');
           expect(rec.payload.failureDetail).toContain('cost-cap-exceeded:');
@@ -326,9 +334,9 @@ describe('factory-runtime CLI — default graph [implement → validate] (S-6)',
       expect(foundError).toBe(true);
     } finally {
       process.chdir(prevCwd);
-      delete process.env.FAKE_CLAUDE_MODE;
-      delete process.env.FAKE_CLAUDE_TOKENS;
-      delete process.env.FAKE_CLAUDE_RESULT;
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_RESULT');
       await Bun.$`rm -rf ${work}`.quiet().nothrow();
     }
   });
@@ -336,15 +344,7 @@ describe('factory-runtime CLI — default graph [implement → validate] (S-6)',
   test('--max-prompt-tokens 0 → exit 2 with runtime/invalid-max-prompt-tokens', async () => {
     const cap = makeIo();
     await invoke(
-      [
-        'run',
-        ALL_PASS,
-        '--no-judge',
-        '--max-prompt-tokens',
-        '0',
-        '--context-dir',
-        ctxDir,
-      ],
+      ['run', ALL_PASS, '--no-judge', '--max-prompt-tokens', '0', '--context-dir', ctxDir],
       cap.io,
     );
     expect(cap.exitCode()).toBe(2);
@@ -355,15 +355,7 @@ describe('factory-runtime CLI — default graph [implement → validate] (S-6)',
   test('--max-prompt-tokens non-numeric → exit 2', async () => {
     const cap = makeIo();
     await invoke(
-      [
-        'run',
-        ALL_PASS,
-        '--no-judge',
-        '--max-prompt-tokens',
-        'huge',
-        '--context-dir',
-        ctxDir,
-      ],
+      ['run', ALL_PASS, '--no-judge', '--max-prompt-tokens', 'huge', '--context-dir', ctxDir],
       cap.io,
     );
     expect(cap.exitCode()).toBe(2);
@@ -373,15 +365,7 @@ describe('factory-runtime CLI — default graph [implement → validate] (S-6)',
   test('--twin-mode invalid → exit 2 with runtime/invalid-twin-mode', async () => {
     const cap = makeIo();
     await invoke(
-      [
-        'run',
-        ALL_PASS,
-        '--no-judge',
-        '--twin-mode',
-        'bogus',
-        '--context-dir',
-        ctxDir,
-      ],
+      ['run', ALL_PASS, '--no-judge', '--twin-mode', 'bogus', '--context-dir', ctxDir],
       cap.io,
     );
     expect(cap.exitCode()).toBe(2);
@@ -423,7 +407,10 @@ describe('factory-runtime CLI — --no-implement parity (H-2)', () => {
     const types = new Set<string>();
     for (const fname of fileList) {
       const text = await Bun.file(join(ctxDir, fname)).text();
-      const rec = JSON.parse(text) as { type: string; payload: { phaseName?: string; graphPhases?: string[] } };
+      const rec = JSON.parse(text) as {
+        type: string;
+        payload: { phaseName?: string; graphPhases?: string[] };
+      };
       types.add(rec.type);
       if (rec.type === 'factory-phase') {
         expect(rec.payload.phaseName).toBe('validate');

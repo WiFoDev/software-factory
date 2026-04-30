@@ -18,7 +18,9 @@
 // Drain stdin so the parent's writeable side closes cleanly even when we
 // don't need the prompt content.
 
-const reader = (Bun.stdin as unknown as { stream(): ReadableStream<Uint8Array> }).stream().getReader();
+const reader = (Bun.stdin as unknown as { stream(): ReadableStream<Uint8Array> })
+  .stream()
+  .getReader();
 let prompt = '';
 while (true) {
   const { done, value } = await reader.read();
@@ -60,89 +62,83 @@ function makeEnvelope(overrides: Record<string, unknown> = {}): Record<string, u
   };
 }
 
-switch (mode) {
-  case 'success': {
-    if (editFile !== undefined) {
-      await Bun.write(editFile, editContent);
-    }
-    process.stdout.write(JSON.stringify(makeEnvelope()));
-    process.exit(0);
+// Each branch terminates via process.exit(); we use if/else rather than a
+// switch so biome's noFallthroughSwitchClause doesn't flag the unreachable
+// fall-throughs (each branch genuinely cannot fall through, but biome's
+// static analysis doesn't model process.exit as a terminating call).
+
+if (mode === 'success') {
+  if (editFile !== undefined) {
+    await Bun.write(editFile, editContent);
   }
-  case 'self-fail': {
-    process.stdout.write(
-      JSON.stringify(
-        makeEnvelope({
-          subtype: 'error_max_turns',
-          is_error: true,
-          result: process.env.FAKE_CLAUDE_RESULT ?? 'I could not complete the task',
-        }),
-      ),
-    );
-    process.exit(0);
+  process.stdout.write(JSON.stringify(makeEnvelope()));
+  process.exit(0);
+} else if (mode === 'self-fail') {
+  process.stdout.write(
+    JSON.stringify(
+      makeEnvelope({
+        subtype: 'error_max_turns',
+        is_error: true,
+        result: process.env.FAKE_CLAUDE_RESULT ?? 'I could not complete the task',
+      }),
+    ),
+  );
+  process.exit(0);
+} else if (mode === 'exit-nonzero') {
+  process.stderr.write('claude: authentication failed\n');
+  process.exit(exitCode);
+} else if (mode === 'malformed-json') {
+  process.stdout.write('not actually JSON');
+  process.exit(0);
+} else if (mode === 'hang') {
+  // Sleep beyond any reasonable test timeout. The runtime's wall-clock
+  // timeout will SIGKILL us.
+  await new Promise<void>(() => {
+    // never resolves
+  });
+  process.exit(0); // unreachable
+} else if (mode === 'cost-overrun') {
+  if (editFile !== undefined) {
+    await Bun.write(editFile, editContent);
   }
-  case 'exit-nonzero': {
-    process.stderr.write('claude: authentication failed\n');
-    process.exit(exitCode);
+  process.stdout.write(
+    JSON.stringify(
+      makeEnvelope({
+        // Force an overrun regardless of FAKE_CLAUDE_TOKENS.
+        usage: {
+          input_tokens: Math.max(tokens, 150_000),
+          output_tokens: outputTokens,
+        },
+        result:
+          process.env.FAKE_CLAUDE_RESULT ?? 'I edited src/needs-impl.ts despite the budget overrun',
+      }),
+    ),
+  );
+  process.exit(0);
+} else if (mode === 'echo-env') {
+  const twinMode = process.env.WIFO_TWIN_MODE ?? '';
+  const twinDir = process.env.WIFO_TWIN_RECORDINGS_DIR ?? '';
+  process.stdout.write(
+    JSON.stringify(
+      makeEnvelope({
+        result: `WIFO_TWIN_MODE=${twinMode} WIFO_TWIN_RECORDINGS_DIR=${twinDir}`,
+      }),
+    ),
+  );
+  process.exit(0);
+} else if (mode === 'self-kill') {
+  // Write a partial fragment, flush, then send SIGTERM to ourselves so the
+  // runtime sees a child closed by signal (not by our timer). Deterministic
+  // and platform-independent.
+  process.stdout.write('{"type":"result","subtype":"par');
+  process.stdout.once('drain', () => process.kill(process.pid, 'SIGTERM'));
+  if (!process.stdout.writableNeedDrain) {
+    process.kill(process.pid, 'SIGTERM');
   }
-  case 'malformed-json': {
-    process.stdout.write('not actually JSON');
-    process.exit(0);
-  }
-  case 'hang': {
-    // Sleep beyond any reasonable test timeout. The runtime's wall-clock
-    // timeout will SIGKILL us.
-    await new Promise<void>(() => {
-      // never resolves
-    });
-    process.exit(0); // unreachable
-  }
-  case 'cost-overrun': {
-    if (editFile !== undefined) {
-      await Bun.write(editFile, editContent);
-    }
-    process.stdout.write(
-      JSON.stringify(
-        makeEnvelope({
-          // Force an overrun regardless of FAKE_CLAUDE_TOKENS.
-          usage: {
-            input_tokens: Math.max(tokens, 150_000),
-            output_tokens: outputTokens,
-          },
-          result:
-            process.env.FAKE_CLAUDE_RESULT ??
-            'I edited src/needs-impl.ts despite the budget overrun',
-        }),
-      ),
-    );
-    process.exit(0);
-  }
-  case 'echo-env': {
-    const twinMode = process.env.WIFO_TWIN_MODE ?? '';
-    const twinDir = process.env.WIFO_TWIN_RECORDINGS_DIR ?? '';
-    process.stdout.write(
-      JSON.stringify(
-        makeEnvelope({
-          result: `WIFO_TWIN_MODE=${twinMode} WIFO_TWIN_RECORDINGS_DIR=${twinDir}`,
-        }),
-      ),
-    );
-    process.exit(0);
-  }
-  case 'self-kill': {
-    // Write a partial fragment, flush, then send SIGTERM to ourselves so the
-    // runtime sees a child closed by signal (not by our timer). Deterministic
-    // and platform-independent.
-    process.stdout.write('{"type":"result","subtype":"par');
-    process.stdout.once('drain', () => process.kill(process.pid, 'SIGTERM'));
-    if (!process.stdout.writableNeedDrain) {
-      process.kill(process.pid, 'SIGTERM');
-    }
-    // Hold the event loop so the signal can deliver before exit.
-    await new Promise<void>((r) => setTimeout(r, 5_000));
-    process.exit(0); // unreachable
-  }
-  default: {
-    process.stderr.write(`fake-claude: unknown FAKE_CLAUDE_MODE='${mode}'\n`);
-    process.exit(2);
-  }
+  // Hold the event loop so the signal can deliver before exit.
+  await new Promise<void>((r) => setTimeout(r, 5_000));
+  process.exit(0); // unreachable
+} else {
+  process.stderr.write(`fake-claude: unknown FAKE_CLAUDE_MODE='${mode}'\n`);
+  process.exit(2);
 }

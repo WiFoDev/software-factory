@@ -74,7 +74,9 @@ describe('parseAgentJson', () => {
   });
 
   test('rejects non-object JSON (e.g. a literal number)', () => {
-    expect(() => parseAgentJson('42')).toThrow(/agent-output-invalid: stdout did not parse to a JSON object/);
+    expect(() => parseAgentJson('42')).toThrow(
+      /agent-output-invalid: stdout did not parse to a JSON object/,
+    );
   });
 });
 
@@ -189,7 +191,9 @@ describe('spawnAgent', () => {
       timeoutMs: 10_000,
       log: (line) => logged.push(line),
     });
-    expect(logged.some((l) => l.startsWith('[claude] ') && l.includes('authentication failed'))).toBe(true);
+    expect(
+      logged.some((l) => l.startsWith('[claude] ') && l.includes('authentication failed')),
+    ).toBe(true);
   });
 });
 
@@ -310,11 +314,11 @@ describe('implementPhase — happy path (S-1)', () => {
       expect(payload.filesChanged.length).toBeGreaterThanOrEqual(1);
       expect(payload.toolsUsed.length).toBeGreaterThan(0);
     } finally {
-      delete process.env.FAKE_CLAUDE_MODE;
-      delete process.env.FAKE_CLAUDE_TOKENS;
-      delete process.env.FAKE_CLAUDE_EDIT_FILE;
-      delete process.env.FAKE_CLAUDE_EDIT_CONTENT;
-      delete process.env.FAKE_CLAUDE_RESULT;
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_RESULT');
     }
   });
 });
@@ -368,9 +372,9 @@ describe('implementPhase — cost cap (S-2)', () => {
       );
       expect(payload.tokens.input).toBe(150000);
     } finally {
-      delete process.env.FAKE_CLAUDE_MODE;
-      delete process.env.FAKE_CLAUDE_TOKENS;
-      delete process.env.FAKE_CLAUDE_RESULT;
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_RESULT');
     }
   });
 
@@ -443,8 +447,8 @@ describe('implementPhase — operational failures (S-3)', () => {
       const records = await store.list({ type: 'factory-implement-report' });
       expect(records.length).toBe(0);
     } finally {
-      delete process.env.FAKE_CLAUDE_MODE;
-      delete process.env.FAKE_CLAUDE_EXIT_CODE;
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EXIT_CODE');
     }
   });
 
@@ -468,7 +472,7 @@ describe('implementPhase — operational failures (S-3)', () => {
       expect(re.code).toBe('runtime/agent-failed');
       expect(re.message).toContain('agent-output-invalid:');
     } finally {
-      delete process.env.FAKE_CLAUDE_MODE;
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
     }
   });
 
@@ -493,7 +497,7 @@ describe('implementPhase — operational failures (S-3)', () => {
       expect(re.code).toBe('runtime/agent-failed');
       expect(re.message).toContain('agent-timeout (after 200ms):');
     } finally {
-      delete process.env.FAKE_CLAUDE_MODE;
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
     }
   });
 
@@ -517,7 +521,7 @@ describe('implementPhase — operational failures (S-3)', () => {
       expect(re.code).toBe('runtime/agent-failed');
       expect(re.message).toMatch(/agent-killed-by-signal SIG(TERM|KILL):/);
     } finally {
-      delete process.env.FAKE_CLAUDE_MODE;
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
     }
   });
 });
@@ -551,9 +555,9 @@ describe('implementPhase — self-fail (S-4)', () => {
       expect(payload.failureDetail).toBe('I could not complete the task');
       expect(payload.tokens.input).toBe(5000);
     } finally {
-      delete process.env.FAKE_CLAUDE_MODE;
-      delete process.env.FAKE_CLAUDE_TOKENS;
-      delete process.env.FAKE_CLAUDE_RESULT;
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_RESULT');
     }
   });
 });
@@ -583,8 +587,8 @@ describe('implementPhase — twin env vars (S-5)', () => {
       expect(process.env.WIFO_TWIN_RECORDINGS_DIR).toBeUndefined();
       expect(existsSync(recordingsDir)).toBe(true);
     } finally {
-      delete process.env.FAKE_CLAUDE_MODE;
-      delete process.env.FAKE_CLAUDE_TOKENS;
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
     }
   });
 
@@ -604,8 +608,8 @@ describe('implementPhase — twin env vars (S-5)', () => {
       expect(payload.result).toBe('WIFO_TWIN_MODE= WIFO_TWIN_RECORDINGS_DIR=');
       expect(existsSync(recordingsDir)).toBe(false);
     } finally {
-      delete process.env.FAKE_CLAUDE_MODE;
-      delete process.env.FAKE_CLAUDE_TOKENS;
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
     }
   });
 });
@@ -637,11 +641,11 @@ describe('implementPhase — integration with validatePhase', () => {
       expect(implResult.records[0]?.parents).toEqual([runId]);
       expect(valResult.records[0]?.parents).toEqual([runId]);
     } finally {
-      delete process.env.FAKE_CLAUDE_MODE;
-      delete process.env.FAKE_CLAUDE_TOKENS;
-      delete process.env.FAKE_CLAUDE_EDIT_FILE;
-      delete process.env.FAKE_CLAUDE_EDIT_CONTENT;
-      delete process.env.FAKE_CLAUDE_RESULT;
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_RESULT');
     }
   });
 });

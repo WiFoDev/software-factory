@@ -1,13 +1,6 @@
-import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import {
-  type Dirent,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-} from 'node:fs';
+import { createHash } from 'node:crypto';
+import { type Dirent, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import type { TwinMode } from '@wifo/factory-twin';
 import { RuntimeError } from '../errors.js';
@@ -113,10 +106,7 @@ export function spawnAgent(opts: SpawnAgentOptions): Promise<AgentSpawnResult> {
 
     let timedOut = false;
     let settled = false;
-    const settle = (
-      action: 'resolve' | 'reject',
-      payload: AgentSpawnResult | RuntimeError,
-    ) => {
+    const settle = (action: 'resolve' | 'reject', payload: AgentSpawnResult | RuntimeError) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutHandle);
@@ -302,7 +292,7 @@ function buildPrompt(args: {
     '- Do NOT add, remove, or upgrade dependencies (no `pnpm add`, `npm install`, `bun add`).',
     '- Do NOT touch files outside the working directory.',
     '- Bash is for running tests and inspecting state. Avoid destructive shell',
-    "  commands (no `rm -rf`, `git reset --hard`, `pnpm prune`).",
+    '  commands (no `rm -rf`, `git reset --hard`, `pnpm prune`).',
     "- Keep changes minimal and focused on satisfying the spec's `test:` lines.",
     '',
     '# What "done" looks like',
@@ -506,10 +496,7 @@ interface ResolvedTwin {
   recordingsDir: string | null;
 }
 
-function resolveTwin(
-  twin: ImplementPhaseOptions['twin'],
-  cwd: string,
-): ResolvedTwin {
+function resolveTwin(twin: ImplementPhaseOptions['twin'], cwd: string): ResolvedTwin {
   if (twin === 'off') {
     return { envVars: {}, recordingsDir: null };
   }
@@ -617,8 +604,7 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
     const tokensOutput = numOr0(u.output_tokens);
     const cacheCreate = numOrUndef(u.cache_creation_input_tokens);
     const cacheRead = numOrUndef(u.cache_read_input_tokens);
-    const tokensTotal =
-      tokensInput + tokensOutput + (cacheCreate ?? 0) + (cacheRead ?? 0);
+    const tokensTotal = tokensInput + tokensOutput + (cacheCreate ?? 0) + (cacheRead ?? 0);
 
     // Result text — always populated, regardless of is_error.
     const result = String(envelope.result ?? '');
@@ -629,9 +615,7 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
     if (envelope.is_error === true) {
       status = 'fail';
       failureDetail =
-        result !== ''
-          ? result
-          : String(envelope.subtype ?? 'agent self-reported failure');
+        result !== '' ? result : String(envelope.subtype ?? 'agent self-reported failure');
     } else {
       status = 'pass';
     }

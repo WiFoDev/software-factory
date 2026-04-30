@@ -7,7 +7,7 @@ import { createContextStore } from '@wifo/factory-context';
 import { SpecParseError, parseSpec } from '@wifo/factory-core';
 import { RuntimeError } from './errors.js';
 import { definePhaseGraph } from './graph.js';
-import { implementPhase, type ImplementPhaseOptions } from './phases/implement.js';
+import { type ImplementPhaseOptions, implementPhase } from './phases/implement.js';
 import { validatePhase } from './phases/validate.js';
 import { run } from './runtime.js';
 

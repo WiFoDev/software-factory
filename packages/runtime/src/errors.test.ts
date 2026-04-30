@@ -35,9 +35,15 @@ describe('RuntimeError', () => {
   });
 
   test('v0.0.2 codes (cost-cap, agent-failed, invalid-max-prompt-tokens) are distinct and matchable', () => {
-    const costCap = new RuntimeError('runtime/cost-cap-exceeded', 'input_tokens=150000 > maxPromptTokens=100000');
+    const costCap = new RuntimeError(
+      'runtime/cost-cap-exceeded',
+      'input_tokens=150000 > maxPromptTokens=100000',
+    );
     const agentFailed = new RuntimeError('runtime/agent-failed', 'agent-spawn-failed: ENOENT');
-    const invalidCap = new RuntimeError('runtime/invalid-max-prompt-tokens', "must be a positive integer (got '0')");
+    const invalidCap = new RuntimeError(
+      'runtime/invalid-max-prompt-tokens',
+      "must be a positive integer (got '0')",
+    );
 
     expect(costCap.code).toBe('runtime/cost-cap-exceeded');
     expect(agentFailed.code).toBe('runtime/agent-failed');
