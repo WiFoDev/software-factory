@@ -48,7 +48,7 @@ packages/runtime/test-fixtures/
 └── fake-claude.ts             # NEW — Bun-runnable shebang script ("claude" stand-in for tests)
 ```
 
-`fake-claude.ts` reads stdin (the prompt), inspects env vars to pick a behavior (`FAKE_CLAUDE_MODE`, `FAKE_CLAUDE_TOKENS`, `FAKE_CLAUDE_EDIT_FILE`, `FAKE_CLAUDE_EDIT_CONTENT`, `FAKE_CLAUDE_EXIT_CODE`, `FAKE_CLAUDE_DELAY_MS`), and writes a deterministic JSON envelope to stdout. Modes covered: `success` (exits 0, valid JSON, optional file edit), `self-fail` (exits 0, valid JSON with `is_error: true`), `exit-nonzero` (exits non-zero, stderr message), `malformed-json` (exits 0 with non-JSON stdout), `hang` (sleeps past the test timeout — used to exercise the timeout path), `cost-overrun` (exits 0 with `usage.input_tokens` > 100k). Committed `+x` so spawn invokes the shebang directly.
+`fake-claude.ts` reads stdin (the prompt), inspects env vars to pick a behavior (`FAKE_CLAUDE_MODE`, `FAKE_CLAUDE_TOKENS`, `FAKE_CLAUDE_EDIT_FILE`, `FAKE_CLAUDE_EDIT_CONTENT`, `FAKE_CLAUDE_EXIT_CODE`, `FAKE_CLAUDE_DELAY_MS`), and writes a deterministic JSON envelope to stdout. Modes covered: `success` (exits 0, valid JSON, optional file edit), `self-fail` (exits 0, valid JSON with `is_error: true`), `exit-nonzero` (exits non-zero, stderr message), `malformed-json` (exits 0 with non-JSON stdout), `hang` (sleeps past the test timeout — used to exercise the timeout path), `cost-overrun` (exits 0 with `usage.input_tokens` > 100k), `self-kill` (writes partial output to stdout, then `process.kill(process.pid, 'SIGTERM')` — exercises the killed-by-signal branch deterministically without the test runner having to send signals across processes), `echo-env` (exits 0, valid JSON whose `result` field embeds the values of `WIFO_TWIN_MODE` and `WIFO_TWIN_RECORDINGS_DIR` from its own env — used by S-5 to verify the env-var plumbing without coupling to `is_error`/`failureDetail`). Committed `+x` so spawn invokes the shebang directly.
 
 ### Public API
 
@@ -96,8 +96,9 @@ type RuntimeErrorCode =
   | 'runtime/graph-cycle'
   | 'runtime/invalid-max-iterations'
   | 'runtime/io-error'
-  | 'runtime/cost-cap-exceeded'   // NEW — agent's reported usage.input_tokens > maxPromptTokens; report is persisted before the throw
-  | 'runtime/agent-failed';       // NEW — coarse bucket for spawn failure / timeout / non-zero exit / malformed JSON output; specific reason in failureDetail
+  | 'runtime/cost-cap-exceeded'           // NEW — agent's reported usage.input_tokens > maxPromptTokens; report is persisted before the throw
+  | 'runtime/agent-failed'                // NEW — coarse bucket for spawn failure / timeout / non-zero exit / malformed JSON output; specific reason in failureDetail
+  | 'runtime/invalid-max-prompt-tokens';  // NEW — implementPhase({ maxPromptTokens }) called with non-positive integer; symmetric with 'runtime/invalid-max-iterations'
 ```
 
 The set of codes stays stable; `'runtime/cost-cap-exceeded'` is the user-locked code for the cost-cap hard-stop. `'runtime/agent-failed'` is intentionally coarse — it covers spawn failure, exit-nonzero, output-invalid, and timeout. The `failureDetail` carries the specific reason as a prefix:
@@ -106,8 +107,9 @@ The set of codes stays stable; `'runtime/cost-cap-exceeded'` is the user-locked 
 - `agent-exit-nonzero (code=<n>): <stderr tail>` — `claude` exited with a non-zero status.
 - `agent-output-invalid: <reason>; output tail: <stdout tail>` — JSON parse failed or schema didn't match.
 - `agent-timeout (after <ms>ms): <stderr tail>` — wall-clock timeout fired (default 600_000 ms).
+- `agent-killed-by-signal <signal>: <stderr tail>` — child terminated by an external signal (not our timer).
 
-Two new codes (instead of four) keeps the public union tight while still letting `instanceof RuntimeError && err.code === 'runtime/cost-cap-exceeded'` discrimination work for the budget signal that callers actually care about. Granular dispatch on agent sub-failures uses the `failureDetail` prefix.
+Three new codes total (`'runtime/cost-cap-exceeded'`, `'runtime/agent-failed'`, `'runtime/invalid-max-prompt-tokens'`). The first is user-locked. The second is intentionally coarse — granular dispatch on agent sub-failures uses the `failureDetail` prefix above. The third is the constructor-time validation error for `implementPhase({ maxPromptTokens })` — symmetric with v0.0.1's `'runtime/invalid-max-iterations'` (validated when `run()` reads `options.maxIterations`); both are thrown synchronously before any record is written.
 
 **Intentionally not exported** (internal): the subprocess wrapper (`spawnAgent` / `parseAgentJson` / file-diff helpers), `FactoryImplementReportSchema`, the prompt builder.
 
@@ -164,7 +166,10 @@ function implementPhase(opts: ImplementPhaseOptions = {}): Phase;
 
 Returns a `Phase` named `'implement'`. Behavior per invocation:
 
-1. **Resolve config**.
+0. **Validate options synchronously at factory-call time** (before the closure is constructed). This runs once when `implementPhase(opts)` is called, not per phase invocation:
+   - If `opts.maxPromptTokens` is provided and is not a positive integer (`!Number.isInteger(n) || n <= 0`), throw `RuntimeError('runtime/invalid-max-prompt-tokens', 'must be a positive integer (got <value>)')`. Symmetric with how `run()` validates `maxIterations`. No record is written; the error propagates to the caller (or, in the CLI flow, gets caught and surfaces as exit 3 via the runtime's existing error handler).
+   - Other options have no validation gates beyond TypeScript's compile-time checks (e.g., `claudePath` as `string`, `twin` as the documented union). Bad values surface as operational errors at invocation time.
+1. **Resolve config** (per phase invocation, inside the closure).
    - `cwd = opts.cwd ?? (spec.raw.filename ? dirname(resolve(spec.raw.filename)) : process.cwd())`.
    - `maxPromptTokens = opts.maxPromptTokens ?? 100_000`.
    - `allowedTools = opts.allowedTools ?? 'Read,Edit,Write,Bash'`.
@@ -213,16 +218,18 @@ Returns a `Phase` named `'implement'`. Behavior per invocation:
    ```
    `numOr0` / `numOrUndef` defensively coerce missing/non-numeric fields. The cap check uses `tokens.input` only — this matches the user's "max prompt tokens" framing.
 10. **Extract `toolsUsed`** (best-effort): try `parsed.tool_uses` (if present, an array of `{ name, ... }` or `string`) and dedup. If the envelope doesn't expose tool-use info, infer from disk delta: any new file → add `'Write'`; any modified file → add `'Edit'`; any non-empty stderr line matching `^\$ ` → add `'Bash'`. The field is honest about being best-effort; the real source of truth is `filesChanged`.
-11. **Determine status**:
-    - `parsed.is_error === true` → `status = 'fail'`, `failureDetail = String(parsed.result ?? parsed.subtype ?? 'agent self-reported failure')`.
-    - else → `status = 'pass'`.
+11. **Extract `result` and determine status**: capture `result = String(parsed.result ?? '')` unconditionally — this becomes the report's `result` field regardless of `is_error`. Then:
+    - `parsed.is_error === true` → `status = 'fail'`, `failureDetail = (result !== '' ? result : String(parsed.subtype ?? 'agent self-reported failure'))`.
+    - else → `status = 'pass'`, `failureDetail` stays `undefined`.
+
+    Storing `result` independently of `failureDetail` gives the audit trail one place to look for "what did the agent say it did?" on every persisted report (success and failure alike) and decouples S-5's env-var-plumbing test from `is_error` semantics.
 12. **Cost-cap check**: if `tokens.input > maxPromptTokens` →
-    - Override `status` to `'error'` and prepend a `failureDetail` line:
-      `cost-cap-exceeded: input_tokens=<n> > maxPromptTokens=<cap>`.
-    - **Persist the factory-implement-report** with the overridden status (so the user sees what was wasted).
+    - Override `status` to `'error'` and overwrite `failureDetail` to:
+      `cost-cap-exceeded: input_tokens=<n> > maxPromptTokens=<cap>` (any prior `failureDetail` from `is_error: true` is replaced — the cost overrun is the dominant signal). `result` is preserved on the persisted report.
+    - **Persist the factory-implement-report** with the overridden status (so the user sees what was wasted, including the agent's `result` text).
     - **Throw** `RuntimeError('runtime/cost-cap-exceeded', '<the same prefixed detail line>')`.
     - The runtime catches the throw → factory-phase status='error'. The implement-report exists on disk with `parents: [ctx.runId]` — discoverable via `factory-context tree <runId>` even though it's not in `factory-phase.outputRecordIds` (because the phase threw before returning).
-13. **Persist the factory-implement-report** (non-cost-cap path) with `parents: [ctx.runId]`. Payload shape per §"Record schema" below.
+13. **Persist the factory-implement-report** (non-cost-cap path) with `parents: [ctx.runId]`. Payload shape per §"Record schema" below — `result` is always populated; `failureDetail` is populated only on `status: 'fail'`.
 14. **Return** `{ status, records: [implementReportRecord] }`. The `'pass'` and `'fail'` cases both return — the runtime sees `'fail'` and continues to `validate` in the same iteration (validate may pass or fail; it is the judge of correctness). Only `'error'` (cost-cap path, via throw) aborts the run.
 
 ### Prompt construction
@@ -296,6 +303,7 @@ const FactoryImplementReportSchema = z.object({
   status: z.enum(['pass', 'fail', 'error']),
   exitCode: z.number().int().nullable(),    // null if killed by signal / timeout
   signal: z.string().optional(),            // populated when killed by signal
+  result: z.string(),                       // agent's final message text from JSON envelope; always populated when the report is persisted (possibly empty); independent of is_error
   filesChanged: z.array(
     z.object({
       path: z.string(),                     // relative to cwd
@@ -310,7 +318,7 @@ const FactoryImplementReportSchema = z.object({
     cacheRead: z.number().int().nonnegative().optional(),
     total: z.number().int().nonnegative(),
   }),
-  failureDetail: z.string().optional(),
+  failureDetail: z.string().optional(),     // populated on status='fail' (is_error=true) or status='error' (cost-cap-exceeded); independent of result
 });
 ```
 
@@ -373,7 +381,7 @@ The single combined diff is split per file by parsing `diff --git a/<path> b/<pa
 
 **Hash path** (fallback, when `.git` does not exist):
 
-1. Pre-state walk: collect SHA-256 of every file's content under cwd, excluding `node_modules`, `.git`, `.factory`. Skip files > 1 MB (record path with `diff: ''` if changed). Cap total pre-state size at 5 MB; if exceeded, fall back to "paths only" mode for the entire phase (every changed file gets `diff: ''`, and `ctx.log` emits a one-line warning).
+1. Pre-state walk: collect SHA-256 of every file's content under cwd, excluding a hardcoded ignore list: `node_modules/`, `.git/`, `.factory/`, `dist/`, `build/`, `coverage/`, `.next/`, `.turbo/`. The walk does **not** parse `.gitignore` (node:fs doesn't honor it natively, and a partial parser is a footgun). Skip files > 1 MB (record path with `diff: ''` if changed). Cap total pre-state size at 5 MB; if exceeded, fall back to "paths only" mode for the entire phase (every changed file gets `diff: ''`, and `ctx.log` emits a one-line warning).
 2. Post-state walk: same algorithm, intersect with pre-state. For each path with a different hash (or new path), compute a unified diff via a small in-process diff (e.g., `node:diff` is not built-in — implement minimally with `diffLines`-style logic, or use a tiny dep like `diff` if added; for v0.0.2 we go without a new dep and store before/after content concatenated with a separator — honest about being a degraded mode).
 
 The `git` path is the v0.0.2 happy path because the gh-stars demo (and slugify, and most user projects) is a git repo. The hash fallback exists so unit tests against scratch dirs without `.git` still produce a non-empty `filesChanged`.
@@ -397,10 +405,10 @@ Flags:
 
 Behavior changes vs v0.0.1:
 
-1. **Default graph** is now `[implement → validate]` — `definePhaseGraph([implement, validate], [['implement', 'validate']])`.
-2. **`--no-implement`** drops back to `[validate]` only, with no edges. The CLI does not even instantiate `implementPhase` in this mode (so missing `claude` on PATH is not a problem for `--no-implement` users).
-3. **`--max-prompt-tokens 0` or non-numeric** → exit 2 with `runtime/invalid-max-prompt-tokens` (parsed via the same positive-integer validator as `--max-iterations`). Error message mirrors the existing pattern. (No new RuntimeErrorCode for this — it's a CLI-flag validation error, exits 2 with stderr line, never reaches `run()`.)
-4. **`--twin-mode off`** → `opts.twin = 'off'`. Other values → `opts.twin = { mode: <value>, recordingsDir: <flag-or-default> }`.
+1. **Default graph** is now `[implement → validate]` — `definePhaseGraph([implementPhase(implOpts), validatePhase(valOpts)], [['implement', 'validate']])`. Both phase-options objects pin `cwd: process.cwd()` explicitly so the agent's edits and the harness's `bun test` invocation resolve against the same tree (validatePhase already defaults to dirname-of-spec when `cwd` isn't provided; passing `process.cwd()` explicitly to both keeps them symmetric and aligns with v0.0.1's CLI behavior). Pinned by §"Confirmed constraints".
+2. **`--no-implement`** drops back to `[validate]` only, with no edges. The CLI does not even instantiate `implementPhase` in this mode (so missing `claude` on PATH is not a problem for `--no-implement` users), nor does it parse the implement-tuning flags (`--max-prompt-tokens`, `--claude-bin`, `--twin-*` are ignored when `--no-implement` is set; the CLI emits no warning — they're simply inert in that mode).
+3. **`--max-prompt-tokens 0` or non-numeric** → exit 2 with stderr line `runtime/invalid-max-prompt-tokens: --max-prompt-tokens must be a positive integer (got '<raw>')` (parsed via the same positive-integer validator as `--max-iterations`). The CLI emits the prefix manually (matching the v0.0.1 `--max-iterations` pattern); the actual `RuntimeError({ code: 'runtime/invalid-max-prompt-tokens' })` only fires when programmatic callers construct `implementPhase({ maxPromptTokens: 0 })` directly — symmetric with how `runtime/invalid-max-iterations` works.
+4. **`--twin-mode off`** → `opts.twin = 'off'`. Other values (`record`, `replay`) → `opts.twin = { mode: <value>, recordingsDir: <flag-or-default> }`. Unknown values exit 2 with stderr line `runtime/invalid-twin-mode: --twin-mode must be one of 'record', 'replay', 'off' (got '<raw>')` (no RuntimeErrorCode addition — pure CLI validation).
 5. **Exit codes unchanged**: `0` converged, `1` no-converge, `2` usage error, `3` operational error.
 6. **Summary lines unchanged in shape**, but the `'error'` line for a cost-cap abort surfaces the failureDetail directly:
    `factory-runtime: error during phase 'implement' iteration <n> (run=<runId>)\n  detail: cost-cap-exceeded: input_tokens=<actual> > maxPromptTokens=<cap>\n`
@@ -411,8 +419,11 @@ The CLI does not expose `--allowed-tools`, `--timeout-ms`, or `--prompt-extra` i
 ### Confirmed constraints
 
 - Public API surface is the §2 list above (19 names: 5 functions + 1 class + 13 types). Strict equality enforced by the DoD.
-- `RuntimeErrorCode` gains exactly two members: `'runtime/cost-cap-exceeded'` and `'runtime/agent-failed'`. The existing six are unchanged.
+- `RuntimeErrorCode` gains exactly three members: `'runtime/cost-cap-exceeded'`, `'runtime/agent-failed'`, `'runtime/invalid-max-prompt-tokens'`. The existing six are unchanged. Adding members to the union does **not** change the public name count (still 19); the type name `RuntimeErrorCode` is a single export whose membership grows.
 - `implementPhase(opts?)` is a factory: returns a `Phase` named `'implement'`. Mirrors `validatePhase` exactly.
+- `implementPhase(opts)` validates `opts.maxPromptTokens` synchronously at factory-call time: a non-positive-integer value throws `RuntimeError({ code: 'runtime/invalid-max-prompt-tokens' })` before the closure is constructed. Symmetric with `run()`'s validation of `options.maxIterations`. No record is written.
+- `factory-implement-report` carries a `result: string` field that is **always populated** when the report is persisted (success or failure path; possibly empty string if the agent's envelope had no `result`). `failureDetail` is independent of `result` — it's populated only on `status: 'fail'` (agent self-reported failure) or `status: 'error'` (cost-cap-exceeded). The audit trail's "what did the agent say it did" question always resolves to `result`; "what went wrong" resolves to `failureDetail`. Pinned by S-1's judge and S-5's plumbing test.
+- The CLI passes `cwd: process.cwd()` explicitly to **both** `implementPhase` and `validatePhase` so the agent's edits and the harness's `bun test` subprocess resolve against the same tree. Without this, `implementPhase` would default to `dirname(spec.raw.filename)` while v0.0.1's CLI passes `process.cwd()` to `validatePhase` — causing the agent and validate to operate on different trees when the spec lives in a subdirectory of the cwd. Pinned by S-6 / T6.
 - The agent subprocess is `claude -p --allowedTools <list> --bare --output-format json` with the prompt on stdin. No `ANTHROPIC_API_KEY` is read or set by the runtime (subscription auth is implicit).
 - Default tool allowlist is `'Read,Edit,Write,Bash'`. Bash is unrestricted at the CLI flag level; constraints come via the prompt.
 - Cost cap is post-hoc on `usage.input_tokens` against `maxPromptTokens` (default 100_000). On overrun, the factory-implement-report is persisted with `status: 'error'` *before* `RuntimeError({ code: 'runtime/cost-cap-exceeded' })` is thrown, so the user can audit the wasted run via `factory-context tree <runId>`. The implement-report's `parents: [ctx.runId]` keeps it discoverable even though it is not in `factory-phase.outputRecordIds` (the phase threw before returning).
@@ -452,11 +463,11 @@ The CLI does not expose `--allowed-tools`, `--timeout-ms`, or `--prompt-extra` i
 Eight subtasks, ~1230 LOC source plus tests. Full test pointers in `docs/specs/factory-runtime-v0-0-2.md`.
 
 - **T1** [config] — Bump `packages/runtime/package.json` to `0.0.2`; **re-add `@wifo/factory-twin: workspace:*`** to `dependencies`; create empty source files (`src/phases/implement.ts`); create test fixtures dir entries for `needs-impl.md`, `needs-impl.test.ts`, and a placeholder `fake-claude.ts` (filled in T5). ~30 LOC.
-- **T2** [feature] — `src/errors.ts` extension: add `'runtime/cost-cap-exceeded'` and `'runtime/agent-failed'` to `RuntimeErrorCode`. `src/records.ts` extension: add `FactoryImplementReportSchema`; export the inferred `FactoryImplementReportPayload` type internally (not in public surface). Tests: schema accept/reject for the new schema; `RuntimeError` `instanceof` + new `code` discrimination. **depends on nothing new** (pure extensions). ~120 LOC.
+- **T2** [feature] — `src/errors.ts` extension: add `'runtime/cost-cap-exceeded'`, `'runtime/agent-failed'`, and `'runtime/invalid-max-prompt-tokens'` to `RuntimeErrorCode` (three new members; existing six unchanged). `src/records.ts` extension: add `FactoryImplementReportSchema` (zod schema per the data-model decision above, including the `result: z.string()` field that is always populated when the report is persisted); export the inferred `FactoryImplementReportPayload` type internally (not in public surface). Tests: schema accept/reject for the new schema (including a payload with `result: ''` empty string and `failureDetail: undefined`, which is the success path's persistence shape); `RuntimeError` `instanceof` + each of the three new `code` values discriminate cleanly. **depends on nothing new** (pure extensions). ~140 LOC.
 - **T3** [feature] — Internal subprocess wrapper helpers in `src/phases/implement.ts` (not exported): `spawnAgent({ claudePath, allowedTools, cwd, env, prompt, timeoutMs, log })` returning `Promise<{ exitCode, signal?, stdout, stderr }>` (or rejecting with `RuntimeError({ code: 'runtime/agent-failed' })` on spawn-error / timeout / exit-nonzero / killed-by-signal); `parseAgentJson(stdout)` returning the typed envelope or throwing `RuntimeError({ code: 'runtime/agent-failed' })` with `'agent-output-invalid'` prefix; ANSI-strip + 4 KB tail cap helpers (lifted from harness's runner — duplicated, not depended-on, since runtime should not depend on harness internals). Tests via fake-claude binary covering: spawn-success, spawn-failed (`claudePath` set to nonexistent path), exit-nonzero, malformed-json, timeout (SIGKILL), kill-by-external-signal. **depends on T2**. ~280 LOC.
-- **T4** [feature] — `implementPhase(opts)` factory in `src/phases/implement.ts`: prompt builder, twin env-var resolution, file-diff capture (git path + hash fallback), token extraction with defensive coercion, status mapping (`is_error → 'fail'`), cost-cap check (overrun → persist report with `'error'` → throw `RuntimeError({ code: 'runtime/cost-cap-exceeded' })`), record persistence with `parents: [ctx.runId]`, `tryRegister` for the new schema, `ctx.log` forwarding for stderr tail. Tests: happy path (status `'pass'` + report payload assertions on prompt/files/tools/tokens/exitCode/parents), `is_error: true` → `'fail'` with persisted report, cost-cap → both records on disk + thrown `RuntimeError`, twin env vars set on subprocess (verified by fake-claude echoing them back into `tools_used` or a custom payload field — design choice for the test), `twin: 'off'` skips env vars and dir creation. **depends on T2, T3**. ~310 LOC.
+- **T4** [feature] — `implementPhase(opts)` factory in `src/phases/implement.ts`: factory-call-time validation of `opts.maxPromptTokens` (non-positive → `RuntimeError({ code: 'runtime/invalid-max-prompt-tokens' })` thrown synchronously before the closure is constructed); prompt builder; twin env-var resolution; file-diff capture (git path + hash fallback with the hardcoded ignore list per §"File-diff capture" — no `.gitignore` parsing); token extraction with defensive coercion; `result` extraction (`String(parsed.result ?? '')` always, regardless of `is_error`) — populated on every persisted report; status mapping (`is_error: true → 'fail'`, else `'pass'`); cost-cap check (overrun → persist report with `'error'` and overwrite `failureDetail` with `cost-cap-exceeded: …` while preserving `result` → throw `RuntimeError({ code: 'runtime/cost-cap-exceeded' })`); record persistence with `parents: [ctx.runId]`; `tryRegister` for the new schema; `ctx.log` forwarding for stderr tail (prefix `[claude] `). Tests: happy path (status `'pass'` + report payload assertions on prompt / files / tools / tokens / exitCode / `result` non-empty / `failureDetail` undefined / parents), `is_error: true` → `'fail'` with persisted report (asserts both `result` and `failureDetail` populated), cost-cap → both records on disk + thrown `RuntimeError` (asserts `result` preserved on the persisted report even though `failureDetail` was overwritten to the `cost-cap-exceeded:` line), `implementPhase({ maxPromptTokens: 0 })` throws synchronously before any record is written, twin env vars set on subprocess (verified via the `echo-env` fake-claude mode embedding `WIFO_TWIN_MODE` and `WIFO_TWIN_RECORDINGS_DIR` into the JSON envelope's `result` field — assertion runs against `payload.result`), `twin: 'off'` skips env vars and dir creation. **depends on T2, T3**. ~330 LOC.
 - **T5** [feature] — Test fixtures: `test-fixtures/fake-claude.ts` (Bun shebang script, `+x`, supports all FAKE_CLAUDE_MODE values listed in §2), `test-fixtures/needs-impl.md` (spec referencing `test-fixtures/needs-impl.test.ts`), `test-fixtures/needs-impl.test.ts` (a `bun test` that asserts `src/needs-impl.ts` exports a function — the fake-claude in success mode writes that file, making the validate phase pass). Integration test in `phases/implement.test.ts` exercising `implementPhase + validatePhase` end-to-end against `needs-impl.md` with the fake binary. **depends on T3, T4**. ~180 LOC.
-- **T6** [feature] — `src/cli.ts` extension: add `--no-implement`, `--max-prompt-tokens`, `--claude-bin`, `--twin-mode`, `--twin-recordings-dir` flags; flip default graph to `[implement → validate]` with the `['implement', 'validate']` edge; route `opts` into `implementPhase`. CLI tests via `Bun.spawn`: default flow with `claudePath` overridden via `--claude-bin <fake>` (covers happy path + cost-cap exit 3 + `--no-implement` parity with v0.0.1's record set). `--max-prompt-tokens 0` → exit 2 with `runtime/invalid-max-prompt-tokens`. **depends on T4**. ~260 LOC.
+- **T6** [feature] — `src/cli.ts` extension: add `--no-implement`, `--max-prompt-tokens`, `--claude-bin`, `--twin-mode`, `--twin-recordings-dir` flags; flip default graph to `[implement → validate]` with the `['implement', 'validate']` edge. **Pin both phase factories' `cwd` to `process.cwd()` explicitly** — `validatePhase({ cwd: process.cwd(), ... })` (already the v0.0.1 behavior) and `implementPhase({ cwd: process.cwd(), ... })` — so the agent's edits and the harness's `bun test` invocation resolve against the same tree. Route `opts.maxPromptTokens` / `opts.claudePath` / `opts.twin` into `implementPhase` from the parsed flags. `--max-prompt-tokens 0` (or non-numeric) → exit 2 with stderr line `runtime/invalid-max-prompt-tokens: --max-prompt-tokens must be a positive integer (got '<raw>')` (manual emit, mirrors `--max-iterations`). `--twin-mode <unknown>` → exit 2 with stderr line `runtime/invalid-twin-mode: ...`. CLI tests via `Bun.spawn`: default flow with `claudePath` overridden via `--claude-bin <fake>` (covers happy path + cost-cap exit 3 with the `cost-cap-exceeded:` detail line + `--no-implement` parity with v0.0.1's record set). **depends on T4**. ~260 LOC.
 - **T7** [chore] — `examples/gh-stars/`: scaffold mirroring `examples/slugify/` (`package.json` declaring `@wifo/factory-runtime`, `@wifo/factory-twin`, `@wifo/factory-context`, `@wifo/factory-core` as `workspace:*`; `tsconfig.json`; `.gitignore` excluding `.factory/` and `node_modules/`; empty `src/`; `docs/specs/gh-stars-v1.md` starter spec covering the GitHub stargazers + caching + rate-limit scenarios; `docs/technical-plans/`; `README.md` walking the v0.0.2 loop). The starter spec is one the user can edit; the agent fills in `src/`. ~100 LOC (mostly README + spec). **depends on T6** (CLI flags need to be settled to document correctly).
 - **T8** [chore] — `src/index.ts` re-exports updated to add `implementPhase` and `ImplementPhaseOptions` (19 names total); `packages/runtime/README.md` expanded with: programmatic example using `implementPhase`, the new CLI flags, the on-disk record types (now: factory-run, factory-phase, factory-validate-report, factory-implement-report) and parent chain, the cost-cap design (post-hoc, hard-stop), the twin env-var convention with example test setup, the `is_error → 'fail'` semantics, the v0.0.2 single-iteration model with v0.0.3 cross-iteration follow-up, the `RuntimeError.code` list including the two new codes, the `claude` CLI prerequisite. **depends on T2..T7**. ~120 LOC.
 
