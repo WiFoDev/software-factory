@@ -2,28 +2,37 @@
 
 A toolkit for **spec-driven, agent-friendly software development**. You write a spec describing the *intent* and the *scenarios* a feature must satisfy. The factory's tooling lints the spec, runs the scenarios as tests (and optionally as LLM-judged criteria for things tests can't capture), persists everything as content-addressable records, and gives you a typed convergence report with full DAG provenance.
 
-The end goal: agents that iterate against your spec until scenarios converge, with every iteration recorded and inspectable. v0.0.1 ships the entire framework around that loop except the agent itself; the implementation phase is a manual swap-in for now and gets a built-in driver in v0.0.2.
+**v0.0.2 closes the agent gap:** the runtime now drives `claude -p` to do the implementation work, captures the agent's output + disk delta + token counts into a typed report, and runs validate against the result — all in a single `factory-runtime run <spec>` call. v0.0.1 framework, v0.0.2 agent loop, v0.0.3 will close the iteration auto-loop.
 
 Inspired by the [StrongDM Software Factory](https://factory.strongdm.ai/) model.
 
 ---
 
-## What you get today (v0.0.1)
+## What you get today (v0.0.2)
 
-A complete loop you can run end-to-end:
+Two flows, same end-to-end shape:
 
-1. **Author a spec** with `/scope-task` (or write one by hand) — frontmatter + Given/When/Then scenarios + `Satisfaction:` lines pointing at tests and LLM-judged criteria.
+**Manual mode (v0.0.1, still supported via `--no-implement`):**
+1. **Author a spec** with `/scope-task` (or by hand) — frontmatter + Given/When/Then scenarios + `Satisfaction:` lines pointing at tests and LLM-judged criteria.
 2. **Lint** it: `factory spec lint docs/specs/`
-3. **Run** it: `factory-runtime run docs/specs/my-feature.md --no-judge`
-4. **Inspect** the convergence trail: `factory-context tree <runId>`
+3. **Implement** by hand.
+4. **Run** validate: `factory-runtime run docs/specs/my-feature.md --no-judge --no-implement`
+5. **Inspect** the convergence trail: `factory-context tree <runId>`
 
-What's deferred to v0.0.2: the autonomous `explore` / `plan` / `implement` phases (Claude-Agent-SDK driven) that turn this from "ergonomic test runner with provenance" into "agent that drives the spec to green on its own."
+**Agent-driven mode (v0.0.2, default):**
+1. Author + lint the spec as above.
+2. **Run** the `[implement → validate]` graph: `factory-runtime run docs/specs/my-feature.md --no-judge`
+   - The runtime spawns `claude -p` with the spec on stdin, lets it use Read/Edit/Write/Bash to satisfy the `test:` lines, then runs validate against its output.
+   - Subscription auth — no `ANTHROPIC_API_KEY` required.
+3. Inspect the trail: `factory-context tree <runId>` shows both the agent's `factory-implement-report` (full prompt, files changed, tokens used) and the harness's `factory-validate-report`.
+
+Iteration is still human-triggered in v0.0.2 (default `--max-iterations 1`); v0.0.3 will close that loop with cross-iteration context plumbing so the agent can react to validate failures.
 
 ---
 
-## Worked example: spec a `slugify(text)` helper end-to-end
+## Worked example: `slugify(text)` — the manual loop
 
-You're adding a small helper. Conventional flow: write the function, add tests, hope you covered the edge cases. Factory flow: write the spec first, let the runtime tell you when you're done.
+A small helper, walked through end-to-end with `--no-implement` so the loop is visible without an agent in the way.
 
 ### 1. Author the spec
 
@@ -31,7 +40,7 @@ You're adding a small helper. Conventional flow: write the function, add tests, 
 $ /scope-task "Add a slugify(text) helper that lowercases, replaces non-alphanumerics with dashes, and collapses runs of dashes"
 ```
 
-Result: `docs/specs/slugify-v1.md` lands with frontmatter, scenarios, subtasks, and a Definition of Done — produced by your `/scope-task` slash command in the format the factory's parser understands.
+Result: `docs/specs/slugify-v1.md` lands with frontmatter, scenarios, subtasks, and a Definition of Done.
 
 ```yaml
 ---
@@ -62,24 +71,20 @@ Lowercase the input, replace runs of non-alphanumerics with a single dash, trim 
     - test: src/slugify.test.ts "collapses runs"
 ```
 
-### 2. Lint the spec — does it parse?
+### 2. Lint the spec
 
 ```bash
 $ factory spec lint docs/specs/slugify-v1.md
 OK
 ```
 
-Frontmatter shape, scenario well-formedness, satisfaction lines all check out. Ready to run.
-
 ### 3. Run the spec against an empty implementation
 
 ```bash
-$ factory-runtime run docs/specs/slugify-v1.md --no-judge --context-dir ./.factory
+$ factory-runtime run docs/specs/slugify-v1.md --no-judge --no-implement --context-dir ./.factory
 factory-runtime: no-converge after 1 iteration(s) (run=08f7bae8214a22aa)
 # exit code: 1
 ```
-
-The harness ran `bun test` against your missing `src/slugify.test.ts` — both scenarios fail. The runtime persisted a `factory-run` record + a `factory-phase` record + a `factory-validate-report` record. Provenance is on disk.
 
 ### 4. Implement, then run again
 
@@ -100,7 +105,7 @@ test('collapses runs', () => expect(slugify('foo!!!bar---baz')).toBe('foo-bar-ba
 ```
 
 ```bash
-$ factory-runtime run docs/specs/slugify-v1.md --no-judge --context-dir ./.factory
+$ factory-runtime run docs/specs/slugify-v1.md --no-judge --no-implement --context-dir ./.factory
 factory-runtime: converged in 1 iteration(s) (run=a1b2c3d4e5f60718, 32ms)
 # exit code: 0
 ```
@@ -112,31 +117,37 @@ $ factory-context tree a1b2c3d4e5f60718 --dir ./.factory
 a1b2c3d4e5f60718 [type=factory-run] 2026-04-30T...
 ├── 5f08abc94d2e3c11 [type=factory-validate-report] 2026-04-30T...
 └── 9e7f2b18a36d04ac [type=factory-phase] 2026-04-30T...
-
-$ factory-context get 5f08abc94d2e3c11 --dir ./.factory
-{
-  "version": 1,
-  "id": "5f08abc94d2e3c11",
-  "type": "factory-validate-report",
-  "parents": ["a1b2c3d4e5f60718"],
-  "payload": {
-    "specId": "slugify-v1",
-    "scenarios": [{ "id": "S-1", "status": "pass", ... }, { "id": "S-2", "status": "pass", ... }],
-    "summary": { "pass": 2, "fail": 0, "error": 0, "skipped": 0 },
-    "status": "pass"
-  }
-}
 ```
 
-Every run leaves a typed, content-addressable, diffable trail on disk. `git log -- .factory/` shows what changed and when. If a holdout scenario fails six weeks from now, you can replay the exact `factory-validate-report` to see what passed back then.
+Every run leaves a typed, content-addressable, diffable trail on disk. `git log -- .factory/` shows what changed and when.
+
+---
+
+## Worked example: `gh-stars` — the agent-driven loop (v0.0.2)
+
+The same loop with the agent doing the implementation. Drop `--no-implement` and the runtime's default graph runs `[implement → validate]`:
+
+```bash
+$ cd examples/gh-stars
+$ factory-runtime run docs/specs/gh-stars-v1.md --no-judge --context-dir ./.factory
+# … claude runs in headless mode using your subscription, edits files,
+#   then validate runs bun test against the agent's output …
+factory-runtime: converged in 1 iteration(s) (run=cfe0fe872815ccbe, 69404ms)
+```
+
+`factory-context tree <runId>` now shows four record types — the run, the implement-report (with the full prompt, the files changed, the tokens used, the agent's `result` text), the validate-report, and two `factory-phase` records cross-referencing them. See [`examples/gh-stars/README.md`](./examples/gh-stars) for the walk-through.
+
+What v0.0.2 enforces that's worth knowing:
+- **Tool allowlist:** the agent gets `Read,Edit,Write,Bash` and nothing else. Default-deny.
+- **Cost cap:** `--max-prompt-tokens` (default `100000`). On overrun, the runtime hard-stops with `RuntimeError({ code: 'runtime/cost-cap-exceeded' })` *after* persisting the implement-report — the wasted run is auditable.
+- **Twin env vars:** `WIFO_TWIN_MODE` + `WIFO_TWIN_RECORDINGS_DIR` are set on the spawned subprocess so user code can opt into HTTP record/replay through `@wifo/factory-twin`.
+- **No git worktree.** The agent runs in the spec's project root cwd. Use git as your undo button.
 
 ### What just happened
 
-Three observations worth registering:
-
-1. **You didn't write a runner.** No glue code between the spec and `bun test`. The runtime composed `factory-core` (parsing) + `factory-harness` (scenario execution) + `factory-context` (provenance) for you.
-2. **Convergence is the success signal**, not "tests pass." A spec with zero tests but five `judge:` lines converges when the LLM-judged criteria are met — exactly the same loop, different satisfaction kind.
-3. **The provenance trail is what makes agents trustworthy.** v0.0.2 will let `implement` write code, run validate, and iterate until convergence — and every code change links back to the report that justified it. Not "the agent claimed it worked." Verifiable.
+1. **You didn't write a runner OR an agent driver.** The runtime composed all five packages — `factory-core` parses, `factory-runtime` orchestrates, `factory-harness` validates, `factory-context` records, `factory-twin` (when wired) records HTTP — into a single CLI call.
+2. **Convergence is the success signal**, not "tests pass." A spec with zero tests but five `judge:` lines converges when the LLM-judged criteria are met — same loop, different satisfaction kind.
+3. **The provenance trail is what makes the agent trustworthy.** Every code change links back to the report that justified it. Not "the agent claimed it worked." Verifiable.
 
 ---
 
@@ -148,10 +159,10 @@ Three observations worth registering:
 | 1 | [`@wifo/factory-harness`](./packages/harness) | Scenario runner — `bun test` for `test:` lines, Anthropic LLM judge for `judge:` lines | ✓ v0.0.1 |
 | 2 | [`@wifo/factory-twin`](./packages/twin) | HTTP record/replay so agents iterate against fixed responses, no real API quota | ✓ v0.0.1 |
 | 3 | [`@wifo/factory-context`](./packages/context) | Filesystem-first context store — typed shared memory + DAG of provenance | ✓ v0.0.1 |
-| 4 | [`@wifo/factory-runtime`](./packages/runtime) | Phase-graph orchestrator — composes the four primitives, ships `validatePhase` built-in | ✓ v0.0.1 |
+| 4 | [`@wifo/factory-runtime`](./packages/runtime) | Phase-graph orchestrator — composes the four primitives, ships `validatePhase` + `implementPhase` | ✓ v0.0.2 |
 | 5 | `@wifo/factory-scheduler` | Shift-work scheduler (autonomous task queue) | planned |
 
-Domain packs (`@wifo/factory-pack-web`, `-pack-api`, etc.) extend core with domain-specific schema fields, judges, and twin presets. None ship in v0.0.1.
+Domain packs (`@wifo/factory-pack-web`, `-pack-api`, etc.) extend core with domain-specific schema fields, judges, and twin presets. None ship yet.
 
 ---
 
@@ -165,6 +176,9 @@ software-factory/
 │   ├── twin/           # @wifo/factory-twin      — HTTP record/replay
 │   ├── context/        # @wifo/factory-context   — filesystem-first context store
 │   └── runtime/        # @wifo/factory-runtime   — phase-graph orchestrator
+├── examples/
+│   ├── slugify/        # v0.0.1 manual loop walkthrough
+│   └── gh-stars/       # v0.0.2 agent-driven loop walkthrough
 └── docs/
     ├── SPEC_TEMPLATE.md          # canonical shape (docs)
     ├── example-spec.md           # canonical fixture (lints clean)
@@ -180,11 +194,19 @@ software-factory/
 
 One spec per file, named after the spec's `id` frontmatter (kebab-case). Specs live in `docs/specs/`; their optional technical plans live in the parallel `docs/technical-plans/` tree (kept separate so the spec linter never trips over prose). Active work lives at the top of each tree; finished work is moved to `done/`. Lint every active spec with `factory spec lint docs/specs/` (recursive).
 
-## What's missing from v0.0.1
+## Prerequisites
 
-- **Autonomous implementation phase.** The runtime ships `validatePhase` as the only built-in. v0.0.2 adds Claude-Agent-SDK-backed `explore` / `plan` / `implement` so the agent drives the spec to green without manual swap-ins.
-- **HTTP twins wired into the runtime loop.** The `twin` package is shipped and works standalone, but the runtime doesn't yet use it. Lands when v0.0.2's `implement` phase needs it.
-- **Scheduler.** Layer 5 — autonomous task queue that picks `status: ready` specs and runs them overnight. Planned.
+- **Bun** for running the harness and tests.
+- **Node 22+** as the supported runtime.
+- **`claude` CLI on PATH** (for the v0.0.2 default graph). Sign in once via your Claude Pro/Max subscription; the runtime spawns it headless on your behalf. `--no-implement` lets you skip this requirement and run the v0.0.1 validate-only flow.
+
+## What's missing from v0.0.2
+
+- **Iteration auto-loop.** Default `--max-iterations` stays `1`. v0.0.3 closes the loop: validate-fail → re-prompt agent → validate again, until convergence or the run-level token budget.
+- **Cross-iteration context plumbing.** Iteration N+1's prompt doesn't see iteration N's failures yet. v0.0.3.
+- **`explorePhase` / `planPhase`.** Deferred until a real run shows `implement` is too low-context to converge without staged thinking. Maybe v0.0.3, maybe later.
+- **Holdout-aware convergence.** Optional flag to also run holdout scenarios at the end of every iteration. v0.0.3 if it's pulling weight.
+- **Scheduler (Layer 5).** Pulls `status: ready` specs and runs them overnight. Lands once the v0.0.3 loop is reliable.
 
 ## License
 

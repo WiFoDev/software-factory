@@ -1,6 +1,6 @@
 # Backlog
 
-Cross-package candidates for v0.0.2+. Not bugs; not blocking v0.0.1. Each entry should explain *what* and *why*, plus enough context that a future spec writer can scope it without re-deriving the motivation.
+Cross-package candidates for v0.0.3+. Not bugs; not blocking the current release. Each entry should explain *what* and *why*, plus enough context that a future spec writer can scope it without re-deriving the motivation.
 
 ---
 
@@ -8,7 +8,7 @@ Cross-package candidates for v0.0.2+. Not bugs; not blocking v0.0.1. Each entry 
 
 **What:** Add a way to walk *down* the DAG from a record, not just up. Today `factory-context tree <id>` walks ancestors (parents), so `tree <runId>` shows only the run itself because the run is a root with no parents. To see "everything that came out of this run", a user has to `list` and visually correlate, or pick a leaf and tree up to the run.
 
-**Why:** The most natural question after `factory-runtime run` is "what was produced under this run?" — descendants, not ancestors. The current UX requires the user to flip the question backwards. v0.0.1 ships with this rough edge accepted; v0.0.2 should close it.
+**Why:** The most natural question after `factory-runtime run` is "what was produced under this run?" — descendants, not ancestors. The current UX requires the user to flip the question backwards.
 
 **Shape options:**
 - `factory-context tree <id> --direction up|down` (default `up` for backward compat) — extends the existing command
@@ -25,31 +25,23 @@ Mild lean toward `--direction` flag: zero new commands, one well-scoped flag, an
 
 ## `factory-runtime`: cross-iteration record threading
 
-**What:** Today, each iteration starts fresh from the parsed spec — records from iteration `n` are not exposed as inputs to iteration `n+1`'s phases. `validatePhase` is idempotent so this doesn't matter for v0.0.1, but once `plan` and `implement` phases land, an iteration's outputs almost certainly want to feed forward (e.g. "the failing scenarios from validate become input to a re-plan").
+**What:** Today, each iteration starts fresh from the parsed spec — records from iteration `n` are not exposed as inputs to iteration `n+1`'s phases. v0.0.2's `implementPhase` reads the spec and the current cwd state but doesn't see prior validate failures, so iteration 2 produces the same prompt as iteration 1.
 
-**Why:** Pinned as a v0.0.1 wart in the runtime spec. Real fix lands when there are non-trivial phases that benefit from cross-iteration state.
+**Why:** Without this, the v0.0.3 iteration auto-loop is essentially "re-run the same thing and hope flake resolves it." The whole point of iterating is letting the agent react to what just failed. Pinned in the v0.0.1 runtime spec as a wart; v0.0.3 is when the wart actually starts costing convergence.
 
-**Touches:** `packages/runtime/src/runtime.ts` (input collection logic), spec/tests for new semantics.
+**Shape:** iteration N+1's `implementPhase` prompt grows a `# Prior iteration N validate report` section listing the failing scenarios + their tail output. The `PhaseContext.iteration` field already exists for this; the runtime needs to start passing predecessor records across iteration boundaries (currently scoped to same-iteration predecessors only).
 
----
-
-## `factory-runtime`: agent-driven phases (`explore`, `plan`, `implement`)
-
-**What:** Built-in phases backed by the Claude Agent SDK. v0.0.1 ships only `validatePhase` because the agent integration is a large piece of work on its own.
-
-**Why:** Without these, the runtime is a glorified test runner with provenance. The point of a software factory is the agent doing the work between iterations.
-
-**Touches:** new `packages/runtime/src/phases/explore.ts` / `plan.ts` / `implement.ts`, re-introduce `@wifo/factory-twin` dep for HTTP recording inside agent runs, README updates.
+**Touches:** `packages/runtime/src/runtime.ts` (input collection logic across iterations), `packages/runtime/src/phases/implement.ts` (prompt builder accepts prior validate-report), spec/tests for the new semantics.
 
 ---
 
-## `factory-twin`: wire into runtime
+## `factory-runtime`: `explorePhase` + `planPhase`
 
-**What:** Twin is shipped and works standalone but the runtime doesn't use it yet. Once `implement` phases run agents that hit external HTTP, those calls need to record/replay through the twin.
+**What:** Two new built-in phases that run before `implement`: `explore` (read the codebase, summarize what exists) and `plan` (propose a concrete change set). The agent gets focused context for `implement` rather than synthesizing it from scratch every iteration.
 
-**Why:** Pinned in the runtime spec as a v0.0.2 forward-compat note. The twin dep was deliberately removed from `packages/runtime/package.json` for v0.0.1 to avoid declaring an unused dep; v0.0.2 re-adds it as part of the agent-phase work.
+**Why:** Speculative — defer until a real v0.0.3 run shows that `implement` alone is too low-context to converge. If gh-stars or similar demos converge in 1-2 iterations without staged thinking, this stays in the backlog. If they thrash, the bottleneck is plan-making, not implementation, and these phases earn their slot.
 
-**Touches:** `packages/runtime/package.json` (re-add dep), agent-phase code (wrap fetch with twin in record or replay mode), README docs.
+**Touches:** new `packages/runtime/src/phases/explore.ts` / `plan.ts`, runtime support for the wider graph, README updates.
 
 ---
 
@@ -60,3 +52,10 @@ Mild lean toward `--direction` flag: zero new commands, one well-scoped flag, an
 **Why:** Belt-and-suspenders for the loop reliability we just shipped.
 
 **Touches:** `~/.claude/settings.json` (hook), maybe a `factory-spec-watch` helper that hooks into Claude Code's PostToolUse for Write.
+
+---
+
+## Shipped (kept here briefly for history)
+
+- ✅ **`factory-runtime`: agent-driven `implement` phase** — landed in v0.0.2. `validatePhase` + `implementPhase` ship; `explorePhase`/`planPhase` deferred (see above).
+- ✅ **`factory-twin`: wire into runtime** — landed in v0.0.2. The runtime sets `WIFO_TWIN_MODE` + `WIFO_TWIN_RECORDINGS_DIR` on the spawned agent subprocess; user code calls `wrapFetch` against them in test setup. Auto-injection of `wrapFetch` is intentionally not done — keeps the runtime mechanism minimal.

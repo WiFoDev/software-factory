@@ -4,61 +4,38 @@ This file is the **direction**. `BACKLOG.md` is the candidate pile. The roadmap 
 
 ---
 
-## Where we are: v0.0.1 — shipped
+## Where we are: v0.0.2 — shipped
 
-Five primitives + a worked example. Five public packages, ~275 tests, lint clean. The loop runs end-to-end with one missing piece: **the implementation phase is human-driven**. Spec → human writes code → factory-runtime validates → human reviews report → human iterates.
+The agent does the implementation work autonomously within a single iteration. Human still triggers each iteration, but no longer writes code by hand. Default CLI graph is `[implement → validate]`; `--no-implement` preserves the v0.0.1 `[validate]`-only behavior.
 
-What's already in your hands today:
+What's in your hands today:
 
-- **`@wifo/factory-core`** — spec format, parser, lint CLI
-- **`@wifo/factory-harness`** — scenario runner (`bun test` for `test:` lines, Anthropic tool-use for `judge:` lines)
-- **`@wifo/factory-twin`** — HTTP record/replay (standalone; not yet wired into the runtime loop)
-- **`@wifo/factory-context`** — filesystem-first content-addressable record store with DAG provenance
-- **`@wifo/factory-runtime`** — phase-graph orchestrator, ships `validatePhase` built-in
+- **`@wifo/factory-core`** — spec format, parser, lint CLI *(v0.0.1)*
+- **`@wifo/factory-harness`** — scenario runner (`bun test` for `test:` lines, Anthropic tool-use for `judge:` lines) *(v0.0.1)*
+- **`@wifo/factory-twin`** — HTTP record/replay; in v0.0.2 the runtime plumbs `WIFO_TWIN_MODE` + `WIFO_TWIN_RECORDINGS_DIR` env vars to the spawned agent subprocess so user code can opt in via `wrapFetch` *(v0.0.1, wired in v0.0.2)*
+- **`@wifo/factory-context`** — filesystem-first content-addressable record store with DAG provenance *(v0.0.1)*
+- **`@wifo/factory-runtime`** — phase-graph orchestrator with `validatePhase` *(v0.0.1)* and `implementPhase` *(v0.0.2)*
 - **Spec workflow** — `/scope-task`, `/finish-task`, `docs/specs/<id>.md` + `docs/technical-plans/<id>.md` convention
-- **Worked example** — `examples/slugify` demonstrating the full loop on a real (small) helper
+- **Worked examples** — `examples/slugify` (v0.0.1 manual loop) and `examples/gh-stars` (v0.0.2 agent-driven loop)
 
-Manual loop wall time on the slugify demo: ~100ms per `factory-runtime run` invocation.
-
----
-
-## v0.0.2 — agent-driven `implementPhase` (single-shot)
-
-**Goal:** the agent does the implementation work autonomously within a single iteration. Human still triggers each iteration, but no longer writes code by hand.
-
-**Why this stepping stone:** flushes the agent integration, sandboxing, cost capture, and tool-allowlist design with a tight feedback loop. If iteration N is wrong, you re-run manually — you're not chasing autonomous convergence bugs at the same time as agent integration bugs.
-
-### What lands
+### What v0.0.2 added
 
 | # | Piece | Notes |
 |---|---|---|
-| 1 | **`claude` CLI subprocess wrapper** — invoked with `claude -p <prompt> --allowedTools <list> --bare --output-format json` | Subscription-paid (no `ANTHROPIC_API_KEY` needed). Headless. Captures structured JSON output. |
-| 2 | **`implementPhase(opts?)`** in `packages/runtime/src/phases/implement.ts` | Reads the spec + current code state; prompts the agent; persists what it did to context as `factory-implement-report` records. |
-| 3 | **Re-add `@wifo/factory-twin` dep** to `packages/runtime/package.json` | Agent's HTTP calls go through the twin — record on iteration 1, replay forever after. |
-| 4 | **Tool allowlist + sandbox** — Read, Edit, Write, Bash (constrained to test commands) | Pre-approved via `--allowedTools` so no interactive prompts. Default-deny for everything else. |
-| 5 | **Token / cost capture** — read from `claude -p` JSON output, persist on the `factory-implement-report` record | Subscription quota is opaque, but token counts are reported per call. |
-| 6 | **Updated default CLI graph** — `factory-runtime run` now builds `[implement → validate]` instead of `[validate]` | `--no-implement` flag for the old behavior. |
-| 7 | **Demo: `examples/gh-stars`** — small CLI that wraps GitHub's stargazers endpoint with caching + rate-limit handling | Exercises HTTP twin, judge lines (error message UX), and multi-scenario specs. |
+| 1 | **`claude` CLI subprocess wrapper** | Spawned with `claude -p --allowedTools "Read,Edit,Write,Bash" --output-format json` on stdin. Subscription auth (no `ANTHROPIC_API_KEY`). |
+| 2 | **`implementPhase(opts?)`** in `packages/runtime/src/phases/implement.ts` | Reads spec + cwd state; prompts the agent; persists `factory-implement-report` records (parents=[runId]) with prompt, files changed, tools used, token counts, claude exit status, agent's final `result` text. |
+| 3 | **`@wifo/factory-twin` re-added** to `packages/runtime/package.json` | Runtime sets twin env vars on the agent subprocess; user code in tests calls `wrapFetch` against them. |
+| 4 | **Tool allowlist** — Read, Edit, Write, Bash | Default-deny for everything else. Pre-approved via `--allowedTools` so no interactive prompts. |
+| 5 | **Per-phase cost cap** | Default `--max-prompt-tokens 100000`. Post-hoc check on the agent's reported `usage.input_tokens`. Overrun: persist the implement-report with `status: 'error'` *first*, then throw `RuntimeError({ code: 'runtime/cost-cap-exceeded' })` so the wasted run is auditable. |
+| 6 | **Default CLI graph: `[implement → validate]`** | `--no-implement` flag preserves the v0.0.1 single-phase behavior. Both phases pinned to `cwd: process.cwd()`. |
+| 7 | **`examples/gh-stars` walkthrough** | Stargazers helper with caching + rate-limit handling. Exercises judge-friendly error message UX, multi-scenario specs, real claude end-to-end. Verified: converges in ~70s on a fresh run. |
 
-### Definition of done
+### Post-ship reconciliations (worth knowing about)
 
-- `factory-runtime run docs/specs/gh-stars-v1.md --max-iterations 1` invokes the agent, the agent writes `src/gh-stars.ts` + tests, validate either passes (good agent run) or fails with a typed report (still useful).
-- `claude` CLI on PATH is documented as a prerequisite (similar to `bun`).
-- Subscription quota is used by default; no API key required for the happy path.
-- Twin records the GitHub API call on iteration 1; iteration 2 (manual re-trigger) replays without hitting the network.
-- A `factory-implement-report` record per phase invocation, with `parents: [runId]`, payload includes: prompt sent, files changed (paths + diffs), tools invoked, token counts, exit status.
-- README updated with v0.0.2 worked example walkthrough.
-- Public API for `@wifo/factory-runtime` extends to include `implementPhase` + `ImplementPhaseOptions`. Strict equality with technical plan §2 maintained.
+The original v0.0.2 lock had two places where reality bit back. Both are recorded here, in the spec/plan, and in the runtime README:
 
-### Strategic decisions to lock before scoping v0.0.2
-
-| Decision | Lean | Why |
-|---|---|---|
-| Subprocess vs in-process | **Subprocess to `claude -p`** | Subscription billing, headless mode, sandboxing is cheaper, mirrors the harness's `bun test` pattern |
-| Tool allowlist | **Read, Edit, Write, Bash** | Minimum needed for "agent writes code + runs tests"; everything else default-deny |
-| Sandboxing | **Run in spec's project root cwd; no git worktree in v0.0.2** | Worktrees add complexity; `--bare` flag + tool allowlist + git-as-undo is sufficient for first cut |
-| Cost cap | **Per-phase max prompt tokens (default 100k); halt with `RuntimeError('runtime/cost-cap-exceeded')` on overrun** | Hard stop is honest; degrade-to-stop is a v0.0.3 polish |
-| Demo task | **`gh-stars` CLI** | HTTP-bound (twin), quality dimensions (judge), iteration-worthy (cache invalidation, retry, error mapping); self-contained |
+- **`--bare` was dropped.** The locked spawn args included `--bare` for reproducibility, but in `claude` 2.1+ that flag strictly disables OAuth/keychain reads — incompatible with the locked subscription-auth model. Subscription auth wins (it's the headline goal). The rest of the locked surface (`-p`, `--allowedTools`, `--output-format json`) carries the reproducibility intent.
+- **`RuntimeErrorCode` gained three new members, not two.** The plan committed to two (`'runtime/cost-cap-exceeded'`, `'runtime/agent-failed'`); implementation added a third (`'runtime/invalid-max-prompt-tokens'`) for symmetric programmatic + CLI validation of `implementPhase({ maxPromptTokens })`, mirroring v0.0.1's `'runtime/invalid-max-iterations'` exactly. Public name count stays at 19; the union's membership is what grew.
 
 ---
 
@@ -70,11 +47,11 @@ Manual loop wall time on the slugify demo: ~100ms per `factory-runtime run` invo
 
 | # | Piece | Notes |
 |---|---|---|
-| 1 | **Iteration auto-loop** | `factory-runtime run` defaults `--max-iterations 5` (back to the runtime spec's original default once iteration is meaningful). On validate-fail, automatically run another implement → validate. |
-| 2 | **Cross-iteration record threading** — the v0.0.1 wart | iteration N+1's `implementPhase` sees iteration N's `factory-validate-report` as input. Lets the agent see what failed and react. |
-| 3 | **Cost guardrails enforced across the run** | Whole-run token budget (default 500k), per-phase cap, hard stop on overrun. Persisted on the `factory-run` record so post-mortem is possible. |
+| 1 | **Iteration auto-loop** | `factory-runtime run` defaults `--max-iterations 5`. On validate-fail, automatically run another implement → validate. |
+| 2 | **Cross-iteration record threading** — the v0.0.1 wart | Iteration N+1's `implementPhase` sees iteration N's `factory-validate-report` as input. Lets the agent see what failed and react. The `PhaseContext.iteration` field already exists for this. |
+| 3 | **Cost guardrails enforced across the run** | Whole-run token budget (default 500k), per-phase cap unchanged, hard stop on overrun. Persisted on `factory-run`. |
 | 4 | **Holdout-aware convergence** *(maybe)* | If holdouts are present, validate runs them at the end of every iteration; convergence requires both visible AND holdout scenarios to pass. Optional flag `--check-holdouts`. |
-| 5 | **`explorePhase` + `planPhase`** *(maybe — see "Scope discipline" below)* | Separate "understand the codebase" and "plan the change" steps so implement gets focused context. Defer if v0.0.3 stays under budget without them. |
+| 5 | **`explorePhase` + `planPhase`** *(maybe — see "Scope discipline")* | Separate "understand the codebase" and "plan the change" steps so implement gets focused context. Defer if v0.0.3 stays under budget without them. |
 | 6 | **Demo: same `gh-stars` task converging unattended** | The agent fails once on rate-limit handling, reads the validate report, fixes it, converges. Provenance trail tells the story. |
 
 ### Definition of done
@@ -107,12 +84,10 @@ The post-autonomous-loop work. Roughly ordered by leverage; not committed.
 
 ## Cadence guesses (not commitments)
 
-Honest scoping based on layer-1-through-4 throughput:
+- **v0.0.2** — shipped. ~13 commits across 1 feature branch; ~1900 LOC including tests + scaffold.
+- **v0.0.3** — 1-2 weeks once we trigger it. Mostly orchestration: auto-loop, cross-iter threading, cost cap. Smaller code surface than v0.0.2.
 
-- **v0.0.2** — 2-3 weeks of focused work. Subprocess wrapper + implementPhase + twin wiring + gh-stars demo + tests.
-- **v0.0.3** — 1-2 weeks once v0.0.2 is solid. Mostly orchestration: auto-loop, cross-iter threading, cost cap. Smaller code surface than v0.0.2.
-
-The throughput trick that worked for v0.0.1: scoped slices, /scope-task per package, reviewed before implementation. v0.0.2 should follow the same pattern — `/scope-task` the implementPhase, get sign-off, implement, ship.
+The throughput trick that worked: scoped slices, `/scope-task` per package, reviewed before implementation. v0.0.3 should follow the same pattern.
 
 ---
 
