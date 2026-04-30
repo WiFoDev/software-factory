@@ -68,9 +68,17 @@ function makeEnvelope(overrides: Record<string, unknown> = {}): Record<string, u
 // static analysis doesn't model process.exit as a terminating call).
 
 if (mode === 'success') {
-  if (editFile !== undefined) {
-    await Bun.write(editFile, editContent);
-  }
+  // Default behavior: write src/needs-impl.ts (relative to cwd) with the
+  // canonical impl that satisfies the needs-impl.md fixture. This makes the
+  // smoke command self-contained — `cd <fixture-dir> && node dist/cli.js
+  // run needs-impl.md --no-judge --claude-bin <fake>` converges with no
+  // env-var ceremony. Tests that need different behavior set
+  // FAKE_CLAUDE_EDIT_FILE explicitly.
+  const targetFile = editFile ?? 'src/needs-impl.ts';
+  const targetContent =
+    process.env.FAKE_CLAUDE_EDIT_CONTENT ??
+    (editFile === undefined ? 'export function impl() { return 42; }\n' : editContent);
+  await Bun.write(targetFile, targetContent);
   process.stdout.write(JSON.stringify(makeEnvelope()));
   process.exit(0);
 } else if (mode === 'self-fail') {

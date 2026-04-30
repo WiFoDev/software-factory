@@ -84,22 +84,29 @@ describe('parseAgentJson', () => {
 
 describe('spawnAgent', () => {
   test('returns exit-0 envelope on FAKE_CLAUDE_MODE=success', async () => {
-    const result = await spawnAgent({
-      claudePath: FAKE_CLAUDE,
-      allowedTools: 'Read,Edit,Write,Bash',
-      cwd: RUNTIME_ROOT,
-      env: { ...process.env, FAKE_CLAUDE_MODE: 'success', FAKE_CLAUDE_TOKENS: '5000' },
-      prompt: 'a tiny prompt',
-      timeoutMs: 10_000,
-      log: defaultLog(),
-    });
-    expect(result.exitCode).toBe(0);
-    expect(result.signal).toBe(null);
-    const env = parseAgentJson(result.stdout);
-    expect(env.is_error).toBe(false);
-    expect(env.usage?.input_tokens).toBe(5000);
-    // stdin propagation: the fake echoes the first 80 chars of the prompt.
-    expect((env as { _prompt_first_80?: string })._prompt_first_80).toBe('a tiny prompt');
+    // Run the fake in a tmp cwd so its `success` mode default-write
+    // (`src/needs-impl.ts`) lands in the tmp dir, not in packages/runtime/src.
+    const cwd = mkdtempSync(join(tmpdir(), 'spawn-agent-'));
+    try {
+      const result = await spawnAgent({
+        claudePath: FAKE_CLAUDE,
+        allowedTools: 'Read,Edit,Write,Bash',
+        cwd,
+        env: { ...process.env, FAKE_CLAUDE_MODE: 'success', FAKE_CLAUDE_TOKENS: '5000' },
+        prompt: 'a tiny prompt',
+        timeoutMs: 10_000,
+        log: defaultLog(),
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.signal).toBe(null);
+      const env = parseAgentJson(result.stdout);
+      expect(env.is_error).toBe(false);
+      expect(env.usage?.input_tokens).toBe(5000);
+      // stdin propagation: the fake echoes the first 80 chars of the prompt.
+      expect((env as { _prompt_first_80?: string })._prompt_first_80).toBe('a tiny prompt');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   test('returns exit-1 result (NOT throws) on FAKE_CLAUDE_MODE=exit-nonzero — caller decides', async () => {
