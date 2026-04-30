@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -14,13 +14,20 @@ const USAGE = `Usage:
 export interface CliIo {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
-  exit: (code: number) => never;
+  exit: (code: number) => void;
 }
 
 const defaultIo: CliIo = {
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),
-  exit: (code) => process.exit(code) as never,
+  exit: (code) => {
+    // Flush stdout/stderr before exiting. TTY writes are synchronous, but when
+    // stdout is a pipe (`pnpm exec`, `| cat`, CI capture) writes are buffered —
+    // process.exit too soon drops the buffered tail.
+    process.stdout.write('', () => {
+      process.stderr.write('', () => process.exit(code));
+    });
+  },
 };
 
 export function runCli(argv: string[], io: CliIo = defaultIo): void {
@@ -175,7 +182,11 @@ if (typeof process !== 'undefined' && Array.isArray(process.argv)) {
   if (entry !== undefined) {
     let isMain = false;
     try {
-      isMain = resolve(fileURLToPath(import.meta.url)) === resolve(entry);
+      // realpathSync resolves symlinks — required because workspace deps make
+      // `process.argv[1]` (the launched bin path) and `import.meta.url` (the
+      // resolved module path) differ when the package is symlinked into another
+      // workspace's node_modules.
+      isMain = realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entry);
     } catch {
       // not a file:// URL — skip auto-run
     }

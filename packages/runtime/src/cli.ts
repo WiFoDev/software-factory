@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createContextStore } from '@wifo/factory-context';
@@ -23,13 +23,20 @@ Flags:
 export interface CliIo {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
-  exit: (code: number) => never;
+  exit: (code: number) => void;
 }
 
 const defaultIo: CliIo = {
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),
-  exit: (code) => process.exit(code) as never,
+  exit: (code) => {
+    // Flush stdout/stderr before exiting. TTY writes are synchronous, but when
+    // stdout is a pipe (`pnpm exec`, `| cat`, CI capture) writes are buffered —
+    // process.exit too soon drops the buffered tail.
+    process.stdout.write('', () => {
+      process.stderr.write('', () => process.exit(code));
+    });
+  },
 };
 
 export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<void> {
@@ -145,9 +152,12 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
     throw err;
   }
 
-  // Build the default validate-only graph.
+  // Build the default validate-only graph. Harness cwd defaults to process.cwd()
+  // (the project root, where the user invoked the CLI from) so test paths in
+  // satisfaction lines (e.g. `src/foo.test.ts`) resolve naturally — same as if
+  // the user ran `bun test src/foo.test.ts` directly.
   const phase = validatePhase({
-    cwd: dirname(specPath),
+    cwd: process.cwd(),
     ...(scenarioIds !== undefined ? { scenarioIds } : {}),
     ...(parsed.values['no-judge'] === true ? { noJudge: true } : {}),
   });
@@ -208,7 +218,11 @@ if (typeof process !== 'undefined' && Array.isArray(process.argv)) {
   if (entry !== undefined) {
     let isMain = false;
     try {
-      isMain = resolve(fileURLToPath(import.meta.url)) === resolve(entry);
+      // realpathSync resolves symlinks — required because workspace deps make
+      // `process.argv[1]` (the launched bin path) and `import.meta.url` (the
+      // resolved module path) differ when the package is symlinked into another
+      // workspace's node_modules.
+      isMain = realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entry);
     } catch {
       // not a file:// URL — skip auto-run
     }
