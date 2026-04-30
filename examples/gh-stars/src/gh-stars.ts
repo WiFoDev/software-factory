@@ -37,9 +37,7 @@ export async function getStargazers(
   opts: GetStargazersOptions = {},
 ): Promise<Stargazer[]> {
   if (typeof repo !== 'string' || !REPO_RE.test(repo)) {
-    throw new Error(
-      `Invalid repo "${repo}": expected format "<owner>/<repo>".`,
-    );
+    throw new Error(`Invalid repo "${repo}": expected format "<owner>/<repo>".`);
   }
 
   const ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
@@ -60,10 +58,7 @@ export async function getStargazers(
     },
   });
 
-  if (
-    res.status === 403 &&
-    res.headers.get('x-ratelimit-remaining') === '0'
-  ) {
+  if (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0') {
     const resetHeader = res.headers.get('x-ratelimit-reset');
     const resetSeconds = resetHeader ? Number(resetHeader) : Number.NaN;
     const resetAt = Number.isFinite(resetSeconds)
@@ -73,9 +68,7 @@ export async function getStargazers(
   }
 
   if (!res.ok) {
-    throw new Error(
-      `GitHub API request failed: ${res.status} ${res.statusText}`,
-    );
+    throw new Error(`GitHub API request failed: ${res.status} ${res.statusText}`);
   }
 
   const body = (await res.json()) as Stargazer[];

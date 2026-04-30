@@ -1,9 +1,5 @@
 import { beforeEach, expect, test } from 'bun:test';
-import {
-  GhStarsRateLimitError,
-  __clearCache,
-  getStargazers,
-} from './gh-stars';
+import { GhStarsRateLimitError, __clearCache, getStargazers } from './gh-stars';
 
 beforeEach(() => {
   __clearCache();
@@ -105,6 +101,8 @@ test('403 with rate-limit headers throws GhStarsRateLimitError with resetAt', as
 
 test('rejects malformed repo input', async () => {
   await expect(
-    getStargazers('not-a-valid-repo', { fetch: (async () => makeJsonResponse([])) as typeof fetch }),
+    getStargazers('not-a-valid-repo', {
+      fetch: (async () => makeJsonResponse([])) as typeof fetch,
+    }),
   ).rejects.toThrow(/Invalid repo/);
 });
