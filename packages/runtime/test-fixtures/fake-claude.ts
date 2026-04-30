@@ -5,7 +5,10 @@
 // Behavior is selected via env vars:
 //   FAKE_CLAUDE_MODE         success | self-fail | exit-nonzero | malformed-json
 //                            | hang | cost-overrun | echo-env | self-kill
+//                            | fail-then-pass | fail-fail-then-pass
 //                            (default: success)
+//   FAKE_CLAUDE_STATE_DIR    directory holding `counter` for fail-then-pass /
+//                            fail-fail-then-pass modes (required for those)
 //   FAKE_CLAUDE_TOKENS       usage.input_tokens to report (default: 5000)
 //   FAKE_CLAUDE_OUTPUT_TOKENS  usage.output_tokens (default: 200)
 //   FAKE_CLAUDE_RESULT       overrides envelope.result text (default: per-mode)
@@ -134,6 +137,69 @@ if (mode === 'success') {
     ),
   );
   process.exit(0);
+} else if (mode === 'fail-then-pass' || mode === 'fail-fail-then-pass') {
+  // Multi-iteration integration mode. Driven by a counter file that the test
+  // harness mkdtemp's before invoking the runtime. Each invocation reads the
+  // counter, increments it, and chooses behavior. iter 1 fails (writes a stub
+  // that fails the validate test + is_error: true). iter 2 (or 3 for fail-fail)
+  // passes (writes the satisfying impl + is_error: false).
+  const stateDir = process.env.FAKE_CLAUDE_STATE_DIR;
+  if (stateDir === undefined || stateDir === '') {
+    process.stderr.write('fake-claude: FAKE_CLAUDE_STATE_DIR required for fail-then-pass mode\n');
+    process.exit(2);
+  }
+  const counterPath = `${stateDir}/counter`;
+  let counter = 0;
+  try {
+    const raw = await Bun.file(counterPath).text();
+    counter = Number.parseInt(raw, 10);
+    if (!Number.isFinite(counter)) counter = 0;
+  } catch {
+    counter = 0;
+  }
+  await Bun.write(counterPath, String(counter + 1));
+
+  const failsRequired = mode === 'fail-then-pass' ? 1 : 2;
+  const targetFile = editFile ?? 'src/needs-iter2.ts';
+  const isFailIteration = counter < failsRequired;
+
+  // Embed prior-section detection into result so tests can assert that the
+  // # Prior validate report appears on the second+ invocation's prompt.
+  const sawPrior = prompt.includes('# Prior validate report');
+  const sawPriorTag = sawPrior ? 'PRIOR=yes' : 'PRIOR=no';
+
+  if (isFailIteration) {
+    // Write a stub that fails the test (returns 0 instead of 42) so validate
+    // fails this iteration, triggering another loop.
+    const stubContent = 'export function iter2() { return 0; }\n';
+    await Bun.write(targetFile, stubContent);
+    process.stdout.write(
+      JSON.stringify(
+        makeEnvelope({
+          subtype: 'error_max_turns',
+          is_error: true,
+          result:
+            process.env.FAKE_CLAUDE_RESULT ??
+            `iter ${counter + 1}: wrote a stub (will fail validate) | ${sawPriorTag}`,
+        }),
+      ),
+    );
+    process.exit(0);
+  } else {
+    // Write the satisfying impl.
+    const passContent = 'export function iter2() { return 42; }\n';
+    await Bun.write(targetFile, passContent);
+    process.stdout.write(
+      JSON.stringify(
+        makeEnvelope({
+          result:
+            process.env.FAKE_CLAUDE_RESULT ??
+            `iter ${counter + 1}: wrote the satisfying impl | ${sawPriorTag}`,
+        }),
+      ),
+    );
+    process.exit(0);
+  }
 } else if (mode === 'self-kill') {
   // Write a partial fragment, flush, then send SIGTERM to ourselves so the
   // runtime sees a child closed by signal (not by our timer). Deterministic

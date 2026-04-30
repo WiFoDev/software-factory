@@ -895,6 +895,220 @@ describe('implementPhase — v0.0.3 prior validate-report threading', () => {
   });
 });
 
+// ----- v0.0.3: multi-iteration integration via run() ---------------------
+
+import { definePhaseGraph } from '../graph.js';
+import { run } from '../runtime.js';
+
+describe('run() — v0.0.3 multi-iter integration (fail-then-pass)', () => {
+  test('iter 1 fails, iter 2 passes; parent chain extends; prior section threaded into iter-2 prompt', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'fake-claude-state-'));
+    // Use the needs-iter2 fixtures and copy them into a workdir (the integration
+    // test wants a clean tree where the agent can write src/needs-iter2.ts).
+    const workDir2 = mkdtempSync(join(tmpdir(), 'runtime-iter2-work-'));
+    const ctxDir = mkdtempSync(join(tmpdir(), 'runtime-iter2-ctx-'));
+    try {
+      const specMd = readFileSync(join(FIXTURES, 'needs-iter2.md'), 'utf8');
+      const testTs = readFileSync(join(FIXTURES, 'needs-iter2.test.ts'), 'utf8');
+      Bun.write(join(workDir2, 'needs-iter2.md'), specMd);
+      Bun.write(join(workDir2, 'needs-iter2.test.ts'), testTs);
+      const specPath = join(workDir2, 'needs-iter2.md');
+
+      const source = readFileSync(specPath, 'utf8');
+      const spec = parseSpec(source, { filename: specPath });
+
+      const store = createContextStore({ dir: ctxDir });
+      const impl = implementPhase({
+        cwd: workDir2,
+        claudePath: FAKE_CLAUDE,
+        twin: 'off',
+      });
+      const val = validatePhase({ cwd: workDir2, noJudge: true });
+      const graph = definePhaseGraph([impl, val], [['implement', 'validate']]);
+
+      process.env.FAKE_CLAUDE_MODE = 'fail-then-pass';
+      process.env.FAKE_CLAUDE_STATE_DIR = stateDir;
+      process.env.FAKE_CLAUDE_TOKENS = '1000';
+      try {
+        const report = await run({
+          spec,
+          graph,
+          contextStore: store,
+          // Default maxIterations = 5; default maxTotalTokens = 500_000. Fake
+          // reports 1000 tokens.input + 200 tokens.output per iter — well under cap.
+        });
+
+        expect(report.status).toBe('converged');
+        expect(report.iterationCount).toBe(2);
+
+        const implReports = await store.list({ type: 'factory-implement-report' });
+        const valReports = await store.list({ type: 'factory-validate-report' });
+        expect(implReports.length).toBe(2);
+        expect(valReports.length).toBe(2);
+
+        const iter1Impl = implReports.find(
+          (r) => (r.payload as { iteration: number }).iteration === 1,
+        );
+        const iter2Impl = implReports.find(
+          (r) => (r.payload as { iteration: number }).iteration === 2,
+        );
+        const iter1Val = valReports.find(
+          (r) => (r.payload as { scenarios: { status: string }[] }).scenarios.some(
+            (s) => s.status === 'fail',
+          ),
+        );
+        const iter2Val = valReports.find(
+          (r) => (r.payload as { status: string }).status === 'pass',
+        );
+
+        expect(iter1Impl).toBeDefined();
+        expect(iter2Impl).toBeDefined();
+        expect(iter1Val).toBeDefined();
+        expect(iter2Val).toBeDefined();
+
+        // iter 1 implement: parents = [runId], no priorValidateReportId
+        expect(iter1Impl?.parents).toEqual([report.runId]);
+        const iter1ImplPayload = iter1Impl?.payload as {
+          priorValidateReportId?: string;
+          prompt: string;
+        };
+        expect(iter1ImplPayload.priorValidateReportId).toBeUndefined();
+        expect(iter1ImplPayload.prompt).not.toContain('# Prior validate report');
+
+        // iter 2 implement: parents = [runId, iter1ValId]; priorValidateReportId points at iter1Val
+        expect(iter2Impl?.parents).toEqual([report.runId, iter1Val?.id ?? '']);
+        const iter2ImplPayload = iter2Impl?.payload as {
+          priorValidateReportId?: string;
+          prompt: string;
+          result: string;
+        };
+        expect(iter2ImplPayload.priorValidateReportId).toBe(iter1Val?.id ?? '');
+        expect(iter2ImplPayload.prompt).toContain('# Prior validate report');
+        // Fake-claude embeds PRIOR=yes when it saw the section
+        expect(iter2ImplPayload.result).toContain('PRIOR=yes');
+
+        // iter 1 validate: parents = [runId, iter1ImplId]
+        expect(iter1Val?.parents).toEqual([report.runId, iter1Impl?.id ?? '']);
+        // iter 2 validate: parents = [runId, iter2ImplId]
+        expect(iter2Val?.parents).toEqual([report.runId, iter2Impl?.id ?? '']);
+
+        // factory-context tree walk: starting from iter2Val, parents reach runId
+        // through the iter2Impl → iter1Val → iter1Impl chain.
+        expect(iter2Val?.parents).toContain(report.runId);
+        expect(iter2Impl?.parents).toContain(report.runId);
+        expect(iter1Val?.parents).toContain(report.runId);
+        expect(iter1Impl?.parents).toContain(report.runId);
+      } finally {
+        Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+        Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_STATE_DIR');
+        Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      }
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+      rmSync(workDir2, { recursive: true, force: true });
+      rmSync(ctxDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('run() — v0.0.3 H-4 holdout: iter-3 priorValidateReportId points at iter-2 (single-step, not transitive)', () => {
+  test('fail-fail-then-pass: iter 3 priorValidateReportId === iter-2-validate-report.id (NOT iter 1)', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'fake-claude-state-'));
+    const workDir3 = mkdtempSync(join(tmpdir(), 'runtime-iter3-work-'));
+    const ctxDir = mkdtempSync(join(tmpdir(), 'runtime-iter3-ctx-'));
+    try {
+      const specMd = readFileSync(join(FIXTURES, 'needs-iter2.md'), 'utf8');
+      const testTs = readFileSync(join(FIXTURES, 'needs-iter2.test.ts'), 'utf8');
+      Bun.write(join(workDir3, 'needs-iter2.md'), specMd);
+      Bun.write(join(workDir3, 'needs-iter2.test.ts'), testTs);
+      const specPath = join(workDir3, 'needs-iter2.md');
+      const source = readFileSync(specPath, 'utf8');
+      const spec = parseSpec(source, { filename: specPath });
+
+      const store = createContextStore({ dir: ctxDir });
+      const impl = implementPhase({
+        cwd: workDir3,
+        claudePath: FAKE_CLAUDE,
+        twin: 'off',
+      });
+      const val = validatePhase({ cwd: workDir3, noJudge: true });
+      const graph = definePhaseGraph([impl, val], [['implement', 'validate']]);
+
+      process.env.FAKE_CLAUDE_MODE = 'fail-fail-then-pass';
+      process.env.FAKE_CLAUDE_STATE_DIR = stateDir;
+      process.env.FAKE_CLAUDE_TOKENS = '1000';
+      try {
+        const report = await run({ spec, graph, contextStore: store });
+        expect(report.status).toBe('converged');
+        expect(report.iterationCount).toBe(3);
+
+        const implReports = await store.list({ type: 'factory-implement-report' });
+        const valReports = await store.list({ type: 'factory-validate-report' });
+        expect(implReports.length).toBe(3);
+        expect(valReports.length).toBe(3);
+
+        const byIter = (
+          recs: Awaited<ReturnType<typeof store.list>>,
+        ): Record<number, (typeof recs)[number]> => {
+          const m: Record<number, (typeof recs)[number]> = {};
+          for (const r of recs) {
+            const it = (r.payload as { iteration?: number }).iteration;
+            if (typeof it === 'number') m[it] = r;
+          }
+          return m;
+        };
+        const implByIter = byIter(implReports);
+        // validate-reports don't have iteration in payload — derive from the
+        // implement-report they're paired with via parents.
+        const valByIter: Record<number, (typeof valReports)[number]> = {};
+        for (const v of valReports) {
+          const implParent = v.parents[1];
+          for (const [it, impl] of Object.entries(implByIter)) {
+            if (impl.id === implParent) valByIter[Number(it)] = v;
+          }
+        }
+
+        // iter 1 impl: parents=[runId], no priorValidateReportId
+        expect(implByIter[1]?.parents).toEqual([report.runId]);
+        expect(
+          (implByIter[1]?.payload as { priorValidateReportId?: string }).priorValidateReportId,
+        ).toBeUndefined();
+
+        // iter 2 impl: parents=[runId, iter1ValId]; priorValidateReportId=iter1Val.id
+        expect(implByIter[2]?.parents).toEqual([report.runId, valByIter[1]?.id ?? '']);
+        expect(
+          (implByIter[2]?.payload as { priorValidateReportId?: string }).priorValidateReportId,
+        ).toBe(valByIter[1]?.id);
+
+        // iter 3 impl: parents=[runId, iter2ValId] (NOT iter1ValId);
+        // priorValidateReportId=iter2Val.id (single-step, not transitive)
+        expect(implByIter[3]?.parents).toEqual([report.runId, valByIter[2]?.id ?? '']);
+        expect(
+          (implByIter[3]?.payload as { priorValidateReportId?: string }).priorValidateReportId,
+        ).toBe(valByIter[2]?.id);
+        expect(
+          (implByIter[3]?.payload as { priorValidateReportId?: string }).priorValidateReportId,
+        ).not.toBe(valByIter[1]?.id);
+
+        // The iter-3 prompt's # Prior validate report quotes iter-2's failed scenarios
+        // (specifically the 'iter2 returns 42' scenario from S-1, which failed in iter 2's
+        // validate run because the fake wrote a stub returning 0).
+        const iter3Prompt = (implByIter[3]?.payload as { prompt: string }).prompt;
+        expect(iter3Prompt).toContain('# Prior validate report');
+        expect(iter3Prompt).toContain('- **S-1');
+      } finally {
+        Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+        Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_STATE_DIR');
+        Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      }
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+      rmSync(workDir3, { recursive: true, force: true });
+      rmSync(ctxDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('implementPhase — integration with validatePhase', () => {
   test('implement (success, edits src/needs-impl.ts) followed by validate (passes) — both reports persisted with parents=[runId]', async () => {
     const { ctx, runId } = await setupCtx();
