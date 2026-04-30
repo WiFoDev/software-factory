@@ -146,6 +146,9 @@ export async function run(args: RunArgs): Promise<RunReport> {
           log,
           runId,
           iteration,
+          // T1: inputs is now required on PhaseContext. T2 will populate it
+          // with same-iter predecessors + prior-iter terminal for root phases.
+          inputs: [],
         });
         status = result.status;
         outputRecords = result.records;

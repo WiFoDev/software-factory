@@ -255,6 +255,7 @@ async function setupCtx(): Promise<{ ctx: PhaseContext; runId: string }> {
     log: () => {},
     runId,
     iteration: 1,
+    inputs: [],
   };
   return { ctx, runId };
 }

@@ -14,6 +14,16 @@ export interface PhaseContext {
   log: (line: string) => void;
   runId: string;
   iteration: number;
+  /**
+   * Records the runtime threads into this phase invocation. Population:
+   *   - Non-root phase: same-iteration predecessor outputs.
+   *   - Root phase, iteration ≥ 2: the prior iteration's terminal-phase outputs.
+   *   - Root phase, iteration 1: empty.
+   * Phases consume by filtering on `record.type` and ignore unknown types.
+   * Distinct from the runtime's `factory-phase.parents` list, which only
+   * carries same-iteration predecessor ids — see runtime.ts for the split.
+   */
+  inputs: readonly ContextRecord[];
 }
 
 export interface Phase {
@@ -30,6 +40,18 @@ export interface PhaseGraph {
 export interface RunOptions {
   maxIterations?: number;
   log?: (line: string) => void;
+  /**
+   * Whole-run cap on the sum of `tokens.input + tokens.output` across every
+   * `factory-implement-report` produced during the run. Default 500_000.
+   * On overrun, the runtime aborts with `RuntimeError({ code:
+   * 'runtime/total-cost-cap-exceeded' })`. Per-phase `maxPromptTokens` from
+   * v0.0.2 still applies — both caps independent.
+   *
+   * Not validated programmatically (a non-positive value trips the cap on
+   * the first implement that records any tokens). The CLI flag
+   * `--max-total-tokens` does pre-validate for friendlier UX.
+   */
+  maxTotalTokens?: number;
 }
 
 export interface PhaseInvocationResult {

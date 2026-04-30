@@ -68,6 +68,10 @@ export const FactoryImplementReportSchema = z.object({
   // reports failure) or status='error' (the cost-cap-exceeded line, which
   // overwrites any prior failureDetail). Independent of `result`.
   failureDetail: z.string().optional(),
+  // v0.0.3: id of the prior iteration's factory-validate-report when this
+  // implement runs as iteration ≥ 2 in an [implement → validate] graph.
+  // Undefined on iteration 1 or when ctx.inputs has no validate-report.
+  priorValidateReportId: z.string().optional(),
 });
 
 export type FactoryRunPayload = z.infer<typeof FactoryRunSchema>;

@@ -212,6 +212,30 @@ describe('FactoryImplementReportSchema', () => {
     const parsed = FactoryImplementReportSchema.safeParse({ ...baseValid, status: 'unknown' });
     expect(parsed.success).toBe(false);
   });
+
+  test('accepts payload with priorValidateReportId (v0.0.3 cross-iter threading)', () => {
+    const parsed = FactoryImplementReportSchema.safeParse({
+      ...baseValid,
+      iteration: 2,
+      priorValidateReportId: 'a1b2c3d4e5f60718',
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test('accepts payload without priorValidateReportId (iteration 1, default)', () => {
+    const parsed = FactoryImplementReportSchema.safeParse(baseValid);
+    expect(parsed.success).toBe(true);
+    // No priorValidateReportId key on the baseValid; success path covers iter 1.
+  });
+
+  test('rejects non-string priorValidateReportId', () => {
+    const parsed = FactoryImplementReportSchema.safeParse({
+      ...baseValid,
+      iteration: 2,
+      priorValidateReportId: 12345 as unknown as string,
+    });
+    expect(parsed.success).toBe(false);
+  });
 });
 
 describe('tryRegister', () => {

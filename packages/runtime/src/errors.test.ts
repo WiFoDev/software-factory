@@ -27,11 +27,30 @@ describe('RuntimeError', () => {
       'runtime/cost-cap-exceeded',
       'runtime/agent-failed',
       'runtime/invalid-max-prompt-tokens',
+      'runtime/total-cost-cap-exceeded',
     ];
     for (const code of codes) {
       const err = new RuntimeError(code, 'x');
       expect(err.code).toBe(code);
     }
+    // v0.0.3 strict-equality gate: the union has exactly 10 members.
+    expect(codes.length).toBe(10);
+  });
+
+  test('v0.0.3 code (total-cost-cap-exceeded) is distinct from v0.0.2 cost-cap-exceeded', () => {
+    const perPhase = new RuntimeError(
+      'runtime/cost-cap-exceeded',
+      'input_tokens=150000 > maxPromptTokens=100000',
+    );
+    const wholeRun = new RuntimeError(
+      'runtime/total-cost-cap-exceeded',
+      'running_total=600000 > maxTotalTokens=500000',
+    );
+    expect(perPhase.code).toBe('runtime/cost-cap-exceeded');
+    expect(wholeRun.code).toBe('runtime/total-cost-cap-exceeded');
+    expect(perPhase.code).not.toBe(wholeRun.code);
+    expect(wholeRun.message).toContain('running_total');
+    expect(wholeRun.message).toContain('maxTotalTokens');
   });
 
   test('v0.0.2 codes (cost-cap, agent-failed, invalid-max-prompt-tokens) are distinct and matchable', () => {
