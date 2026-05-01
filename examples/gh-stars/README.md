@@ -38,6 +38,19 @@ pnpm exec factory spec lint docs/specs/
 # → OK
 ```
 
+### 1.5 (recommended, v0.0.4+) Review spec quality
+
+```sh
+pnpm exec factory spec review docs/specs/gh-stars-v2.md
+# → 5 LLM judges score the spec for quality (not just format) — internal
+#   consistency, judge parity, DoD precision, holdout distinctness, and
+#   cross-doc consistency against the paired technical-plan.
+# → Subscription auth (claude -p), same path as the agent loop below.
+# → Cache: re-runs against an unchanged spec are free.
+```
+
+`factory spec review` is the spec-side analog of the harness — a second-pass quality check before you spend tokens running the agent loop. All v0.0.4 judges ship at `severity: 'warning'`, so findings inform but don't gate the run.
+
 ### 2. Run the loop (agent writes `src/`, validate runs the tests)
 
 **v0.0.2 single-shot (one iteration):**
@@ -70,7 +83,12 @@ What happens:
 ### 3. Inspect the provenance
 
 ```sh
-pnpm exec factory-context tree <runId> --dir ./.factory
+# v0.0.4+: walk descendants of the run — the natural "what came out?" question.
+pnpm exec factory-context tree <runId> --dir ./.factory --direction down
+
+# Walk ancestors (default --direction up) from any leaf back to the run:
+pnpm exec factory-context tree <implementReportId> --dir ./.factory
+
 pnpm exec factory-context get <implementReportId> --dir ./.factory
 pnpm exec factory-context list --dir ./.factory
 ```

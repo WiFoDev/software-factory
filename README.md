@@ -10,22 +10,38 @@ Inspired by the [StrongDM Software Factory](https://factory.strongdm.ai/) model.
 
 ## What you get today (v0.0.4)
 
-Two flows, same end-to-end shape:
+The recommended end-to-end shape — same flow whether you implement by hand or let the agent do it:
+
+```
+factory init                         # bootstrap a project (NEW v0.0.4)
+  ↓
+/scope-task                          # write the spec (or write it by hand)
+  ↓
+factory spec lint docs/specs/        # format check (fast, free, deterministic)
+  ↓
+factory spec review docs/specs/      # quality check (LLM judges, NEW v0.0.4)
+  ↓
+factory-runtime run <spec>           # closed iteration loop (v0.0.3)
+  ↓
+factory-context tree <runId> --direction down   # what came out (NEW v0.0.4)
+```
 
 **Manual mode (v0.0.1, still supported via `--no-implement`):**
-1. **Author a spec** with `/scope-task` (or by hand) — frontmatter + Given/When/Then scenarios + `Satisfaction:` lines pointing at tests and LLM-judged criteria.
-2. **Lint** it: `factory spec lint docs/specs/`
-3. **Implement** by hand.
-4. **Run** validate: `factory-runtime run docs/specs/my-feature.md --no-judge --no-implement`
-5. **Inspect** the convergence trail: `factory-context tree <runId>`
+1. **Bootstrap** with `factory init [--name <pkg>]`. Drops the canonical `package.json`, `tsconfig.json`, `.gitignore`, `README.md`, and `docs/{specs,technical-plans}/done/` skeleton. *(v0.0.4)*
+2. **Author a spec** with `/scope-task` (or by hand) — frontmatter + Given/When/Then scenarios + `Satisfaction:` lines pointing at tests and LLM-judged criteria.
+3. **Lint** it: `factory spec lint docs/specs/`. Format only — fast, free, deterministic.
+4. **Review** it: `factory spec review docs/specs/<id>.md`. Five LLM judges score spec **quality** (internal consistency, judge parity, DoD precision, holdout distinctness, cross-doc consistency). Subscription auth via `claude -p`. *(v0.0.4)*
+5. **Implement** by hand.
+6. **Run** validate: `factory-runtime run docs/specs/my-feature.md --no-judge --no-implement`.
+7. **Inspect** the convergence trail: `factory-context tree <runId> --direction down` walks the descendant DAG. *(v0.0.4)*
 
 **Agent-driven mode (v0.0.2 single-shot, v0.0.3 unattended loop — default):**
-1. Author + lint the spec as above.
+1. `factory init`, author + lint + review the spec as above.
 2. **Run** the `[implement → validate]` graph: `factory-runtime run docs/specs/my-feature.md --no-judge`
    - The runtime spawns `claude -p` with the spec on stdin, lets it use Read/Edit/Write/Bash to satisfy the `test:` lines, then runs validate against its output.
    - On validate-fail, the runtime threads the failed scenarios into the next iteration's prompt under a `# Prior validate report` section and tries again — up to `--max-iterations 5` (default) or until summed `tokens.input + tokens.output` crosses `--max-total-tokens 500_000` (default).
    - Subscription auth — no `ANTHROPIC_API_KEY` required.
-3. Inspect the trail: `factory-context tree <runId>` shows every iteration's `factory-implement-report` (full prompt, files changed, tokens used) and `factory-validate-report`, with the cross-iteration parent edges so you can walk the chain back to runId from any leaf.
+3. Inspect the trail: `factory-context tree <runId> --direction down` shows every iteration's `factory-implement-report` (full prompt, files changed, tokens used) and `factory-validate-report` as descendants of the run. Walking up from any leaf back to the run still works (`--direction up`, the v0.0.3 default).
 
 ---
 
@@ -152,9 +168,51 @@ What v0.0.3 enforces that's worth knowing:
 
 ### What just happened
 
-1. **You didn't write a runner, an agent driver, OR an iteration loop.** The runtime composed all five packages — `factory-core` parses, `factory-runtime` orchestrates, `factory-harness` validates, `factory-context` records, `factory-twin` (when wired) records HTTP — into a single CLI call that drives the agent until convergence.
+1. **You didn't write a runner, an agent driver, OR an iteration loop.** The runtime composed all six packages — `factory-core` parses, `factory-runtime` orchestrates, `factory-harness` validates, `factory-context` records, `factory-twin` (when wired) records HTTP, `factory-spec-review` (when invoked) judges spec quality — into a single CLI call that drives the agent until convergence.
 2. **Convergence is the success signal**, not "tests pass." A spec with zero tests but five `judge:` lines converges when the LLM-judged criteria are met — same loop, different satisfaction kind.
 3. **The provenance trail is what makes the agent trustworthy.** Every code change links back to the report that justified it, across every iteration. Not "the agent claimed it worked." Verifiable.
+
+---
+
+## Worked example: `parse-size` — the v0.0.4 walkthrough
+
+A small `parseSize(text)` parser used to demonstrate **all three v0.0.4 surfaces** end-to-end: `factory init`, `factory spec review` (against a deliberately-defective spec → fixed spec), and `factory-context tree --direction down`.
+
+Two specs ship with it:
+
+- **`parse-size-v1.md`** — deliberately defective. Vague DoD ("matches the format"), asymmetric satisfaction lines, undeclared dep, overlapping/irrelevant holdouts. **Lints clean** — only the reviewer catches the quality issues. Demonstrates `factory spec review` discovering 4 distinct categories of defects.
+- **`parse-size-v2.md`** — fixed after applying the review feedback. Concrete operators in DoD, parity restored, holdouts redesigned to probe genuinely distinct failure modes. Paired with `docs/technical-plans/parse-size-v2.md` to exercise the `cross-doc-consistency` judge.
+
+```bash
+$ cd examples/parse-size
+$ pnpm exec factory spec review docs/specs/parse-size-v1.md
+docs/specs/parse-size-v1.md:17  warning  review/judge-parity           ...
+docs/specs/parse-size-v1.md:55  warning  review/holdout-distinctness   ...
+docs/specs/parse-size-v1.md:67  warning  review/internal-consistency   ...
+docs/specs/parse-size-v1.md:77  warning  review/dod-precision          ...
+0 errors, 4 warnings
+
+$ pnpm exec factory spec review docs/specs/parse-size-v2.md
+docs/specs/parse-size-v2.md: OK
+
+$ pnpm exec factory-runtime run docs/specs/parse-size-v2.md \
+    --no-judge --no-implement --context-dir ./.factory
+factory-runtime: converged in 1 iteration(s) (run=8ce2db012eb70592, 194ms)
+
+$ pnpm exec factory-context tree 8ce2db012eb70592 --dir ./.factory --direction down
+8ce2db012eb70592 [type=factory-run] 2026-...
+├── a2e78230c5da5ade [type=factory-phase] 2026-...
+└── a34279c85138571e [type=factory-validate-report] 2026-...
+```
+
+For environments without an authenticated `claude`, the example also walks the deterministic path using `@wifo/factory-spec-review`'s `fake-claude-judge.ts` test fixture (zero subscription tokens, same pipeline). See [`examples/parse-size/README.md`](./examples/parse-size).
+
+What v0.0.4 added that's worth knowing:
+
+- **`factory init`** drops a self-contained scaffold. Idempotent + safe — preexisting target → exit 2 with a list of conflicts, zero writes (no `--force`).
+- **Reviewer judges all default to `severity: 'warning'`.** The exit-1 condition is dormant by default until per-judge calibration in v0.0.4.x point releases. Promoting a judge from `warning` to `error` is one config edit per file.
+- **Reviewer cache is content-addressable.** `cacheKey = sha256(specBytes : ruleSetHash : sortedJudges)`. Re-runs on unchanged specs cost zero `claude` spawns. Editing a judge prompt invalidates correctly — `ruleSetHash` covers the prompt content.
+- **`tree --direction down` is the natural follow-up to a run.** `up` is still the default (backward-compat); `down` walks descendants by inverting `parents[]` across `listRecords()` once.
 
 ---
 
@@ -187,7 +245,8 @@ software-factory/
 │   └── spec-review/    # @wifo/factory-spec-review  — LLM-judged spec quality (v0.0.4+)
 ├── examples/
 │   ├── slugify/        # v0.0.1 manual loop walkthrough
-│   └── gh-stars/       # v1: v0.0.2 single-shot agent loop; v2: v0.0.3 unattended loop
+│   ├── gh-stars/       # v1: v0.0.2 single-shot agent loop; v2: v0.0.3 unattended loop
+│   └── parse-size/     # v0.0.4: factory init + spec review + tree --direction down
 └── docs/
     ├── SPEC_TEMPLATE.md          # canonical shape (docs)
     ├── example-spec.md           # canonical fixture (lints clean)
@@ -207,7 +266,7 @@ One spec per file, named after the spec's `id` frontmatter (kebab-case). Specs l
 
 - **Bun** for running the harness and tests.
 - **Node 22+** as the supported runtime.
-- **`claude` CLI on PATH** (for the default `[implement → validate]` graph). Sign in once via your Claude Pro/Max subscription; the runtime spawns it headless on your behalf. `--no-implement` lets you skip this requirement and run the v0.0.1 validate-only flow.
+- **`claude` CLI on PATH** for the agent-driven flow AND for `factory spec review`. Sign in once via your Claude Pro/Max subscription; both surfaces spawn `claude -p` headless on your behalf — no `ANTHROPIC_API_KEY` needed. `--no-implement` lets you skip this for the runtime; `factory spec review --claude-bin <fake>` (with `@wifo/factory-spec-review`'s `fake-claude-judge.ts`) lets you skip it for the reviewer.
 
 ## What's new in v0.0.4
 

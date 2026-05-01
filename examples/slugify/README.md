@@ -2,7 +2,9 @@
 
 A scaffold for trying the software-factory loop end-to-end **with you in the implement seat instead of the agent** — `--no-implement` keeps the runtime in v0.0.1 validate-only mode so the loop is visible without `claude` in the way. **Nothing is implemented yet** — the point is to walk the loop yourself: write a spec, run it against an empty implementation (it'll fail), implement the helper, run again (it converges), inspect the provenance.
 
-> Want the agent to do it? See [`examples/gh-stars`](../gh-stars) for the v0.0.2 single-shot and v0.0.3 unattended-loop walkthroughs.
+> Want the agent to do it? See [`examples/gh-stars`](../gh-stars) for the v0.0.2 single-shot and v0.0.3 unattended-loop walkthroughs. Want the v0.0.4 surface (init, spec review, descendants traversal) demonstrated end-to-end? See [`examples/parse-size`](../parse-size).
+
+> The directory layout below — `package.json`, `tsconfig.json`, `.gitignore`, `src/`, `docs/specs/done/`, `docs/technical-plans/done/` — is what `factory init` produces in an empty cwd (v0.0.4+). To bootstrap a fresh project: `mkdir my-thing && cd my-thing && pnpm exec factory init`.
 
 ## Setup (one-time)
 
@@ -33,6 +35,16 @@ The slash command writes the spec and an optional technical plan. Read both. Pus
 ```sh
 pnpm exec factory spec lint docs/specs/
 # → OK
+```
+
+### 2.5 (optional) Review spec quality (v0.0.4+)
+
+```sh
+pnpm exec factory spec review docs/specs/<id>.md
+# → 5 LLM judges score spec QUALITY (not just format) — internal consistency,
+#   judge parity, DoD precision, holdout distinctness, cross-doc consistency.
+# → All judges default to severity: 'warning' (exit 0 even with findings).
+# → Subscription auth via claude -p; no ANTHROPIC_API_KEY needed.
 ```
 
 ### 3. Run it (will fail — no implementation yet)
@@ -91,4 +103,4 @@ examples/slugify/
 - The factory's `.factory/` directory holds the run records. It's gitignored — diffable history lives in commits, not in agent runs.
 - `--no-judge` skips the LLM-judged satisfaction lines so you don't need an `ANTHROPIC_API_KEY` for the loop to work.
 - `--no-implement` drops back to the v0.0.1 `[validate]`-only graph (no `claude` spawn). Drop the flag to let the agent fill in `src/` instead.
-- If you want to try a different feature (not slugify), copy this directory: `cp -r examples/slugify examples/<your-thing>` and edit `name` in `package.json`.
+- If you want to try a different feature (not slugify) — preferred (v0.0.4+): `mkdir my-thing && cd my-thing && pnpm exec factory init --name my-thing`. Drops the same scaffold layout as this directory, idempotent + safe (preexisting target → exit 2, zero writes). The pre-v0.0.4 alternative `cp -r examples/slugify examples/<your-thing>` still works inside the monorepo.
