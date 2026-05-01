@@ -1,6 +1,8 @@
 # example-slugify
 
-A scaffold for trying the software-factory loop end-to-end. **Nothing is implemented yet** — the point is to walk the loop yourself: write a spec, run it against an empty implementation (it'll fail), implement the helper, run again (it converges), inspect the provenance.
+A scaffold for trying the software-factory loop end-to-end **with you in the implement seat instead of the agent** — `--no-implement` keeps the runtime in v0.0.1 validate-only mode so the loop is visible without `claude` in the way. **Nothing is implemented yet** — the point is to walk the loop yourself: write a spec, run it against an empty implementation (it'll fail), implement the helper, run again (it converges), inspect the provenance.
+
+> Want the agent to do it? See [`examples/gh-stars`](../gh-stars) for the v0.0.2 single-shot and v0.0.3 unattended-loop walkthroughs.
 
 ## Setup (one-time)
 
@@ -36,7 +38,7 @@ pnpm exec factory spec lint docs/specs/
 ### 3. Run it (will fail — no implementation yet)
 
 ```sh
-pnpm exec factory-runtime run docs/specs/<id>.md --no-judge --context-dir ./.factory
+pnpm exec factory-runtime run docs/specs/<id>.md --no-judge --no-implement --context-dir ./.factory
 # → factory-runtime: no-converge after 1 iteration(s) (run=<runId>)
 # → exit code 1
 ```
@@ -48,7 +50,7 @@ Write your code in `src/` and tests at the paths your spec's `test:` lines refer
 ### 5. Run it again (convergence)
 
 ```sh
-pnpm exec factory-runtime run docs/specs/<id>.md --no-judge --context-dir ./.factory
+pnpm exec factory-runtime run docs/specs/<id>.md --no-judge --no-implement --context-dir ./.factory
 # → factory-runtime: converged in 1 iteration(s) (run=<runId>, <Nms>)
 # → exit code 0
 ```
@@ -88,4 +90,5 @@ examples/slugify/
 
 - The factory's `.factory/` directory holds the run records. It's gitignored — diffable history lives in commits, not in agent runs.
 - `--no-judge` skips the LLM-judged satisfaction lines so you don't need an `ANTHROPIC_API_KEY` for the loop to work.
+- `--no-implement` drops back to the v0.0.1 `[validate]`-only graph (no `claude` spawn). Drop the flag to let the agent fill in `src/` instead.
 - If you want to try a different feature (not slugify), copy this directory: `cp -r examples/slugify examples/<your-thing>` and edit `name` in `package.json`.
