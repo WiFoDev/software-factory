@@ -2,13 +2,13 @@
 
 A toolkit for **spec-driven, agent-friendly software development**. You write a spec describing the *intent* and the *scenarios* a feature must satisfy. The factory's tooling lints the spec, runs the scenarios as tests (and optionally as LLM-judged criteria for things tests can't capture), persists everything as content-addressable records, and gives you a typed convergence report with full DAG provenance.
 
-**v0.0.3 closes the autonomous loop:** `factory-runtime run <spec>` drives `[implement → validate]` repeatedly until convergence or budget — default `--max-iterations 5`, default `--max-total-tokens 500_000`, no human in the middle. Iteration N+1's prompt is threaded with iteration N's failed scenarios, and the parent chain extends across iterations so `factory-context tree` walks the full ancestry. v0.0.1 framework, v0.0.2 single-shot agent, **v0.0.3 closed loop**.
+**v0.0.4 closes the spec-side feedback loop and the bootstrap gap:** `factory spec review` runs five LLM judges (subscription-paid via `claude -p`) against your spec and emits findings in the same format as `factory spec lint`. `factory init` bootstraps a fresh project (`mkdir my-thing && cd my-thing && pnpm exec factory init`). `factory-context tree --direction down` finally answers "what came out of this run?" — descendants traversal of the DAG. v0.0.1 framework, v0.0.2 single-shot agent, v0.0.3 closed loop, **v0.0.4 spec quality + bootstrap**.
 
 Inspired by the [StrongDM Software Factory](https://factory.strongdm.ai/) model.
 
 ---
 
-## What you get today (v0.0.3)
+## What you get today (v0.0.4)
 
 Two flows, same end-to-end shape:
 
@@ -158,15 +158,16 @@ What v0.0.3 enforces that's worth knowing:
 
 ---
 
-## The five packages
+## The six packages
 
 | Layer | Package | What it does | Status |
 |---|---|---|---|
-| 0 | [`@wifo/factory-core`](./packages/core) | Spec format, zod schema, markdown parser, `factory spec lint` CLI | ✓ v0.0.1 |
+| 0 | [`@wifo/factory-core`](./packages/core) | Spec format, zod schema, markdown parser, `factory spec lint` + `factory init` CLI | ✓ v0.0.4 |
 | 1 | [`@wifo/factory-harness`](./packages/harness) | Scenario runner — `bun test` for `test:` lines, Anthropic LLM judge for `judge:` lines | ✓ v0.0.1 |
 | 2 | [`@wifo/factory-twin`](./packages/twin) | HTTP record/replay so agents iterate against fixed responses, no real API quota | ✓ v0.0.1 |
-| 3 | [`@wifo/factory-context`](./packages/context) | Filesystem-first context store — typed shared memory + DAG of provenance | ✓ v0.0.1 |
+| 3 | [`@wifo/factory-context`](./packages/context) | Filesystem-first context store — typed shared memory + DAG of provenance; `tree --direction <up\|down>` *(v0.0.4)* | ✓ v0.0.4 |
 | 4 | [`@wifo/factory-runtime`](./packages/runtime) | Phase-graph orchestrator — composes the four primitives, ships `validatePhase` + `implementPhase`, drives the closed iteration loop | ✓ v0.0.3 |
+| 4.5 | [`@wifo/factory-spec-review`](./packages/spec-review) | LLM-judged spec-quality reviewer — 5 judges via `claude -p` subprocess (subscription auth); `factory spec review <path>` | ✓ v0.0.4 |
 | 5 | `@wifo/factory-scheduler` | Shift-work scheduler (autonomous task queue) | planned |
 
 Domain packs (`@wifo/factory-pack-web`, `-pack-api`, etc.) extend core with domain-specific schema fields, judges, and twin presets. None ship yet.
@@ -178,11 +179,12 @@ Domain packs (`@wifo/factory-pack-web`, `-pack-api`, etc.) extend core with doma
 ```
 software-factory/
 ├── packages/
-│   ├── core/           # @wifo/factory-core      — spec format + lint CLI
-│   ├── harness/        # @wifo/factory-harness   — scenario runner (test + judge)
-│   ├── twin/           # @wifo/factory-twin      — HTTP record/replay
-│   ├── context/        # @wifo/factory-context   — filesystem-first context store
-│   └── runtime/        # @wifo/factory-runtime   — phase-graph orchestrator
+│   ├── core/           # @wifo/factory-core         — spec format + lint + init CLI
+│   ├── harness/        # @wifo/factory-harness      — scenario runner (test + judge)
+│   ├── twin/           # @wifo/factory-twin         — HTTP record/replay
+│   ├── context/        # @wifo/factory-context      — filesystem-first context store
+│   ├── runtime/        # @wifo/factory-runtime      — phase-graph orchestrator
+│   └── spec-review/    # @wifo/factory-spec-review  — LLM-judged spec quality (v0.0.4+)
 ├── examples/
 │   ├── slugify/        # v0.0.1 manual loop walkthrough
 │   └── gh-stars/       # v1: v0.0.2 single-shot agent loop; v2: v0.0.3 unattended loop
@@ -207,13 +209,21 @@ One spec per file, named after the spec's `id` frontmatter (kebab-case). Specs l
 - **Node 22+** as the supported runtime.
 - **`claude` CLI on PATH** (for the default `[implement → validate]` graph). Sign in once via your Claude Pro/Max subscription; the runtime spawns it headless on your behalf. `--no-implement` lets you skip this requirement and run the v0.0.1 validate-only flow.
 
-## What's missing from v0.0.3
+## What's new in v0.0.4
 
-- **`explorePhase` / `planPhase`.** Deferred — `[implement → validate]` is closing real specs without a separate plan step. Will revisit if a real run thrashes on plan-making rather than implementation.
-- **Holdout-aware automated convergence.** `validatePhase` runs visible scenarios; running holdouts at the end of every iteration as a convergence gate is a v0.0.4+ candidate.
-- **Spec reviewer (`factory spec review`).** A second-pass linter that judges *spec quality*, not just *spec format* — internal consistency, judge parity, DoD precision. Top v0.0.4 candidate. See [BACKLOG.md](./BACKLOG.md).
-- **Worktree sandbox.** The agent runs in the spec's project root cwd. Git is your undo button; an isolated worktree per run is a v0.0.4+ candidate.
-- **Streaming cost monitoring.** Both cost caps are post-hoc — the agent has already spent the tokens by the time the JSON envelope is parsed. Streaming would intercept mid-session.
+- **`@wifo/factory-spec-review`** — `factory spec review docs/specs/<id>.md` runs five LLM judges (`internal-consistency`, `judge-parity`, `dod-precision`, `holdout-distinctness`, `cross-doc-consistency`) via `claude -p` subprocess. Subscription auth, no API key. Output mirrors `factory spec lint` exactly.
+- **`factory init`** — bootstrap a new project: `mkdir my-thing && cd my-thing && pnpm exec factory init`. Drops `package.json` (semver deps), self-contained `tsconfig.json`, `.gitignore`, `README.md`, plus the canonical `docs/{specs,technical-plans}/done/` + `src/` skeleton. Idempotent + safe (preexisting target → exit 2, zero writes).
+- **`factory-context tree --direction <up|down>`** — finally answers "what came out of this run?". Default `up` (backward-compat) walks ancestors; `down` builds an inverted child-index from `listRecords` once and DFSes down.
+
+## What's missing from v0.0.4
+
+- **npm publish.** Workspace deps still resolve via `pnpm-workspace.yaml`; standalone `pnpm install` against a `factory init`-generated scaffold won't find `@wifo/factory-*`. Top v0.0.5 deliverable.
+- **`implementPhase` behavior-prior prompt prefix.** A stable `# Implementation guidelines` section before `# Spec` to install behavior bias (no speculative abstractions, surgical edits, verifiable success criteria) into every implement spawn. Deferred to v0.0.5; see [BACKLOG.md](./BACKLOG.md).
+- **PostToolUse hook for `factory spec lint` + `review`.** Now that the reviewer ships, the hook can chain both. Lives in `~/.claude/settings.json`, not in this repo.
+- **Worktree sandbox.** The agent runs in the spec's project root cwd. Git is your undo button.
+- **`explorePhase` / `planPhase`.** Deferred. Will revisit if a real run thrashes on plan-making rather than implementation.
+- **Holdout-aware automated convergence.** `validatePhase` runs visible scenarios; running holdouts at the end of every iteration as a convergence gate is a v0.0.5+ candidate.
+- **Streaming cost monitoring.** Both cost caps are post-hoc.
 - **Scheduler (Layer 5).** Pulls `status: ready` specs and runs them overnight. The end-state of the roadmap.
 
 ## License
