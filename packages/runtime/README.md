@@ -6,6 +6,16 @@ v0.0.1 shipped one built-in phase: `validatePhase`. v0.0.2 added `implementPhase
 
 Requires Node 22+ and (for the default graph) the `claude` CLI on PATH, signed in via your Claude Pro/Max subscription.
 
+## Recommended pre-run flow
+
+Before spending agent tokens on the loop, run two cheap checks against the spec:
+
+1. `pnpm exec factory spec lint docs/specs/<id>.md` — format check (free, deterministic).
+2. `pnpm exec factory spec review docs/specs/<id>.md` — quality check via [`@wifo/factory-spec-review`](../spec-review/README.md). LLM-judged, cache-backed; catches vague DoD checks and weak holdouts that the runtime would otherwise spend a full iteration discovering.
+3. `pnpm exec factory-runtime run docs/specs/<id>.md` — once both checks pass.
+
+Lint then review then run is the recommended sequence — running the loop on a spec that wouldn't pass review is the most common way to burn the `--max-total-tokens` budget on a no-converge.
+
 ## v0.0.5 release notes
 
 - **Implementation guidelines prompt prefix.** `implementPhase`'s `buildPrompt` now emits a stable `# Implementation guidelines` section between the opening prose and `# Spec`. Four behavior priors: state assumptions, minimum code, surgical changes, verifiable success criteria. Same constant, same bytes, every invocation — so `claude -p`'s ephemeral cache hits the same key on every iteration. See "Implementation guidelines section (v0.0.5)" below for the wording, placement, byte-stability invariant, and budget impact.

@@ -27,6 +27,31 @@ Idempotent and safe by default: if any target file or directory already exists, 
 
 > **v0.0.4 caveat:** the `@wifo/factory-*` packages are not yet published to npm (deferred to v0.0.5). Until then, scaffolds work only inside the software-factory monorepo (or with pnpm overrides linking to the local packages).
 
+## Harness-enforced spec linting + review (Claude Code hook recipe)
+
+Both `factory spec lint` and `factory spec review` are most valuable when they run on every save — but agents forget to run them. The fix is harness-enforced: a [Claude Code `PostToolUse` hook](https://docs.claude.com/en/docs/claude-code/hooks) runs both checkers automatically whenever the agent writes a spec file. Harness-enforced means the hook fires regardless of whether the agent remembered to run the linter — drop this into your settings to make the agent literally unable to forget.
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "command": "if [ \"${CLAUDE_PROJECT_DIR}/${CLAUDE_FILE_PATH}\" = *docs/specs/*.md ]; then pnpm exec factory spec lint \"$CLAUDE_FILE_PATH\" && pnpm exec factory spec review \"$CLAUDE_FILE_PATH\" --no-cache; fi"
+      }
+    ]
+  }
+}
+```
+
+The shell guard ensures the hook only fires for writes under `docs/specs/*.md` — every other `Write`/`Edit` is a no-op. Bash/zsh-portable.
+
+**Failure mode.** `PostToolUse` fires AFTER the write completes, so a failing review surfaces as a notification the agent sees on its next turn — it is not a blocked write. If the agent shipped a bad spec, the hook tells the user (and the agent), and the user can revert or trigger a fix on the next turn. The window between a bad write and the next agent turn is the only exposure.
+
+This recipe is intentionally **opt-in** — `factory init` does not touch `~/.claude/`, and there is no `factory hook install` command. Drop the block in by hand if you want it; leave it out if you don't.
+
 ## Status
 
 Pre-alpha — schema is being shaped against real specs. APIs will break.

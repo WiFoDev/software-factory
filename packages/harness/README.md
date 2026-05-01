@@ -39,3 +39,9 @@ Exit codes: `0` pass, `1` fail, `2` usage error, `3` operational error.
 ## Status
 
 v0.0.1. Layer 1 of the factory.
+
+## Related
+
+[`@wifo/factory-spec-review`](../spec-review/README.md) is the **spec-side analog** of this package. The harness scores `judge:` lines on a spec's *scenarios* (does the implementation satisfy this fuzzy criterion?); the reviewer scores the *spec itself* (is this DoD precise? do the holdouts overlap visible scenarios?). Both run LLM judges, and the reviewer reuses the harness's `JudgeClient` interface — its `claudeCliJudgeClient` adapter implements the same contract over `claude -p` subprocesses, so swapping a custom judge backend in one package costs almost nothing in the other.
+
+A typical pre-implementation flow is `factory spec lint <path>` (format) → `factory spec review <path>` (quality) → `factory-runtime run <path>` (the harness runs as part of the runtime's validate phase). See [`packages/spec-review/README.md`](../spec-review/README.md) for the reviewer's CLI, judge list, and calibration guidance.

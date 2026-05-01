@@ -2,7 +2,9 @@
 
 The canonical shape of a single spec file. One spec per file, written to `docs/specs/<id>.md`. Mirrors the format produced by the `/scope-task` slash command.
 
-Filename convention: `<id>.md` for the spec, `<id>.technical-plan.md` for the optional technical plan. Active specs live directly in `docs/specs/`; finished specs are moved to `docs/specs/done/` to preserve history without cluttering the active list.
+Filename convention (parallel-tree, since v0.0.3): the spec lives at `docs/specs/<id>.md` and its optional technical plan at `docs/technical-plans/<id>.md`. The rationale: specs and technical plans live in parallel directories so `factory spec lint docs/specs/` recurses without tripping over technical plans.
+
+Lifecycle: active specs live directly in `docs/specs/`; once shipped, the spec moves to `docs/specs/done/<id>.md` and the paired technical plan moves to `docs/technical-plans/done/<id>.md`. The two trees move in lockstep, preserving history without cluttering the active list.
 
 ## Skeleton
 
@@ -65,3 +67,12 @@ exemplars:
 | **Autonomy-ready** (deep + holdouts + judges) | + holdout scenarios + judge satisfaction lines | tasks eligible for unattended agent runs |
 
 The factory tooling reads whatever tier is present. Missing fields disable features but never block work.
+
+## Validating the spec
+
+Two checks should run before you spend agent tokens implementing the spec:
+
+- `factory spec lint docs/specs/<id>.md` — the **format** check. Fast, free, deterministic. Verifies frontmatter shape, required sections, satisfaction-line syntax, and id/filename agreement. Run on every save (a Claude Code `PostToolUse` hook recipe lives in `packages/core/README.md`). Lint is the floor: a spec must lint clean before it is worth reviewing.
+- `factory spec review docs/specs/<id>.md` — the **quality** check. LLM-judged, billed against your subscription. Runs five judges (`internal-consistency`, `judge-parity`, `dod-precision`, `holdout-distinctness`, `cross-doc-consistency`) against the spec and its paired technical-plan. Catches vague DoD checks, asymmetric satisfactions, and holdouts that paraphrase visible scenarios — issues lint cannot see. Cache-backed, so re-running on an unchanged spec is free.
+
+Run lint first; if lint passes, run review. Both emit findings in the same `${file}:${line}  ${sev}  ${code}  ${message}` format; the review namespace is `review/...`, the lint namespace is `spec/...`.

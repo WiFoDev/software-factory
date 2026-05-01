@@ -13,3 +13,5 @@ coverage
 # Smoke-test artifact: fake-claude in success mode writes here when the
 # runtime CLI's smoke is invoked from packages/runtime/test-fixtures/.
 packages/runtime/test-fixtures/src/
+.factory
+.factory-*
