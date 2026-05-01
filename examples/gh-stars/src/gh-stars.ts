@@ -65,7 +65,10 @@ async function fetchWithRetry(
     lastStatus = res.status;
     lastStatusText = res.statusText || 'Service Unavailable';
     if (attempt < maxAttempts - 1) {
-      await sleep(RETRY_BACKOFF_MS[attempt]!);
+      const backoff = RETRY_BACKOFF_MS[attempt];
+      if (backoff !== undefined) {
+        await sleep(backoff);
+      }
     }
   }
   throw new Error(
@@ -103,12 +106,7 @@ export async function getStargazers(
   }
 
   const firstUrl = `https://api.github.com/repos/${repo}/stargazers`;
-  const firstRes = await fetchWithRetry(
-    firstUrl,
-    { headers: firstHeaders },
-    fetchImpl,
-    sleep,
-  );
+  const firstRes = await fetchWithRetry(firstUrl, { headers: firstHeaders }, fetchImpl, sleep);
 
   if (firstRes.status === 304 && cached) {
     cache.set(repo, { ...cached, fetchedAt: currentTime });
@@ -136,12 +134,7 @@ export async function getStargazers(
 
   let nextUrl = parseNextLink(firstRes.headers.get('Link'));
   while (nextUrl) {
-    const pageRes = await fetchWithRetry(
-      nextUrl,
-      { headers: baseHeaders },
-      fetchImpl,
-      sleep,
-    );
+    const pageRes = await fetchWithRetry(nextUrl, { headers: baseHeaders }, fetchImpl, sleep);
     if (!pageRes.ok) {
       throw new Error(`GitHub API request failed: ${pageRes.status} ${pageRes.statusText}`);
     }
