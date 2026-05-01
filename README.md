@@ -2,13 +2,13 @@
 
 A toolkit for **spec-driven, agent-friendly software development**. You write a spec describing the *intent* and the *scenarios* a feature must satisfy. The factory's tooling lints the spec, runs the scenarios as tests (and optionally as LLM-judged criteria for things tests can't capture), persists everything as content-addressable records, and gives you a typed convergence report with full DAG provenance.
 
-**v0.0.2 closes the agent gap:** the runtime now drives `claude -p` to do the implementation work, captures the agent's output + disk delta + token counts into a typed report, and runs validate against the result — all in a single `factory-runtime run <spec>` call. v0.0.1 framework, v0.0.2 agent loop, v0.0.3 will close the iteration auto-loop.
+**v0.0.3 closes the autonomous loop:** `factory-runtime run <spec>` drives `[implement → validate]` repeatedly until convergence or budget — default `--max-iterations 5`, default `--max-total-tokens 500_000`, no human in the middle. Iteration N+1's prompt is threaded with iteration N's failed scenarios, and the parent chain extends across iterations so `factory-context tree` walks the full ancestry. v0.0.1 framework, v0.0.2 single-shot agent, **v0.0.3 closed loop**.
 
 Inspired by the [StrongDM Software Factory](https://factory.strongdm.ai/) model.
 
 ---
 
-## What you get today (v0.0.2)
+## What you get today (v0.0.3)
 
 Two flows, same end-to-end shape:
 
@@ -19,14 +19,13 @@ Two flows, same end-to-end shape:
 4. **Run** validate: `factory-runtime run docs/specs/my-feature.md --no-judge --no-implement`
 5. **Inspect** the convergence trail: `factory-context tree <runId>`
 
-**Agent-driven mode (v0.0.2, default):**
+**Agent-driven mode (v0.0.2 single-shot, v0.0.3 unattended loop — default):**
 1. Author + lint the spec as above.
 2. **Run** the `[implement → validate]` graph: `factory-runtime run docs/specs/my-feature.md --no-judge`
    - The runtime spawns `claude -p` with the spec on stdin, lets it use Read/Edit/Write/Bash to satisfy the `test:` lines, then runs validate against its output.
+   - On validate-fail, the runtime threads the failed scenarios into the next iteration's prompt under a `# Prior validate report` section and tries again — up to `--max-iterations 5` (default) or until summed `tokens.input + tokens.output` crosses `--max-total-tokens 500_000` (default).
    - Subscription auth — no `ANTHROPIC_API_KEY` required.
-3. Inspect the trail: `factory-context tree <runId>` shows both the agent's `factory-implement-report` (full prompt, files changed, tokens used) and the harness's `factory-validate-report`.
-
-Iteration is still human-triggered in v0.0.2 (default `--max-iterations 1`); v0.0.3 will close that loop with cross-iteration context plumbing so the agent can react to validate failures.
+3. Inspect the trail: `factory-context tree <runId>` shows every iteration's `factory-implement-report` (full prompt, files changed, tokens used) and `factory-validate-report`, with the cross-iteration parent edges so you can walk the chain back to runId from any leaf.
 
 ---
 
@@ -123,31 +122,39 @@ Every run leaves a typed, content-addressable, diffable trail on disk. `git log 
 
 ---
 
-## Worked example: `gh-stars` — the agent-driven loop (v0.0.2)
+## Worked example: `gh-stars` — the agent-driven loop
 
-The same loop with the agent doing the implementation. Drop `--no-implement` and the runtime's default graph runs `[implement → validate]`:
+Two specs, two flavors of the agent loop:
+
+- **`gh-stars-v1.md`** *(v0.0.2)* — single-shot. A `getStargazers(repo, opts?)` helper with caching + rate-limit handling. Small enough to converge in one iteration.
+- **`gh-stars-v2.md`** *(v0.0.3)* — extends v1 with **pagination**, **ETag/conditional caching**, and **retry-with-backoff on 5xx**. Designed to require iteration 2+. The closed-loop demo for v0.0.3.
 
 ```bash
 $ cd examples/gh-stars
-$ factory-runtime run docs/specs/gh-stars-v1.md --no-judge --context-dir ./.factory
-# … claude runs in headless mode using your subscription, edits files,
-#   then validate runs bun test against the agent's output …
-factory-runtime: converged in 1 iteration(s) (run=cfe0fe872815ccbe, 69404ms)
+$ factory-runtime run docs/specs/gh-stars-v2.md \
+    --no-judge \
+    --max-total-tokens 1000000 \
+    --context-dir ./.factory
+# … claude runs in headless mode using your subscription, edits files, runs bun test …
+# … if iter 1 fails, the runtime threads the failed scenarios into iter 2's prompt …
+factory-runtime: converged in 2 iteration(s) (run=…, …)
 ```
 
-`factory-context tree <runId>` now shows four record types — the run, the implement-report (with the full prompt, the files changed, the tokens used, the agent's `result` text), the validate-report, and two `factory-phase` records cross-referencing them. See [`examples/gh-stars/README.md`](./examples/gh-stars) for the walk-through.
+`factory-context tree <runId>` walks every iteration's records — `factory-implement-report` (full prompt including the `# Prior validate report` section on iter ≥ 2, files changed, tokens used, agent's `result` text), `factory-validate-report`, plus `factory-phase` cross-references. See [`examples/gh-stars/README.md`](./examples/gh-stars) for the walk-through.
 
-What v0.0.2 enforces that's worth knowing:
+What v0.0.3 enforces that's worth knowing:
 - **Tool allowlist:** the agent gets `Read,Edit,Write,Bash` and nothing else. Default-deny.
-- **Cost cap:** `--max-prompt-tokens` (default `100000`). On overrun, the runtime hard-stops with `RuntimeError({ code: 'runtime/cost-cap-exceeded' })` *after* persisting the implement-report — the wasted run is auditable.
+- **Per-phase cost cap:** `--max-prompt-tokens` (default `100000`). Overruns hard-stop with `RuntimeError({ code: 'runtime/cost-cap-exceeded' })` *after* persisting the implement-report.
+- **Whole-run cost cap:** `--max-total-tokens` (default `500000`). Sums `tokens.input + tokens.output` across every implement in the run. Overruns hard-stop with `RuntimeError({ code: 'runtime/total-cost-cap-exceeded' })`. The implement-report is on disk via `parents=[runId]` for both — the wasted run is auditable.
+- **Cross-iteration record threading:** iter N+1's `factory-implement-report.parents = [runId, iterN-validate-report-id]`; the prompt section quotes only failed scenarios; `factory-context tree` walks the chain back to runId from any leaf.
 - **Twin env vars:** `WIFO_TWIN_MODE` + `WIFO_TWIN_RECORDINGS_DIR` are set on the spawned subprocess so user code can opt into HTTP record/replay through `@wifo/factory-twin`.
 - **No git worktree.** The agent runs in the spec's project root cwd. Use git as your undo button.
 
 ### What just happened
 
-1. **You didn't write a runner OR an agent driver.** The runtime composed all five packages — `factory-core` parses, `factory-runtime` orchestrates, `factory-harness` validates, `factory-context` records, `factory-twin` (when wired) records HTTP — into a single CLI call.
+1. **You didn't write a runner, an agent driver, OR an iteration loop.** The runtime composed all five packages — `factory-core` parses, `factory-runtime` orchestrates, `factory-harness` validates, `factory-context` records, `factory-twin` (when wired) records HTTP — into a single CLI call that drives the agent until convergence.
 2. **Convergence is the success signal**, not "tests pass." A spec with zero tests but five `judge:` lines converges when the LLM-judged criteria are met — same loop, different satisfaction kind.
-3. **The provenance trail is what makes the agent trustworthy.** Every code change links back to the report that justified it. Not "the agent claimed it worked." Verifiable.
+3. **The provenance trail is what makes the agent trustworthy.** Every code change links back to the report that justified it, across every iteration. Not "the agent claimed it worked." Verifiable.
 
 ---
 
@@ -159,7 +166,7 @@ What v0.0.2 enforces that's worth knowing:
 | 1 | [`@wifo/factory-harness`](./packages/harness) | Scenario runner — `bun test` for `test:` lines, Anthropic LLM judge for `judge:` lines | ✓ v0.0.1 |
 | 2 | [`@wifo/factory-twin`](./packages/twin) | HTTP record/replay so agents iterate against fixed responses, no real API quota | ✓ v0.0.1 |
 | 3 | [`@wifo/factory-context`](./packages/context) | Filesystem-first context store — typed shared memory + DAG of provenance | ✓ v0.0.1 |
-| 4 | [`@wifo/factory-runtime`](./packages/runtime) | Phase-graph orchestrator — composes the four primitives, ships `validatePhase` + `implementPhase` | ✓ v0.0.2 |
+| 4 | [`@wifo/factory-runtime`](./packages/runtime) | Phase-graph orchestrator — composes the four primitives, ships `validatePhase` + `implementPhase`, drives the closed iteration loop | ✓ v0.0.3 |
 | 5 | `@wifo/factory-scheduler` | Shift-work scheduler (autonomous task queue) | planned |
 
 Domain packs (`@wifo/factory-pack-web`, `-pack-api`, etc.) extend core with domain-specific schema fields, judges, and twin presets. None ship yet.
@@ -178,7 +185,7 @@ software-factory/
 │   └── runtime/        # @wifo/factory-runtime   — phase-graph orchestrator
 ├── examples/
 │   ├── slugify/        # v0.0.1 manual loop walkthrough
-│   └── gh-stars/       # v0.0.2 agent-driven loop walkthrough
+│   └── gh-stars/       # v1: v0.0.2 single-shot agent loop; v2: v0.0.3 unattended loop
 └── docs/
     ├── SPEC_TEMPLATE.md          # canonical shape (docs)
     ├── example-spec.md           # canonical fixture (lints clean)
@@ -198,15 +205,16 @@ One spec per file, named after the spec's `id` frontmatter (kebab-case). Specs l
 
 - **Bun** for running the harness and tests.
 - **Node 22+** as the supported runtime.
-- **`claude` CLI on PATH** (for the v0.0.2 default graph). Sign in once via your Claude Pro/Max subscription; the runtime spawns it headless on your behalf. `--no-implement` lets you skip this requirement and run the v0.0.1 validate-only flow.
+- **`claude` CLI on PATH** (for the default `[implement → validate]` graph). Sign in once via your Claude Pro/Max subscription; the runtime spawns it headless on your behalf. `--no-implement` lets you skip this requirement and run the v0.0.1 validate-only flow.
 
-## What's missing from v0.0.2
+## What's missing from v0.0.3
 
-- **Iteration auto-loop.** Default `--max-iterations` stays `1`. v0.0.3 closes the loop: validate-fail → re-prompt agent → validate again, until convergence or the run-level token budget.
-- **Cross-iteration context plumbing.** Iteration N+1's prompt doesn't see iteration N's failures yet. v0.0.3.
-- **`explorePhase` / `planPhase`.** Deferred until a real run shows `implement` is too low-context to converge without staged thinking. Maybe v0.0.3, maybe later.
-- **Holdout-aware convergence.** Optional flag to also run holdout scenarios at the end of every iteration. v0.0.3 if it's pulling weight.
-- **Scheduler (Layer 5).** Pulls `status: ready` specs and runs them overnight. Lands once the v0.0.3 loop is reliable.
+- **`explorePhase` / `planPhase`.** Deferred — `[implement → validate]` is closing real specs without a separate plan step. Will revisit if a real run thrashes on plan-making rather than implementation.
+- **Holdout-aware automated convergence.** `validatePhase` runs visible scenarios; running holdouts at the end of every iteration as a convergence gate is a v0.0.4+ candidate.
+- **Spec reviewer (`factory spec review`).** A second-pass linter that judges *spec quality*, not just *spec format* — internal consistency, judge parity, DoD precision. Top v0.0.4 candidate. See [BACKLOG.md](./BACKLOG.md).
+- **Worktree sandbox.** The agent runs in the spec's project root cwd. Git is your undo button; an isolated worktree per run is a v0.0.4+ candidate.
+- **Streaming cost monitoring.** Both cost caps are post-hoc — the agent has already spent the tokens by the time the JSON envelope is parsed. Streaming would intercept mid-session.
+- **Scheduler (Layer 5).** Pulls `status: ready` specs and runs them overnight. The end-state of the roadmap.
 
 ## License
 
