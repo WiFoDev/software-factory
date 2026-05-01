@@ -5,16 +5,17 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { ContextError } from './errors.js';
 import { listRecords, readRecord } from './store-fs.js';
-import { buildTree, formatTree } from './tree.js';
+import { buildDescendantTree, buildTree, formatTree } from './tree.js';
 
 const USAGE = `Usage:
   factory-context list          [--type <name>] [--dir <path>]
   factory-context get  <id>     [--dir <path>]
-  factory-context tree <id>     [--dir <path>]
+  factory-context tree <id>     [--dir <path>] [--direction <up|down>]
 
 Flags:
-  --type <name>   For list: filter by record type
-  --dir <path>    Records directory (default: ./context)
+  --type <name>           For list: filter by record type
+  --dir <path>            Records directory (default: ./context)
+  --direction <up|down>   For tree: walk ancestors (up) or descendants (down). Default: up.
 `;
 
 export interface CliIo {
@@ -151,7 +152,7 @@ async function runTree(args: string[], io: CliIo): Promise<void> {
   try {
     parsed = parseArgs({
       args,
-      options: { dir: { type: 'string' } },
+      options: { dir: { type: 'string' }, direction: { type: 'string' } },
       allowPositionals: true,
       strict: true,
     });
@@ -166,12 +167,55 @@ async function runTree(args: string[], io: CliIo): Promise<void> {
     io.exit(2);
     return;
   }
+  const directionRaw = parsed.values.direction;
+  const direction = typeof directionRaw === 'string' ? directionRaw : 'up';
+  if (direction !== 'up' && direction !== 'down') {
+    io.stderr(
+      `context/invalid-direction: --direction must be 'up' or 'down' (got '${directionRaw ?? ''}')\n`,
+    );
+    io.exit(2);
+    return;
+  }
   const dir = resolveDir(parsed.values.dir);
-  // Probe the root first so a missing root maps to exit 3, while missing
-  // ancestors stay non-fatal inside buildTree.
-  let root: Awaited<ReturnType<typeof readRecord>>;
+
+  if (direction === 'up') {
+    // Probe the root first so a missing root maps to exit 3, while missing
+    // ancestors stay non-fatal inside buildTree.
+    let root: Awaited<ReturnType<typeof readRecord>>;
+    try {
+      root = await readRecord(dir, id);
+    } catch (err) {
+      if (err instanceof ContextError) {
+        io.stderr(`${err.code}\t${err.message}\n`);
+        io.exit(3);
+        return;
+      }
+      throw err;
+    }
+    if (root === null) {
+      io.stderr(`context/record-not-found\t${id}\n`);
+      io.exit(3);
+      return;
+    }
+    const tree = await buildTree(id, async (lookupId) => {
+      try {
+        return await readRecord(dir, lookupId);
+      } catch (err) {
+        // Treat unreadable parent ids (malformed shape, parse failure, version
+        // mismatch) as missing so the tree renders inline rather than crashing.
+        if (err instanceof ContextError) return null;
+        throw err;
+      }
+    });
+    io.stdout(formatTree(tree));
+    io.exit(0);
+    return;
+  }
+
+  // direction === 'down' — load every record once, then DFS down.
+  let result: Awaited<ReturnType<typeof listRecords>>;
   try {
-    root = await readRecord(dir, id);
+    result = await listRecords(dir);
   } catch (err) {
     if (err instanceof ContextError) {
       io.stderr(`${err.code}\t${err.message}\n`);
@@ -180,21 +224,13 @@ async function runTree(args: string[], io: CliIo): Promise<void> {
     }
     throw err;
   }
-  if (root === null) {
+  const root = result.records.find((r) => r.id === id);
+  if (root === undefined) {
     io.stderr(`context/record-not-found\t${id}\n`);
     io.exit(3);
     return;
   }
-  const tree = await buildTree(id, async (lookupId) => {
-    try {
-      return await readRecord(dir, lookupId);
-    } catch (err) {
-      // Treat unreadable parent ids (malformed shape, parse failure, version
-      // mismatch) as missing so the tree renders inline rather than crashing.
-      if (err instanceof ContextError) return null;
-      throw err;
-    }
-  });
+  const tree = buildDescendantTree(id, result.records);
   io.stdout(formatTree(tree));
   io.exit(0);
 }

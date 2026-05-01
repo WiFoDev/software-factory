@@ -87,7 +87,7 @@ What this means in practice:
 ```
 factory-context list           [--type <name>] [--dir <path>]
 factory-context get  <id>      [--dir <path>]
-factory-context tree <id>      [--dir <path>]
+factory-context tree <id>      [--dir <path>] [--direction <up|down>]
 ```
 
 Default `--dir` is `./context`. The CLI works directly on the on-disk envelope — it does not need any types registered.
@@ -103,6 +103,21 @@ $ factory-context tree 1c0acb52e9e4f31a --dir ./.factory/context
 ```
 
 `tree` is robust to corruption: missing ancestors render as `<id> <missing>`, detected cycles render as `<id> <cycle>`. Both are non-fatal (exit 0).
+
+### `--direction <up|down>` (v0.0.4+)
+
+`tree` walks **ancestors by default** (`--direction up`). Pass `--direction down` to walk **descendants** instead — useful right after `factory-runtime run` to answer "what was produced under this run?":
+
+```sh
+$ factory-context tree <runId> --dir ./.factory --direction down
+<runId> [type=factory-run] 2026-04-29T10:00:00.000Z
+├── <implementId> [type=factory-implement-report] 2026-04-29T10:01:00.000Z
+└── <validateId> [type=factory-validate-report] 2026-04-29T10:02:00.000Z
+```
+
+Implementation note: descendants traversal scans the entire `--dir` once via `listRecords` to invert the parents list into a child index — O(n) per call. Fine for typical context-store sizes (≤ 10_000 records). The output renderer reuses the same `TreeNode` shape as the ancestor walk: `TreeNode.parents` literally holds the next edges to walk (children for `down`, ancestors for `up`), so the field name is direction-agnostic.
+
+Bad `--direction` values exit `2` with stderr `context/invalid-direction: --direction must be 'up' or 'down' (got '<raw>')`.
 
 Exit codes: `0` ok, `2` usage error (unknown subcommand, missing positional), `3` operational error (target dir missing, root id not found). Corrupt neighbor files surface on stderr as `<filename>\tskipped\t<reason>` and do not change the exit code.
 

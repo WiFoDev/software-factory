@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { buildTree, formatTree } from './tree.js';
+import { buildDescendantTree, buildTree, formatTree } from './tree.js';
 import type { ContextRecord } from './types.js';
 
 function rec(overrides: Partial<ContextRecord> & Pick<ContextRecord, 'id'>): ContextRecord {
@@ -123,5 +123,126 @@ describe('formatTree', () => {
     const tree = await buildTree(a.id, fakeLookup([a, b]));
     const out = formatTree(tree);
     expect(out).toContain('aaaaaaaaaaaaaaaa <cycle>');
+  });
+});
+
+describe('buildDescendantTree', () => {
+  test('linear chain root → mid → leaf walks both children', () => {
+    const root = rec({ id: 'aaaaaaaaaaaaaaaa', recordedAt: '2026-04-25T00:00:00.000Z' });
+    const mid = rec({
+      id: 'bbbbbbbbbbbbbbbb',
+      recordedAt: '2026-04-26T00:00:00.000Z',
+      parents: [root.id],
+    });
+    const leaf = rec({
+      id: 'cccccccccccccccc',
+      recordedAt: '2026-04-27T00:00:00.000Z',
+      parents: [mid.id],
+    });
+    const tree = buildDescendantTree(root.id, [root, mid, leaf]);
+    expect(tree.id).toBe(root.id);
+    expect(tree.marker).toBe('ok');
+    expect(tree.parents).toHaveLength(1);
+    expect(tree.parents[0]?.id).toBe(mid.id);
+    expect(tree.parents[0]?.parents[0]?.id).toBe(leaf.id);
+    expect(tree.parents[0]?.parents[0]?.parents).toEqual([]);
+  });
+
+  test('descendants from mid walks only the leaf — root is NOT visited', () => {
+    const root = rec({ id: 'aaaaaaaaaaaaaaaa' });
+    const mid = rec({ id: 'bbbbbbbbbbbbbbbb', parents: [root.id] });
+    const leaf = rec({ id: 'cccccccccccccccc', parents: [mid.id] });
+    const tree = buildDescendantTree(mid.id, [root, mid, leaf]);
+    expect(tree.id).toBe(mid.id);
+    expect(tree.parents).toHaveLength(1);
+    expect(tree.parents[0]?.id).toBe(leaf.id);
+  });
+
+  test('diamond: descendant visited via two paths is rendered twice (path-distinct, not cycle)', () => {
+    const root = rec({ id: 'aaaaaaaaaaaaaaaa' });
+    const left = rec({ id: 'bbbbbbbbbbbbbbbb', parents: [root.id] });
+    const right = rec({ id: 'cccccccccccccccc', parents: [root.id] });
+    const leaf = rec({ id: 'dddddddddddddddd', parents: [left.id, right.id] });
+    const tree = buildDescendantTree(root.id, [root, left, right, leaf]);
+    // root has two children (left, right); each has the leaf as its only child;
+    // the path-set tracks ancestors, so leaf is NOT a cycle on either path.
+    expect(tree.parents.map((p) => p.id).sort()).toEqual([left.id, right.id]);
+    expect(tree.parents[0]?.parents[0]?.id).toBe(leaf.id);
+    expect(tree.parents[0]?.parents[0]?.marker).toBe('ok');
+    expect(tree.parents[1]?.parents[0]?.id).toBe(leaf.id);
+    expect(tree.parents[1]?.parents[0]?.marker).toBe('ok');
+  });
+
+  test('cycle: descendant walk marks <cycle> on revisit via path-set', () => {
+    // Hand-crafted cycle: a's parent is b; b's parent is a. Descending from a:
+    // a → (children including b) → b → (children including a) → a is now in the
+    // ancestor-path set, so it's marked cycle.
+    const a = rec({ id: 'aaaaaaaaaaaaaaaa', parents: ['bbbbbbbbbbbbbbbb'] });
+    const b = rec({ id: 'bbbbbbbbbbbbbbbb', parents: ['aaaaaaaaaaaaaaaa'] });
+    const tree = buildDescendantTree(a.id, [a, b]);
+    expect(tree.id).toBe(a.id);
+    expect(tree.marker).toBe('ok');
+    // a's child is b (because b.parents includes a)
+    expect(tree.parents[0]?.id).toBe(b.id);
+    // b's child is a, but a is on the path → cycle
+    expect(tree.parents[0]?.parents[0]?.id).toBe(a.id);
+    expect(tree.parents[0]?.parents[0]?.marker).toBe('cycle');
+  });
+
+  test('root not in allRecords returns missing-marker node', () => {
+    const tree = buildDescendantTree('aaaaaaaaaaaaaaaa', []);
+    expect(tree.marker).toBe('missing');
+    expect(tree.parents).toEqual([]);
+  });
+
+  test('children sorted by recordedAt ASC then id ASC', () => {
+    const root = rec({ id: 'aaaaaaaaaaaaaaaa' });
+    const c1 = rec({
+      id: 'dddddddddddddddd',
+      recordedAt: '2026-04-29T00:00:00.000Z',
+      parents: [root.id],
+    });
+    const c2 = rec({
+      id: 'bbbbbbbbbbbbbbbb',
+      recordedAt: '2026-04-27T00:00:00.000Z',
+      parents: [root.id],
+    });
+    const c3 = rec({
+      id: 'cccccccccccccccc',
+      recordedAt: '2026-04-28T00:00:00.000Z',
+      parents: [root.id],
+    });
+    // Same recordedAt as c2 — should sort after c2 by id (cccc... > bbbb...).
+    const c4 = rec({
+      id: 'eeeeeeeeeeeeeeee',
+      recordedAt: '2026-04-27T00:00:00.000Z',
+      parents: [root.id],
+    });
+    const tree = buildDescendantTree(root.id, [root, c1, c2, c3, c4]);
+    expect(tree.parents.map((p) => p.id)).toEqual([
+      'bbbbbbbbbbbbbbbb', // 04-27
+      'eeeeeeeeeeeeeeee', // 04-27 (after by id)
+      'cccccccccccccccc', // 04-28
+      'dddddddddddddddd', // 04-29
+    ]);
+  });
+
+  test('formatTree works identically on descendant trees (direction-agnostic)', () => {
+    const root = rec({ id: 'aaaaaaaaaaaaaaaa', recordedAt: '2026-04-25T00:00:00.000Z' });
+    const mid = rec({
+      id: 'bbbbbbbbbbbbbbbb',
+      type: 'brief',
+      recordedAt: '2026-04-26T00:00:00.000Z',
+      parents: [root.id],
+    });
+    const tree = buildDescendantTree(root.id, [root, mid]);
+    const out = formatTree(tree);
+    expect(out).toBe(
+      [
+        'aaaaaaaaaaaaaaaa [type=note] 2026-04-25T00:00:00.000Z',
+        '└── bbbbbbbbbbbbbbbb [type=brief] 2026-04-26T00:00:00.000Z',
+        '',
+      ].join('\n'),
+    );
   });
 });

@@ -219,4 +219,101 @@ describe('cli tree', () => {
     expect(r.exitCode).toBe(2);
     expect(r.stderr).toContain('Missing <id>');
   });
+
+  test('default --direction is up; explicit --direction up matches default', async () => {
+    const a = makeRecord({
+      id: 'aaaaaaaaaaaaaaaa',
+      type: 'note',
+      recordedAt: '2026-04-25T00:00:00.000Z',
+    });
+    const b = makeRecord({
+      id: 'bbbbbbbbbbbbbbbb',
+      type: 'brief',
+      recordedAt: '2026-04-26T00:00:00.000Z',
+      parents: [a.id],
+    });
+    await writeRecord(dir, a);
+    await writeRecord(dir, b);
+
+    const noFlag = await runCliProc(['tree', b.id, '--dir', dir]);
+    expect(noFlag.exitCode).toBe(0);
+    const explicit = await runCliProc(['tree', b.id, '--dir', dir, '--direction', 'up']);
+    expect(explicit.exitCode).toBe(0);
+    expect(explicit.stdout).toBe(noFlag.stdout);
+    expect(noFlag.stdout).toContain(`${b.id}`);
+    expect(noFlag.stdout).toContain(`└── ${a.id}`);
+  });
+
+  test('--direction down on root walks descendants', async () => {
+    const root = makeRecord({
+      id: 'aaaaaaaaaaaaaaaa',
+      type: 'note',
+      recordedAt: '2026-04-25T00:00:00.000Z',
+    });
+    const mid = makeRecord({
+      id: 'bbbbbbbbbbbbbbbb',
+      type: 'brief',
+      recordedAt: '2026-04-26T00:00:00.000Z',
+      parents: [root.id],
+    });
+    const leaf = makeRecord({
+      id: 'cccccccccccccccc',
+      type: 'design',
+      recordedAt: '2026-04-27T00:00:00.000Z',
+      parents: [mid.id],
+    });
+    await writeRecord(dir, root);
+    await writeRecord(dir, mid);
+    await writeRecord(dir, leaf);
+
+    const r = await runCliProc(['tree', root.id, '--dir', dir, '--direction', 'down']);
+    expect(r.exitCode).toBe(0);
+    const lines = r.stdout.trim().split('\n');
+    expect(lines[0]).toBe(`${root.id} [type=note] 2026-04-25T00:00:00.000Z`);
+    expect(lines[1]).toBe(`└── ${mid.id} [type=brief] 2026-04-26T00:00:00.000Z`);
+    expect(lines[2]).toBe(`    └── ${leaf.id} [type=design] 2026-04-27T00:00:00.000Z`);
+  });
+
+  test('--direction down on missing root → exit 3', async () => {
+    const r = await runCliProc(['tree', 'deadbeefdeadbeef', '--dir', dir, '--direction', 'down']);
+    expect(r.exitCode).toBe(3);
+    expect(r.stderr).toContain('context/record-not-found');
+  });
+
+  test('--direction sideways → exit 2 with stderr label context/invalid-direction', async () => {
+    const r = await runCliProc([
+      'tree',
+      'aaaaaaaaaaaaaaaa',
+      '--dir',
+      dir,
+      '--direction',
+      'sideways',
+    ]);
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain('context/invalid-direction');
+    expect(r.stderr).toContain("got 'sideways'");
+  });
+
+  test('--direction down with multiple descendants sorted by recordedAt then id', async () => {
+    const root = makeRecord({ id: 'aaaaaaaaaaaaaaaa', recordedAt: '2026-04-25T00:00:00.000Z' });
+    const c1 = makeRecord({
+      id: 'cccccccccccccccc',
+      recordedAt: '2026-04-27T00:00:00.000Z',
+      parents: [root.id],
+    });
+    const c2 = makeRecord({
+      id: 'bbbbbbbbbbbbbbbb',
+      recordedAt: '2026-04-26T00:00:00.000Z',
+      parents: [root.id],
+    });
+    await writeRecord(dir, root);
+    await writeRecord(dir, c1);
+    await writeRecord(dir, c2);
+    const r = await runCliProc(['tree', root.id, '--dir', dir, '--direction', 'down']);
+    expect(r.exitCode).toBe(0);
+    const lines = r.stdout.trim().split('\n');
+    // c2 (04-26) before c1 (04-27)
+    expect(lines[1]).toContain(c2.id);
+    expect(lines[2]).toContain(c1.id);
+  });
 });

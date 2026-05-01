@@ -39,6 +39,63 @@ async function walk(id: string, lookup: RecordLookup, ancestors: Set<string>): P
   };
 }
 
+/**
+ * Walk the DAG **down** from `rootId`, returning a tree of descendants. Records
+ * know their parents but not their children, so we invert the parents list
+ * across `allRecords` once into a child index, then DFS down. Children of each
+ * node are sorted by `recordedAt` ASC then `id` ASC for deterministic output.
+ *
+ * The returned `TreeNode.parents` field literally holds the next edges to walk
+ * — for descendant trees, that's children. The field name is reused so
+ * `formatTree` works identically in either direction.
+ */
+export function buildDescendantTree(rootId: string, allRecords: ContextRecord[]): TreeNode {
+  const childIndex = new Map<string, ContextRecord[]>();
+  for (const rec of allRecords) {
+    for (const parentId of rec.parents) {
+      const list = childIndex.get(parentId);
+      if (list === undefined) childIndex.set(parentId, [rec]);
+      else list.push(rec);
+    }
+  }
+  for (const list of childIndex.values()) {
+    list.sort((a, b) => {
+      if (a.recordedAt !== b.recordedAt) return a.recordedAt < b.recordedAt ? -1 : 1;
+      return a.id < b.id ? -1 : 1;
+    });
+  }
+  const byId = new Map(allRecords.map((r) => [r.id, r]));
+  return walkDown(rootId, byId, childIndex, new Set<string>());
+}
+
+function walkDown(
+  id: string,
+  byId: Map<string, ContextRecord>,
+  childIndex: Map<string, ContextRecord[]>,
+  ancestors: Set<string>,
+): TreeNode {
+  if (ancestors.has(id)) {
+    return { id, type: null, recordedAt: null, parents: [], marker: 'cycle' };
+  }
+  const rec = byId.get(id);
+  if (rec === undefined) {
+    return { id, type: null, recordedAt: null, parents: [], marker: 'missing' };
+  }
+  const next = new Set(ancestors);
+  next.add(id);
+  const children: TreeNode[] = [];
+  for (const child of childIndex.get(id) ?? []) {
+    children.push(walkDown(child.id, byId, childIndex, next));
+  }
+  return {
+    id,
+    type: rec.type,
+    recordedAt: rec.recordedAt,
+    parents: children,
+    marker: 'ok',
+  };
+}
+
 function nodeLabel(node: TreeNode): string {
   if (node.marker === 'missing') return `${node.id} <missing>`;
   if (node.marker === 'cycle') return `${node.id} <cycle>`;
