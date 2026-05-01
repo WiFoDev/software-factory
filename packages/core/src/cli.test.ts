@@ -168,3 +168,42 @@ describe('CLI subprocess (Bun.spawn)', () => {
     expect(stdout).toBe('OK\n');
   });
 });
+
+describe('runCli — top-level dispatch', () => {
+  test('factory init dispatches to runInit (creates scaffold in cwd)', () => {
+    const originalCwd = process.cwd();
+    const dir = tmpDir();
+    process.chdir(dir);
+    try {
+      const io = makeIo();
+      run(['init'], io.io);
+      expect(io.exitCode()).toBe(0);
+      expect(require('node:fs').existsSync(join(dir, 'package.json'))).toBe(true);
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  test('factory init --name forwards the flag', () => {
+    const originalCwd = process.cwd();
+    const dir = tmpDir();
+    process.chdir(dir);
+    try {
+      const io = makeIo();
+      run(['init', '--name', 'demo'], io.io);
+      expect(io.exitCode()).toBe(0);
+      const pkg = JSON.parse(require('node:fs').readFileSync(join(dir, 'package.json'), 'utf8'));
+      expect(pkg.name).toBe('demo');
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  test('USAGE includes init and spec review entries', () => {
+    const io = makeIo();
+    run([], io.io);
+    expect(io.exitCode()).toBe(2);
+    expect(io.stderr()).toContain('factory init');
+    expect(io.stderr()).toContain('spec review');
+  });
+});

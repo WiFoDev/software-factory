@@ -3,11 +3,14 @@ import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { runInit } from './init.js';
 import { getFrontmatterJsonSchema } from './json-schema.js';
 import { type LintError, lintSpec } from './lint.js';
 
 const USAGE = `Usage:
+  factory init [--name <pkg-name>]   Bootstrap a new factory project in cwd
   factory spec lint <path>           Lint a spec file or directory of *.md
+  factory spec review <path>         Review spec quality with LLM judges (subscription auth)
   factory spec schema [--out <file>] Print the frontmatter JSON Schema
 `;
 
@@ -32,6 +35,12 @@ const defaultIo: CliIo = {
 
 export function runCli(argv: string[], io: CliIo = defaultIo): void {
   const [domain, command, ...rest] = argv;
+  if (domain === 'init') {
+    // `factory init` is a top-level subcommand (not under `spec`). The rest
+    // of argv after `init` is forwarded to runInit verbatim.
+    runInit(argv.slice(1), io);
+    return;
+  }
   if (domain !== 'spec' || command === undefined) {
     io.stderr(USAGE);
     io.exit(2);
@@ -46,9 +55,43 @@ export function runCli(argv: string[], io: CliIo = defaultIo): void {
     runSchema(rest, io);
     return;
   }
+  if (command === 'review') {
+    // Dispatched in async fashion: the reviewer package is dynamic-imported
+    // so factory-core stays dep-free for callers that never run review.
+    runReviewDispatch(rest, io);
+    return;
+  }
 
   io.stderr(`Unknown subcommand: ${command}\n${USAGE}`);
   io.exit(2);
+}
+
+function runReviewDispatch(args: string[], io: CliIo): void {
+  // Dynamic import so factory-core does not pull spec-review into its
+  // dependency closure when the user only runs `factory spec lint` /
+  // `factory init`. The reviewer package is an optional peer dep.
+  // The package name is built at runtime so TypeScript doesn't try to
+  // resolve the optional-peer module at compile time.
+  const reviewerModule = ['@wifo', 'factory-spec-review', 'cli'].join('/').replace('/cli', '/cli');
+  void (async () => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mod = (await import(reviewerModule)) as {
+        runReviewCli: (args: string[], io: CliIo) => Promise<void>;
+      };
+      await mod.runReviewCli(args, io);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Cannot find') || msg.includes('not found')) {
+        io.stderr(
+          'spec/review-unavailable: install @wifo/factory-spec-review to use this command\n',
+        );
+      } else {
+        io.stderr(`${msg}\n`);
+      }
+      io.exit(2);
+    }
+  })();
 }
 
 function runLint(args: string[], io: CliIo): void {
