@@ -24,8 +24,6 @@ pnpm install
 
 That links the factory CLIs (`factory`, `factory-runtime`, `factory-context`) into this example's `node_modules/.bin`.
 
-> **v0.0.4 caveat:** the `@wifo/factory-*` packages are not yet published to npm (deferred to v0.0.5). Until then, this example runs only inside the monorepo where pnpm-workspace links resolve the package names locally.
-
 All commands below run from `examples/parse-size/`.
 
 ---

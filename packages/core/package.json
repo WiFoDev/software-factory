@@ -1,8 +1,19 @@
 {
   "name": "@wifo/factory-core",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Universal spec format, schema, parser, and lint CLI for software factories",
   "license": "MIT",
+  "author": "Luis (WiFoDev)",
+  "homepage": "https://github.com/WiFoDev/software-factory/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/WiFoDev/software-factory/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WiFoDev/software-factory.git",
+    "directory": "packages/core"
+  },
+  "keywords": ["software-factory", "agents", "spec-driven", "spec", "lint", "init", "cli"],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,7 +26,10 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && bun run scripts/emit-json-schema.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -1,8 +1,27 @@
 {
   "name": "@wifo/factory-spec-review",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "LLM-judged spec quality reviewer — runs subscription-paid `claude -p` judges against software-factory specs and emits findings in factory-spec-lint's output format",
   "license": "MIT",
+  "author": "Luis (WiFoDev)",
+  "homepage": "https://github.com/WiFoDev/software-factory/tree/main/packages/spec-review#readme",
+  "bugs": {
+    "url": "https://github.com/WiFoDev/software-factory/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WiFoDev/software-factory.git",
+    "directory": "packages/spec-review"
+  },
+  "keywords": [
+    "software-factory",
+    "agents",
+    "spec-driven",
+    "spec-review",
+    "judge",
+    "llm",
+    "claude"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -19,7 +38,10 @@
       "import": "./dist/cli.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

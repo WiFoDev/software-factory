@@ -9,9 +9,9 @@ export const PACKAGE_JSON_TEMPLATE = {
   type: 'module',
   scripts: {},
   dependencies: {
-    '@wifo/factory-context': '^0.0.4',
-    '@wifo/factory-core': '^0.0.4',
-    '@wifo/factory-runtime': '^0.0.4',
+    '@wifo/factory-context': '^0.0.5',
+    '@wifo/factory-core': '^0.0.5',
+    '@wifo/factory-runtime': '^0.0.5',
   },
   devDependencies: {
     '@types/bun': '^1.1.14',
@@ -63,11 +63,7 @@ runs against them via \`pnpm exec factory-runtime run docs/specs/<id>.md\`.
 pnpm install
 \`\`\`
 
-> **v0.0.4 caveat:** the \`@wifo/factory-*\` packages are not yet published to
-> npm (deferred to v0.0.5). Until then, \`pnpm install\` against this scaffold
-> requires that the workspace resolve them locally — typically by running
-> inside the software-factory monorepo, or by linking the packages via
-> pnpm overrides.
+Resolves the \`@wifo/factory-*\` deps from the public npm registry.
 
 ## The loop
 

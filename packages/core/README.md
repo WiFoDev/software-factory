@@ -25,7 +25,7 @@ Drops a minimal scaffold: `package.json` (semver deps), self-contained `tsconfig
 
 Idempotent and safe by default: if any target file or directory already exists, exits `2` with a list of conflicts and does NOT write anything (no `--force` flag).
 
-> **v0.0.4 caveat:** the `@wifo/factory-*` packages are not yet published to npm (deferred to v0.0.5). Until then, scaffolds work only inside the software-factory monorepo (or with pnpm overrides linking to the local packages).
+The scaffold's `package.json` pins `@wifo/factory-*` deps to `^0.0.5` — `pnpm install` resolves them from the public npm registry.
 
 ## Harness-enforced spec linting + review (Claude Code hook recipe)
 

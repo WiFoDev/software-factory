@@ -2,13 +2,13 @@
 
 A toolkit for **spec-driven, agent-friendly software development**. You write a spec describing the *intent* and the *scenarios* a feature must satisfy. The factory's tooling lints the spec, runs the scenarios as tests (and optionally as LLM-judged criteria for things tests can't capture), persists everything as content-addressable records, and gives you a typed convergence report with full DAG provenance.
 
-**v0.0.4 closes the spec-side feedback loop and the bootstrap gap:** `factory spec review` runs five LLM judges (subscription-paid via `claude -p`) against your spec and emits findings in the same format as `factory spec lint`. `factory init` bootstraps a fresh project (`mkdir my-thing && cd my-thing && pnpm exec factory init`). `factory-context tree --direction down` finally answers "what came out of this run?" — descendants traversal of the DAG. v0.0.1 framework, v0.0.2 single-shot agent, v0.0.3 closed loop, **v0.0.4 spec quality + bootstrap**.
+**v0.0.5 ships the toolkit to npm and tightens the implement prompt.** Every `@wifo/factory-*` package is published — `factory init`-generated scaffolds resolve `pnpm install` against the public registry. `implementPhase` now emits a stable `# Implementation guidelines` prefix above the spec on every iteration so the prompt cache hits consistently. v0.0.1 framework, v0.0.2 single-shot agent, v0.0.3 closed loop, v0.0.4 spec quality + bootstrap, **v0.0.5 publish + implement-guidelines**.
 
 Inspired by the [StrongDM Software Factory](https://factory.strongdm.ai/) model.
 
 ---
 
-## What you get today (v0.0.4)
+## What you get today (v0.0.5)
 
 The recommended end-to-end shape — same flow whether you implement by hand or let the agent do it:
 
@@ -275,14 +275,12 @@ One spec per file, named after the spec's `id` frontmatter (kebab-case). Specs l
 - **`factory init`** — bootstrap a new project: `mkdir my-thing && cd my-thing && pnpm exec factory init`. Drops `package.json` (semver deps), self-contained `tsconfig.json`, `.gitignore`, `README.md`, plus the canonical `docs/{specs,technical-plans}/done/` + `src/` skeleton. Idempotent + safe (preexisting target → exit 2, zero writes).
 - **`factory-context tree --direction <up|down>`** — finally answers "what came out of this run?". Default `up` (backward-compat) walks ancestors; `down` builds an inverted child-index from `listRecords` once and DFSes down.
 
-## What's missing from v0.0.4
+## What's missing from v0.0.5
 
-- **npm publish.** Workspace deps still resolve via `pnpm-workspace.yaml`; standalone `pnpm install` against a `factory init`-generated scaffold won't find `@wifo/factory-*`. Top v0.0.5 deliverable.
-- **`implementPhase` behavior-prior prompt prefix.** A stable `# Implementation guidelines` section before `# Spec` to install behavior bias (no speculative abstractions, surgical edits, verifiable success criteria) into every implement spawn. Deferred to v0.0.5; see [BACKLOG.md](./BACKLOG.md).
 - **PostToolUse hook for `factory spec lint` + `review`.** Now that the reviewer ships, the hook can chain both. Lives in `~/.claude/settings.json`, not in this repo.
 - **Worktree sandbox.** The agent runs in the spec's project root cwd. Git is your undo button.
 - **`explorePhase` / `planPhase`.** Deferred. Will revisit if a real run thrashes on plan-making rather than implementation.
-- **Holdout-aware automated convergence.** `validatePhase` runs visible scenarios; running holdouts at the end of every iteration as a convergence gate is a v0.0.5+ candidate.
+- **Holdout-aware automated convergence.** `validatePhase` runs visible scenarios; running holdouts at the end of every iteration as a convergence gate is a v0.0.6+ candidate.
 - **Streaming cost monitoring.** Both cost caps are post-hoc.
 - **Scheduler (Layer 5).** Pulls `status: ready` specs and runs them overnight. The end-state of the roadmap.
 

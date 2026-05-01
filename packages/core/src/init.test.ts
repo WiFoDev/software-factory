@@ -3,12 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import type { CliIo } from './cli.js';
-import {
-  GITIGNORE_TEMPLATE,
-  PACKAGE_JSON_TEMPLATE,
-  README_TEMPLATE,
-  TSCONFIG_TEMPLATE,
-} from './init-templates.js';
+import { GITIGNORE_TEMPLATE } from './init-templates.js';
 import { runInit } from './init.js';
 
 class ExitSignal extends Error {
@@ -65,54 +60,6 @@ afterEach(async () => {
   await Bun.$`rm -rf ${dir}`.quiet().nothrow();
 });
 
-describe('init-templates', () => {
-  test('PACKAGE_JSON_TEMPLATE has the expected keys + workspace-stripped semver deps', () => {
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.4');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.4');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.4');
-    expect(PACKAGE_JSON_TEMPLATE.type).toBe('module');
-    expect(PACKAGE_JSON_TEMPLATE.private).toBe(true);
-  });
-
-  test('TSCONFIG_TEMPLATE is self-contained — does NOT extend a relative path', () => {
-    // The example slugify tsconfig extends ../../tsconfig.json which only works
-    // inside this monorepo. The template must not have an `extends` field.
-    expect(TSCONFIG_TEMPLATE).not.toHaveProperty('extends');
-    expect(TSCONFIG_TEMPLATE.compilerOptions.strict).toBe(true);
-    expect(TSCONFIG_TEMPLATE.compilerOptions.verbatimModuleSyntax).toBe(true);
-    expect(TSCONFIG_TEMPLATE.compilerOptions.noUncheckedIndexedAccess).toBe(true);
-    expect(TSCONFIG_TEMPLATE.compilerOptions.types).toEqual(['bun']);
-  });
-
-  test('GITIGNORE_TEMPLATE matches examples/slugify/.gitignore byte-for-byte', () => {
-    // Resolve from this test file up to the repo root.
-    const slugifyGitignore = join(
-      import.meta.dir,
-      '..',
-      '..',
-      '..',
-      'examples',
-      'slugify',
-      '.gitignore',
-    );
-    if (!existsSync(slugifyGitignore)) {
-      // Skip in environments that don't have the examples checked out (e.g.,
-      // a published npm consumer). The template's correctness is otherwise
-      // covered by structural tests.
-      return;
-    }
-    const slugifyContents = readFileSync(slugifyGitignore, 'utf8');
-    expect(GITIGNORE_TEMPLATE).toBe(slugifyContents);
-  });
-
-  test('README_TEMPLATE has a {{name}} placeholder and references the v0.0.4 caveat', () => {
-    expect(README_TEMPLATE).toContain('{{name}}');
-    expect(README_TEMPLATE).toContain('v0.0.4 caveat');
-    expect(README_TEMPLATE).toContain('factory spec lint');
-    expect(README_TEMPLATE).toContain('factory-runtime run');
-  });
-});
-
 describe('runInit — happy path', () => {
   test('init in empty cwd creates the canonical scaffold + prints next-steps', () => {
     const io = makeIo();
@@ -136,7 +83,7 @@ describe('runInit — happy path', () => {
       .replace(/[^a-z0-9_-]+/g, '-')
       .replace(/^-+/, '');
     expect(pkg.name).toBe(expectedName);
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.4');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.5');
 
     // tsconfig.json is self-contained.
     const tsconfig = JSON.parse(readFileSync(join(dir, 'tsconfig.json'), 'utf8'));

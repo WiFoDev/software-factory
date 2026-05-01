@@ -10,9 +10,9 @@ The reviewer is the **spec-side** analog of the harness: harness scores `judge:`
 
 ## Install
 
-Inside the software-factory monorepo: workspace dependency, no install needed.
-
-Standalone (post-v0.0.5): `pnpm add -D @wifo/factory-spec-review @wifo/factory-core`.
+```sh
+pnpm add -D @wifo/factory-spec-review @wifo/factory-core
+```
 
 ## Usage
 

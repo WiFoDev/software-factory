@@ -1,8 +1,19 @@
 {
   "name": "@wifo/factory-harness",
-  "version": "0.0.0",
+  "version": "0.0.5",
   "description": "Scenario runner for software-factory specs — runs `test:` satisfaction lines and scores `judge:` lines via LLM",
   "license": "MIT",
+  "author": "Luis (WiFoDev)",
+  "homepage": "https://github.com/WiFoDev/software-factory/tree/main/packages/harness#readme",
+  "bugs": {
+    "url": "https://github.com/WiFoDev/software-factory/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WiFoDev/software-factory.git",
+    "directory": "packages/harness"
+  },
+  "keywords": ["software-factory", "agents", "spec-driven", "harness", "scenarios", "judge", "llm"],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,7 +26,10 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
