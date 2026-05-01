@@ -37,6 +37,25 @@ importers:
         specifier: ^1.1.14
         version: 1.3.13
 
+  examples/parse-size:
+    dependencies:
+      '@wifo/factory-context':
+        specifier: workspace:*
+        version: link:../../packages/context
+      '@wifo/factory-core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@wifo/factory-runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@wifo/factory-spec-review':
+        specifier: workspace:*
+        version: link:../../packages/spec-review
+    devDependencies:
+      '@types/bun':
+        specifier: ^1.1.14
+        version: 1.3.13
+
   examples/slugify:
     dependencies:
       '@wifo/factory-context':

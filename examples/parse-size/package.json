@@ -1,0 +1,17 @@
+{
+  "name": "example-parse-size",
+  "version": "0.0.0",
+  "description": "v0.0.4 walkthrough — parseSize(text) → bytes. Demonstrates factory init + factory spec review + factory-runtime + factory-context tree --direction down end-to-end.",
+  "private": true,
+  "type": "module",
+  "scripts": {},
+  "dependencies": {
+    "@wifo/factory-context": "workspace:*",
+    "@wifo/factory-core": "workspace:*",
+    "@wifo/factory-runtime": "workspace:*",
+    "@wifo/factory-spec-review": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14"
+  }
+}

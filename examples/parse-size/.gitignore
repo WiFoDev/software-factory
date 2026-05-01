@@ -1,0 +1,5 @@
+node_modules
+.factory
+.factory-spec-review-cache
+*.log
+.DS_Store
