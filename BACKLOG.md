@@ -102,6 +102,26 @@ Mild lean toward `--direction` flag: zero new commands, one well-scoped flag, an
 
 ---
 
+## `implementPhase`: behavior-prior prompt prefix
+
+**What:** Add a stable `# Implementation guidelines` section to `implementPhase`'s `buildPrompt` (placed before `# Spec`, after any system-message preamble) that bakes in four behavior priors for the spawned agent: (1) state assumptions / surface tradeoffs before coding; (2) write the minimum code that solves the problem — no speculative abstractions; (3) surgical edits — touch only what the task requires, no adjacent "improvements"; (4) define verifiable success criteria and loop until met. The exact wording adapts the four-section guideline ("Think Before Coding / Simplicity First / Surgical Changes / Goal-Driven Execution") and lives as a constant in `packages/runtime/src/phases/implement.ts` so it's stable across iterations (prompt-cache friendly).
+
+**Why:** Today every `implementPhase` spawn gets the spec, the prior validate-report (iter ≥ 2), and the working dir — but no behavior priors. The agent's defaults skew toward speculative abstraction and adjacent refactoring, both of which inflate iteration count and trip cost caps. A stable prompt prefix is the cheapest place to install behavior bias: the spec drives *what* to build; the prefix drives *how* the agent should reason while building. This is the runtime-side analog of the spec reviewer (v0.0.4) — reviewer fixes specs; this fixes implementer behavior. Most useful when paired with `# Prior validate report` (iter ≥ 2) — the agent that reads prior failures with these priors loaded is more likely to make a surgical fix than a speculative rewrite.
+
+**Where it lives:**
+- `packages/runtime/src/phases/implement.ts`: new `IMPLEMENTATION_GUIDELINES` constant, emitted unconditionally as the first section of `buildPrompt`'s output. Stable across iterations so the bytes are identical and prompt caching applies.
+- Tests in `src/phases/implement.test.ts`: `buildPrompt` output starts with the guidelines section; the section is byte-equal across multiple invocations (cache-stability gate); section length stays under a target (~500 tokens / ~2 KB) so it doesn't eat into the per-phase cap.
+
+**Costs to be honest about:**
+- Adds ~2 KB to every implement prompt → ~500 tokens × N iterations × every run. Against the 100k per-phase cap that's <1%; against the 500k whole-run cap (5 iters) it's ~2.5%. Documented in the README; bump caps if needed.
+- Requires light prompt-engineering iteration to find the wording that actually shifts behavior (the four-section guideline is a starting point, not a finished prompt). v0.0.5 should ship one phrasing; future point releases tune it based on observed convergence rates.
+
+**Touches:** `packages/runtime/src/phases/implement.ts` (add constant + emit), `packages/runtime/src/phases/implement.test.ts` (presence + stability + length tests), `packages/runtime/README.md` (release notes — explain the prefix, the cache-stability invariant, the budget impact).
+
+**Phasing suggestion:** ship in v0.0.5 alongside the scheduler if scheduler lands; otherwise as a v0.0.4.x point release. Small enough (~50 LOC including tests) to not gate any larger work.
+
+---
+
 ## `factory-runtime`: `explorePhase` + `planPhase`
 
 **What:** Two new built-in phases that run before `implement`: `explore` (read the codebase, summarize what exists) and `plan` (propose a concrete change set). The agent gets focused context for `implement` rather than synthesizing it from scratch every iteration.
