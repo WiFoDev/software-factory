@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { runInit } from './init.js';
 import { getFrontmatterJsonSchema } from './json-schema.js';
@@ -70,28 +70,55 @@ function runReviewDispatch(args: string[], io: CliIo): void {
   // Dynamic import so factory-core does not pull spec-review into its
   // dependency closure when the user only runs `factory spec lint` /
   // `factory init`. The reviewer package is an optional peer dep.
-  // The package name is built at runtime so TypeScript doesn't try to
-  // resolve the optional-peer module at compile time.
-  const reviewerModule = ['@wifo', 'factory-spec-review', 'cli'].join('/').replace('/cli', '/cli');
+  //
+  // Resolution must start from the CONSUMER's cwd (not from this CLI
+  // module's location). When the CLI is invoked via a workspace symlink
+  // at `<consumer>/node_modules/.bin/factory`, both ESM import() AND
+  // createRequire().resolve() fall back to packages/core/ as the base —
+  // where @wifo/factory-spec-review is NOT a dep. We walk node_modules
+  // up from process.cwd() manually to find it.
   void (async () => {
     try {
+      const pkgRoot = findPackageRoot(process.cwd(), '@wifo/factory-spec-review');
+      if (pkgRoot === null) {
+        io.stderr(
+          'spec/review-unavailable: install @wifo/factory-spec-review to use this command\n',
+        );
+        io.exit(2);
+        return;
+      }
+      const cliPath = join(pkgRoot, 'dist', 'cli.js');
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mod = (await import(reviewerModule)) as {
+      const mod = (await import(pathToFileURL(cliPath).href)) as {
         runReviewCli: (args: string[], io: CliIo) => Promise<void>;
       };
       await mod.runReviewCli(args, io);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('Cannot find') || msg.includes('not found')) {
-        io.stderr(
-          'spec/review-unavailable: install @wifo/factory-spec-review to use this command\n',
-        );
-      } else {
-        io.stderr(`${msg}\n`);
-      }
+      io.stderr(`${msg}\n`);
       io.exit(2);
     }
   })();
+}
+
+/**
+ * Walk up node_modules from `cwd` looking for `<cur>/node_modules/<pkgName>/`.
+ * Returns the absolute path to the package's root if found, else null.
+ * Handles pnpm workspace symlinks transparently (statSync follows the symlink).
+ */
+function findPackageRoot(cwd: string, pkgName: string): string | null {
+  let cur = resolve(cwd);
+  while (true) {
+    const candidate = join(cur, 'node_modules', pkgName);
+    try {
+      if (statSync(candidate).isDirectory()) return realpathSync(candidate);
+    } catch {
+      // not present at this level
+    }
+    const parent = dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
 }
 
 function runLint(args: string[], io: CliIo): void {

@@ -247,24 +247,17 @@ function collectMarkdownFiles(target: string): string[] {
 }
 
 function autoResolveTechnicalPlan(specFile: string): string | undefined {
-  // Probe the four canonical locations:
-  //   docs/specs/<id>.md ↔ docs/technical-plans/<id>.md
-  //   docs/specs/done/<id>.md ↔ docs/technical-plans/done/<id>.md
-  // We replace the `specs` segment with `technical-plans` in the spec's path.
-  const dir = dirname(specFile);
-  const filename = specFile.slice(dir.length + 1);
+  // Probe the canonical layouts:
+  //   docs/specs/<id>.md            ↔ docs/technical-plans/<id>.md
+  //   docs/specs/done/<id>.md       ↔ docs/technical-plans/done/<id>.md
+  // Replace the `/specs/` segment with `/technical-plans/` in the spec path.
+  // Must guard against no-op replaces — if the segment isn't present, replace()
+  // returns the unchanged path, which (being the spec file itself) would
+  // existsSync as true and silently feed the spec back as its own "plan".
   const candidates: string[] = [];
-  if (dir.includes(`${'/'}specs${'/'}`) || dir.endsWith(`${'/'}specs`)) {
-    candidates.push(specFile.replace(/\/specs\//g, '/technical-plans/'));
-    candidates.push(specFile.replace(/\/specs$/, '/technical-plans'));
-  }
-  if (dir.endsWith('/specs/done') || dir.endsWith('/specs')) {
-    candidates.push(
-      join(
-        dir.replace('/specs/done', '/technical-plans/done').replace('/specs', '/technical-plans'),
-        filename,
-      ),
-    );
+  if (specFile.includes('/specs/')) {
+    const replaced = specFile.replace(/\/specs\//g, '/technical-plans/');
+    if (replaced !== specFile) candidates.push(replaced);
   }
   for (const c of candidates) {
     if (existsSync(c)) return c;
