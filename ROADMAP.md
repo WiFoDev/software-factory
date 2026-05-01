@@ -204,3 +204,7 @@ If we drift from this anchor, these are the symptoms:
 - **Real users describe products the factory can't ship.** The URL-shortener test case is *one* shape. Mobile apps, ETL pipelines, ML training scripts — each is a different decomposition. Domain packs (v1.0.0) close those gaps, but not before we've shipped 3+ products of each shape manually first.
 
 If we drift, this file is the anchor. Update it deliberately, not silently.
+
+### Empirical ground truth
+
+Drift signals above are heuristic. The empirical check is in [`BASELINE.md`](./BASELINE.md) — each minor version runs the canonical URL-shortener prompt against a fresh repo and captures friction in a structured per-version entry. If the friction list stops shrinking version-over-version, the roadmap is wandering. The canonical prompt at [`docs/baselines/url-shortener-prompt.md`](./docs/baselines/url-shortener-prompt.md) is byte-stable across versions on purpose — only the factory changes between runs.
