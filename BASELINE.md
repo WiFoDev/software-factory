@@ -43,9 +43,9 @@ A small JSON-over-HTTP URL shortener with click tracking. In-memory storage, nat
 
 #### Run history
 
-##### v0.0.5 — pending
+##### v0.0.5 — shipped 2026-05-01
 
-The first baseline. The maintainer manually decomposes into 4 specs and runs them in sequence. `/scope-project` does not yet exist; `depends-on` is not yet a frontmatter field; `factory-runtime run-sequence` does not yet exist.
+The first baseline. The maintainer manually decomposed into 4 specs and ran them in sequence. `/scope-project` did not yet exist; `depends-on` was not yet a frontmatter field; `factory-runtime run-sequence` did not yet exist.
 
 **Predictions (locked in before the run):**
 
@@ -55,27 +55,57 @@ The first baseline. The maintainer manually decomposes into 4 specs and runs the
 4. **Status flipping tax.** Manually flipping `status: drafting` → `status: ready` between specs is small but real friction.
 5. **Possibly the harness backtick gotcha.** The prompt warns about it explicitly, but if Claude slips, a spec will appear to "fail" until spotted.
 
-**Actuals (filled in after the run):**
+**Actuals:**
 
-| Spec | Iterations | Wall-clock | Tokens (in+out) | Notes |
-|---|---|---|---|---|
-| url-shortener-core | _ | _ | _ | _ |
-| url-shortener-redirect | _ | _ | _ | _ |
-| url-shortener-tracking | _ | _ | _ | _ |
-| url-shortener-stats | _ | _ | _ | _ |
-| **Total** | _ | _ | _ | — |
+| Spec | Iterations | Wall-clock (run only) | Notes |
+|---|---|---|---|
+| url-shortener-core | 1 | — | clean converge |
+| url-shortener-redirect | 1 | — | clean converge |
+| url-shortener-tracking | 1 | — | clean converge |
+| url-shortener-stats | 1 | — | clean converge |
+| **Total (all 4 runs)** | **4** | **7m 3s (423 s)** | every spec converged first try |
+
+| Metric | Value |
+|---|---|
+| Total iterations | 4 (1 per spec) |
+| Wall-clock total | 7m 3s |
+| Tokens (raw input + output) | 22,703 |
+| Tokens (cache-aware total) | 2,920,000 |
+| **Implied prompt-cache hit rate** | **~99%** — the v0.0.5 `IMPLEMENTATION_GUIDELINES` byte-stability investment is doing real work |
+| Tests | 14/14 passing |
+| End-to-end live `curl` | verified |
+| Commits produced | 7 (4 spec ships + scaffold + JOURNAL.md + final) |
 
 **Top friction points (ranked, post-run):**
 
-1. _(fill in)_
-2. _(fill in)_
-3. _(fill in)_
+1. **Manual decomposition + no inter-spec dependency graph.** What `/scope-project` + `depends-on` + sequence-runner will collapse into one command. **Validated** — this was prediction #1+#2, and it was the dominant friction. v0.0.6's centerpiece is correctly aimed.
+2. **`factory init` is incomplete on first contact.** Three sub-issues: (a) `@wifo/factory-spec-review` is not in the scaffold's deps even though it's invoked by `factory spec review` via dynamic import; (b) `.factory-spec-review-cache` is missing from the scaffold gitignore; (c) no `factory.config.json` defaults file for canonical run flags (`--max-iterations 5`, `--max-total-tokens 1000000`, `--no-judge`). **NEW signal — not in the prediction list.**
+3. **`filesChanged` in implement-reports is unreliable both ways.** False negative for runs that only create new files (spec 2 reported empty `filesChanged` despite creating the HTTP server module). False positive when there are pre-run uncommitted changes (spec 1's `filesChanged` was contaminated by the JOURNAL.md edit that hadn't been committed yet). The audit field cannot be trusted as "what did the agent touch" today. **NEW signal — not in the prediction list.**
 
-**Mapped BACKLOG entries:** _(which BACKLOG items would have removed each friction point above? cross-reference by name)_
+**Mapped BACKLOG entries:**
+- Friction #1 → "Real-product workflow — close the project-scale gap" (existing v0.0.6 cluster: `/scope-project`, `depends-on`, sequence-runner)
+- Friction #2 → NEW entry: `factory init` ergonomics — first-contact gaps (added below)
+- Friction #3 → NEW entry: `factory-implement-report.filesChanged` is unreliable (added below)
 
-**Surprises (not in the prediction list):** _(fill in — these are the highest-value entries; they expose blind spots about where the friction actually lives)_
+**Predicted-vs-actual scoring:**
 
-**Final answer to "would you want to use the factory for the next product?"** _(fill in — one sentence)_
+| Prediction | Outcome | Notes |
+|---|---|---|
+| #1 Decomposition | ✅ Landed | Exactly the dominant friction, as expected |
+| #2 Cross-spec dep invisibility | ✅ Landed (collapsed into #1) | The two are facets of the same pain |
+| #3 Context-dir reuse oddness | ❓ Did not surface | Probably absorbed because every spec converged in 1 iteration — there was no need to walk the multi-run DAG. Will likely show on a less-clean product |
+| #4 Status flipping tax | ❓ Did not surface | Same reason — small enough to absorb when the workflow is moving fast |
+| #5 Harness backtick gotcha | ❌ Did not land | The explicit warning in the prompt prevented it. Confirms the workaround works; the harness fix is still worth shipping (so the warning becomes unnecessary) |
+
+**Surprises (the high-value entries — these expose where the friction actually lives):**
+
+- **Cache hit rate is the real v0.0.5 win.** 22,703 raw tokens / 2.92M cache-aware = ~99% cache reuse. The `IMPLEMENTATION_GUIDELINES` byte-stability invariant pays off MORE than the iteration-count theory predicted. Re-running the same spec is essentially free; iterating mid-spec is essentially free; the prompt-prefix design is a quiet but huge unlock.
+- **`factory init`'s first-contact UX matters more than I weighted it.** Two of the three sub-issues in friction #2 (missing spec-review dep + missing cache gitignore) are 1-line fixes that make the difference between "the toolchain works on a fresh repo" and "the maintainer has to add things by hand." Worth a v0.0.5.x point release.
+- **`filesChanged` audit reliability is a trust issue, not a UX issue.** This affects the provenance contract — `factory-context tree` and `get` are supposed to tell you *exactly* what the agent touched. Right now they don't. This was fully invisible until a real product run with a non-trivial git state.
+
+**Would you want to use the factory for the next product?**
+
+Yes — the per-feature sweet spot is real and the prompt cache makes it cheap. The friction is concrete and addressable: friction #1 is what v0.0.6 already targets; #2 and #3 land in BACKLOG below as v0.0.5.x candidates. **Net signal: the v0.0.6 roadmap is correctly aimed; nothing about this run suggests a re-theme.**
 
 ##### v0.0.6 — pending
 

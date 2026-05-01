@@ -142,6 +142,54 @@ Three pitfalls surfaced when `factory-runtime` ran against the three v0.0.5 spec
 
 ---
 
+## Lessons from the v0.0.5 URL-shortener baseline run
+
+Two friction points surfaced that weren't in the BASELINE.md prediction list (see the v0.0.5 entry's "Surprises" section). Both are 1-2 day fixes with concrete blast radius; both come from a real product run, not from speculation.
+
+### `factory init` — first-contact gaps
+
+**What:** Three specific things `factory init` doesn't do today that bite a fresh consumer the moment they invoke `factory spec review` or run a non-trivial agent loop:
+
+1. `@wifo/factory-spec-review` is not in the scaffolded `package.json`. The reviewer is invoked via dynamic import from `cwd`'s `node_modules` (per the v0.0.4 dispatch design), but if it's not in deps, `pnpm install` doesn't fetch it, and `factory spec review` fails with `spec/review-unavailable: install @wifo/factory-spec-review to use this command`. The fix is one entry in `PACKAGE_JSON_TEMPLATE.devDependencies`.
+2. `.factory-spec-review-cache` is not in `GITIGNORE_TEMPLATE`. After the first `factory spec review` run, the cache directory shows up in `git status` and the user has to add the line themselves (or accidentally commit cache hashes).
+3. No `factory.config.json` defaults file. The canonical run flags for non-trivial workloads (`--max-iterations 5`, `--max-total-tokens 1000000`, `--no-judge` when the user doesn't have an Anthropic API key) are documented in READMEs but not codified anywhere the runtime reads. The user types the same flags every invocation. A `factory.config.json` at the project root with these defaults — read by `factory-runtime run` if present — closes the loop.
+
+**Why:** These are first-contact UX issues. The v0.0.5 BASELINE run hit all three on a fresh `factory init`-generated repo. The maintainer worked around each by hand; future consumers shouldn't have to.
+
+**Where it lives:**
+- `packages/core/src/init-templates.ts` — extend `PACKAGE_JSON_TEMPLATE.devDependencies` with `@wifo/factory-spec-review: ^0.0.5`; extend `GITIGNORE_TEMPLATE` with `.factory-spec-review-cache`; new `FACTORY_CONFIG_TEMPLATE` const + add to `planFiles`.
+- `packages/core/src/init.ts` — emit the new file.
+- `packages/runtime/src/cli.ts` — read `factory.config.json` if present in cwd; CLI flags override config values; document precedence order.
+- `packages/core/src/init.test.ts` — assert all three.
+- `packages/core/README.md` — document `factory.config.json` shape.
+
+**Phasing suggestion:** v0.0.5.x point release. Low-risk; high first-contact UX win. The first two sub-issues are 1-line config edits. The `factory.config.json` runtime read is ~30 LOC + tests in the runtime package.
+
+### `factory-implement-report.filesChanged` is unreliable
+
+**What:** The runtime captures `filesChanged` post-implement via a git-diff snapshot. Two failure modes both surfaced in the v0.0.5 BASELINE run:
+
+1. **False negative on new-file-only runs.** Spec 2 (`url-shortener-redirect`) created `src/server.ts` from scratch — purely new files, no modifications to tracked code. The implement-report's `filesChanged` came back empty even though the agent created multiple files. Probably because `git diff` (without `--stat` on staged paths) doesn't report untracked files by default.
+2. **False positive on pre-run uncommitted changes.** Spec 1's `filesChanged` included `JOURNAL.md` because that file had uncommitted edits in the working tree before the run started — and the post-run diff couldn't distinguish "agent touched it" from "was already dirty."
+
+Together, these mean the `filesChanged` field on `factory-implement-report` cannot be trusted as "what did the agent touch this iteration." The audit contract is broken.
+
+**Why:** The provenance trail is the factory's central trust mechanism — `factory-context tree` and `factory-context get` are how a maintainer reconstructs what happened during a run. If `filesChanged` lies, the trail lies. Worth fixing before `factory-runtime` is used for any compliance-relevant work.
+
+**The fix:**
+- Snapshot `git status --porcelain` AND `git stash --include-untracked` (or equivalent — snapshot the FULL working-tree state including untracked files) BEFORE the implement phase starts.
+- After the implement phase, diff the post-state against the pre-state snapshot.
+- Capture both new/created files (untracked → tracked or untracked → untracked-but-different-content) and modified files (tracked changes).
+- Pre-existing dirty paths get filtered out (they were dirty before; not the agent's work).
+
+**Where it lives:** `packages/runtime/src/phases/implement.ts` — extend the file-diff capture logic. The current implementation is in the "build implement-report" path (look for the existing `filesChanged` population code).
+
+**Touches:** `packages/runtime/src/phases/implement.ts` (~50 LOC including the snapshot/diff logic), `packages/runtime/src/phases/implement.test.ts` (~80 LOC including new fixtures for new-file-only and pre-dirty cases), maybe a small helper module if the diff logic gets non-trivial.
+
+**Phasing suggestion:** v0.0.5.x or v0.0.6 — affects audit trustworthiness, not user-facing UX. Tie-breaker: ship after the `factory init` fixes if v0.0.5.x ships; bundle into v0.0.6 if not. Either way, not gated on real-product workflow work — these are independent.
+
+---
+
 ## Real-product workflow — close the project-scale gap
 
 The factory's sweet spot today (verified by slugify, gh-stars-{v1,v2}, parse-size, and the v0.0.5 self-build moneyball) is **one feature per spec**. The natural next step is a real product — "build a URL shortener with stats dashboard." That's not one spec, it's a sequence of 4-6 specs in dependency order: `core` → `redirect` → `tracking` → `stats` → `dashboard`.
