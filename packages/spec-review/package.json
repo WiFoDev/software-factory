@@ -1,0 +1,35 @@
+{
+  "name": "@wifo/factory-spec-review",
+  "version": "0.0.4",
+  "description": "LLM-judged spec quality reviewer — runs subscription-paid `claude -p` judges against software-factory specs and emits findings in factory-spec-lint's output format",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "factory-spec-review": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test src"
+  },
+  "dependencies": {
+    "@wifo/factory-core": "workspace:*",
+    "@wifo/factory-harness": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14"
+  }
+}
