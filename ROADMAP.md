@@ -98,34 +98,45 @@ What's in your hands today:
 
 ## v0.0.6 — next
 
-**Theme:** worktree sandbox + holdout-aware convergence.
+**Theme: real-product workflow.** v0.0.5 validated the per-feature spec sweet spot — `factory-runtime` shipped slugify, gh-stars, parse-size, and the v0.0.5 self-build (3 specs in sequence) cleanly. The next ceiling is **products**, not features. A "URL shortener with stats dashboard" is a sequence of 4-6 specs in dependency order (`core` → `redirect` → `tracking` → `stats` → `dashboard`); manually decomposing and sequencing them is the friction that v0.0.6 removes.
 
-### Lead candidates
+### Lead candidates (re-themed from prior v0.0.6)
 
 | # | Piece | Notes |
 |---|---|---|
-| 1 | **Worktree sandbox** | Agent runs in an isolated `git worktree` per run. Stronger undo guarantees than "use git as your undo button." |
-| 2 | **Holdout-aware automated convergence** | Validate runs holdouts at the end of every iteration; convergence requires both visible AND holdout passes. Optional `--check-holdouts` flag. |
-| 3 | **PostToolUse hook for `factory spec lint`/`review`** | Harness-enforced linting on every `Write` to `docs/specs/*.md` — agent literally cannot skip. Lives in `~/.claude/settings.json`. Now that the reviewer ships, the hook can chain both checkers. |
-| 4 | **Streaming cost monitoring** | Mid-stream abort instead of post-hoc. Worth pursuing once cost-cap-exceeded events become common enough. |
-| 5 | **CI publish workflow** | Promote the manual `pnpm release` to a tag-driven GitHub Actions workflow. Deferred from v0.0.5 until the manual flow has soaked. |
+| 1 | **`/scope-project` slash command** | Natural-language project description → N specs in dependency order under `docs/specs/`. First spec ships `status: ready`; the rest `status: drafting` until the prior spec converges. ~30 LOC of slash-command markdown in `~/.claude/commands/`. **Centerpiece of v0.0.6 — biggest UX win in the BACKLOG.** |
+| 2 | **`depends-on` frontmatter field** | Optional `depends-on: [<id>, ...]` on `SpecFrontmatter`. `factory spec lint` validates id format; `cross-doc-consistency` reviewer judge reads dep specs when scoring. Pairs with `/scope-project`. Field-level addition; zero new public exports. |
+| 3 | **PostToolUse hook for `factory spec lint`/`review`** | Carryover from prior v0.0.6 candidate. Harness-enforced linting on every `Write` to `docs/specs/*.md`. Now that `/scope-project` writes multiple specs at once, the hook becomes more valuable. Lives in `~/.claude/settings.json` — opt-in config recipe. |
+| 4 | **CI publish workflow** | Promote `pnpm release` to a tag-driven GitHub Actions workflow. Deferred from v0.0.5 until the manual flow soaked. v0.0.5 has soaked one cycle (this release); v0.0.6 is the right time. |
+
+### Deferred from prior v0.0.6 (now v0.0.7+)
+
+- **Worktree sandbox** — agent isolation. Real safety win, but not the binding constraint right now. The binding constraint is "I can't easily build a real product" — fix that first.
+- **Holdout-aware automated convergence** — same logic. Quality knob, not the UX bottleneck.
+- **Streaming cost monitoring** — speculative; defer until cost-cap-exceeded is common.
 
 ### Scope discipline
 
-The v0.0.5 lesson was "metadata-only changes can still be coordinated work — keep the version-bump in lockstep across the workspace." For v0.0.6 the worktree sandbox is the highest-leverage agent-loop guarantee; holdout-aware convergence makes spec quality a runtime invariant. Ship those two together; bundle the hook if it falls out cheaply; defer streaming + CI publish if any slip.
+The v0.0.5 moneyball lesson plus the URL-shortener-mental-model conversation re-themed this release. The original v0.0.6 ("worktree + holdout") was about *agent guarantees* for solo features. The new v0.0.6 is about **product-scale orchestration**, because that's the gap real users hit first when they try to use the factory for actual work. Worktree and holdout-aware are great hardening — they belong in v0.0.7 once `/scope-project` has unblocked the real-product flow.
+
+Ship `/scope-project` + `depends-on` together (they're two halves of the same UX). Bundle the hook + CI publish if they fall out cheaply. The point release window after v0.0.6 should be calibrated against real-product pain — if you've shipped a URL shortener manually-sequenced, you'll know exactly which v0.0.7 candidate matters most.
 
 ---
 
 ## v0.0.7+ — future
 
-The post-publish work. Roughly ordered by leverage; not committed.
+The post-real-product work. Roughly ordered by leverage; not committed.
 
 | Theme | Lead candidate from BACKLOG.md |
 |---|---|
-| **Scheduler (Layer 5)** — autonomous task queue | Pull `status: ready` specs and run them overnight. The end-state. |
-| **Reviewer's deferred judges** | `review/api-surface-drift`, `review/feasibility`, `review/scope-creep`. Each ships with a "this real spec would have caught X" justification. |
+| **Spec-sequence runner** (`factory-runtime run-sequence`) | One CLI command walks the `depends-on` DAG and runs specs in topological order. Gated on evidence — trigger when the manual sequencing in v0.0.6 has become annoying enough to be specific about. |
+| **Worktree sandbox** | Agent runs in an isolated `git worktree` per run. Strong undo by construction. Pushed from v0.0.6 to here; ship after `/scope-project` proves the product workflow. |
+| **Holdout-aware automated convergence** | Validate runs holdouts at the end of every iteration; convergence requires both visible AND holdout passes. Quality knob; ride alongside worktree. |
+| **Scheduler (Layer 5)** — autonomous task queue | Pull `status: ready` specs and run them overnight. With `depends-on` declared, the scheduler can walk a project's DAG without human intervention. The end-state. |
+| **Reviewer's deferred judges** | `review/api-surface-drift`, `review/feasibility`, `review/scope-creep`. Each ships per-judge with a "this real spec would have caught X" justification. |
 | **`explorePhase` / `planPhase`** | Separate "understand the codebase" and "plan the change" steps. Speculative — only if a real run shows `implement` is too low-context. |
-| **Domain packs** — schema + judges + twins per domain | `@wifo/factory-pack-web`, `-pack-api`; OLH-specific pack stays private. |
+| **Domain packs** — schema + judges + twins per domain | `@wifo/factory-pack-web`, `-pack-api`; OLH-specific pack stays private. v1.0.0 territory. |
+| **Streaming cost monitoring** | Mid-stream abort instead of post-hoc. Worth pursuing once cost-cap-exceeded events become common enough. |
 | **Multi-agent coordination** | Beyond a single agent per phase. Out of scope until single-agent's ceiling is clearly hit. |
 
 ---
@@ -155,6 +166,41 @@ Stating these explicitly so we don't drift:
 
 ## What this roadmap commits us to
 
-The end state is **a software factory you can hand a spec and walk away from**. v0.0.2 was the first step where the agent does work; v0.0.3 is the first version where the agent does *all* the work between human-meaningful checkpoints. v0.0.4 closes the spec-side feedback loop so spec quality stops being the ceiling on agent output. v0.0.5 puts the toolkit on npm so the loop can run from a fresh `pnpm install`. Anything past v0.0.5 is leverage, not unlock.
+The end state is **a software factory you can hand a product description to and walk away from**. v0.0.2 was the first step where the agent does work; v0.0.3 is the first version where the agent does *all* the work between human-meaningful checkpoints. v0.0.4 closes the spec-side feedback loop so spec quality stops being the ceiling on agent output. v0.0.5 puts the toolkit on npm so the loop can run from a fresh `pnpm install`. v0.0.6 closes the **product-scale gap** so the loop scales from one feature to a sequence of features. Anything past v0.0.6 is leverage, not unlock.
+
+### The end-state UX, made concrete
+
+The canonical test case is **"build a URL shortener with a stats dashboard."** That product description should yield, with no further intervention beyond reviewing each spec before it ships:
+
+```sh
+# Step 1 — bootstrap (v0.0.4)
+mkdir url-shortener && cd url-shortener
+npx -y @wifo/factory-core init --name url-shortener
+pnpm install
+
+# Step 2 — open Claude Code in this dir, prompt:
+#   /scope-project A URL shortener with a stats dashboard.
+#                  JSON-over-HTTP, SQLite for storage, optional API-key auth.
+# → produces docs/specs/url-shortener-{core,redirect,tracking,stats,dashboard}.md
+#   in dependency order. First is status: ready; rest are status: drafting.
+
+# Step 3 — review + ship each spec (v0.0.4 reviewer + v0.0.3 runtime)
+pnpm exec factory spec review docs/specs/url-shortener-core.md
+pnpm exec factory-runtime run docs/specs/url-shortener-core.md
+# … repeat for each spec, flipping status: drafting → ready as you go …
+
+# Step 4 — inspect the whole project's provenance
+pnpm exec factory-context tree <runId> --dir ./.factory --direction down
+```
+
+This is the v0.0.6 target. **Today (v0.0.5) every step except the `/scope-project` decomposition works.** v0.0.6 ships `/scope-project` + the `depends-on` frontmatter field, closing the product-scale gap. v0.0.7 layers the sequence-runner so the per-spec loop becomes one CLI invocation. v0.1.0's scheduler removes the human from "flip the next spec to `ready`," landing the full end-state.
+
+### Drift signals
+
+If we drift from this anchor, these are the symptoms:
+
+- **Specs the maintainer writes are getting bigger.** The factory's value is per-feature small specs. If `/scope-project` produces 200-LOC specs that touch 20 files each, decomposition is wrong — push back on the slash command's prompt.
+- **Manual sequencing feels fine indefinitely.** That's a signal the sequence-runner isn't earning its v0.0.7 slot — defer it further, work on something else.
+- **Real users describe products the factory can't ship.** The URL-shortener test case is *one* shape. Mobile apps, ETL pipelines, ML training scripts — each is a different decomposition. Domain packs (v1.0.0) close those gaps, but not before we've shipped 3+ products of each shape manually first.
 
 If we drift, this file is the anchor. Update it deliberately, not silently.
