@@ -102,6 +102,46 @@ Mild lean toward `--direction` flag: zero new commands, one well-scoped flag, an
 
 ---
 
+## Moneyball lessons from v0.0.5 self-build
+
+Three pitfalls surfaced when `factory-runtime` ran against the three v0.0.5 specs to build v0.0.5. Each is small, each has a clear fix. Bundled here because they share the "v0.0.4 ergonomics that real usage exposed" theme.
+
+### Harness: strip surrounding backticks from `test:` paths
+
+**What:** `factory-harness`'s test runner currently parses the `test:` line literally and passes the path to `bun test` as-is. When a spec writes ``- test: `src/foo.test.ts` "happy path"`` (markdown code-formatting style — natural for spec authors), the harness invokes `bun test` with the literal token `` `src/foo.test.ts` `` (backticks included), and `bun test` searches for a file matching that string — which never matches anything. Result: every scenario fails as `runner/no-test-files-matched`, which looks like a broken implementation when the implementation is actually correct.
+
+**Why:** Recurring spec-authoring pitfall. Caught twice already — first in `examples/parse-size`'s v1 spec (October), and again in v0.0.5's `factory-runtime-v0-0-5.md` (built by the factory). The agent ships correct code; the harness can't validate it; the runtime returns no-converge; the maintainer wastes time debugging a non-bug. Closing this kills the recurring failure mode at the source.
+
+**The fix:** in `packages/harness/src/parse-test-line.ts`, strip a leading + trailing backtick from the parsed `file` field (and from the pattern field, while we're there). Five-line change. Add a unit test asserting `parseTestLine('`src/foo.test.ts` "name"')` returns `{ file: 'src/foo.test.ts', pattern: 'name' }`. Document in `packages/harness/README.md` that backticks are tolerated.
+
+**Touches:** `packages/harness/src/parse-test-line.ts` (~5 LOC), `packages/harness/src/parse-test-line.test.ts` (~10 LOC), `packages/harness/README.md` (1 line).
+
+**Phasing suggestion:** v0.0.5.x point release. Trivial. Once shipped, the SPEC_TEMPLATE backtick-guidance entry below becomes redundant and can be marked superseded.
+
+### `SPEC_TEMPLATE.md`: tell users to write `test: src/foo.test.ts "..."` (no backticks around the path)
+
+**What:** Until the harness fix above ships, `SPEC_TEMPLATE.md`'s skeleton block should explicitly NOT use backticks around test paths in its example, AND should add a one-line "do not wrap test paths in backticks" note in the "Validating" section. Currently the skeleton uses bare paths (correct) but `/scope-task`'s output (which mirrors the template) sometimes generates backtick-quoted paths anyway — likely a model habit picked up from generic markdown style.
+
+**Why:** Workaround for the harness bug; cheap doc fix. Caught real specs in two examples. Once the harness strips backticks (entry above), this becomes unnecessary — but the comment preserves the docstring and shouldn't actively mislead.
+
+**Touches:** `docs/SPEC_TEMPLATE.md` (1 short paragraph), `~/.claude/commands/scope-task.md` (1 sentence telling `/scope-task` to write bare paths) if the user wants belt-and-suspenders.
+
+**Phasing suggestion:** v0.0.5.x — supersede when the harness fix lands.
+
+### `factory-runtime`: per-phase agent timeout configurable via `--max-agent-timeout-ms`
+
+**What:** `implementPhase` currently hardcodes a 10-minute (600_000ms) wall-clock timeout on the spawned `claude -p` subprocess. The agent times out with `runtime/agent-failed: agent-timeout (after 600000ms)`. For specs that touch many files, 10 minutes is too tight — `factory-publish-v0-0-5.md` touches 14 files (every package.json + every README + init-templates + a new test file) and hit the timeout on iteration 2. The previous iterations had succeeded; the agent was making real progress, just slowly.
+
+**Why:** v0.0.5's moneyball run revealed the cap. The proper fix is a configurable knob: `RunOptions.maxAgentTimeoutMs?: number` (default 600_000), CLI flag `--max-agent-timeout-ms <n>`. Same validation pattern as `--max-prompt-tokens` (positive integer; bad value → exit 2 with stderr label `runtime/invalid-max-agent-timeout-ms`). Keeps default behavior unchanged for short-running specs while letting wide-blast-radius specs raise the ceiling.
+
+**Why not just raise the default:** the 10-minute timeout is a useful guardrail for specs that hang the agent in a confused state — bumping the default to 30 minutes makes hung runs more expensive. Configurable is the right shape.
+
+**Touches:** `packages/runtime/src/types.ts` (new field on `RunOptions`), `packages/runtime/src/runtime.ts` (resolve + thread to `implementPhase`), `packages/runtime/src/phases/implement.ts` (use the resolved value instead of the hardcoded constant), `packages/runtime/src/cli.ts` (new flag + validation, mirrors `--max-prompt-tokens`'s pattern), tests.
+
+**Phasing suggestion:** v0.0.6+. Could ride alongside the worktree sandbox work since both target wide-blast-radius runs.
+
+---
+
 ## `factory-runtime`: `explorePhase` + `planPhase`
 
 **What:** Two new built-in phases that run before `implement`: `explore` (read the codebase, summarize what exists) and `plan` (propose a concrete change set). The agent gets focused context for `implement` rather than synthesizing it from scratch every iteration.
