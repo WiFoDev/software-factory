@@ -39,6 +39,7 @@ factory-context tree <runId> --direction down   # what came out (NEW v0.0.4)
 1. `factory init`, author + lint + review the spec as above.
 2. **Run** the `[implement → validate]` graph: `factory-runtime run docs/specs/my-feature.md --no-judge`
    - The runtime spawns `claude -p` with the spec on stdin, lets it use Read/Edit/Write/Bash to satisfy the `test:` lines, then runs validate against its output.
+   - Every implement spawn now sees a stable `# Implementation guidelines` section above `# Spec` (state assumptions, minimum code, surgical edits, verifiable success criteria) — same bytes every iteration so the prompt cache hits consistently. *(v0.0.5)*
    - On validate-fail, the runtime threads the failed scenarios into the next iteration's prompt under a `# Prior validate report` section and tries again — up to `--max-iterations 5` (default) or until summed `tokens.input + tokens.output` crosses `--max-total-tokens 500_000` (default).
    - Subscription auth — no `ANTHROPIC_API_KEY` required.
 3. Inspect the trail: `factory-context tree <runId> --direction down` shows every iteration's `factory-implement-report` (full prompt, files changed, tokens used) and `factory-validate-report` as descendants of the run. Walking up from any leaf back to the run still works (`--direction up`, the v0.0.3 default).

@@ -375,7 +375,21 @@ function buildPriorValidateSection(
   return { text: acc.join('\n'), truncated };
 }
 
-function buildPrompt(args: {
+// v0.0.5 — Behavior-prior prompt prefix. Stable across iterations so the bytes
+// are byte-identical and `claude -p`'s ephemeral cache hits the same key on
+// every implement spawn. NOT exported from the package's public surface
+// (`src/index.ts`) — internal-only. Length budget pinned by tests at ≤ 2 KB
+// (~500 tokens / ~2.5% of the default 100k per-phase cap).
+export const IMPLEMENTATION_GUIDELINES = `# Implementation guidelines
+
+Read these before reading the spec, and revisit them when you're tempted to expand scope:
+
+- **State your assumptions.** If something is ambiguous, say so. If multiple interpretations exist, name them — don't pick silently. Push back when warranted.
+- **Minimum code that solves the problem.** No features beyond what was asked. No abstractions for single-use code. No "flexibility" or "configurability" the spec didn't request. If you wrote 200 lines and it could be 50, rewrite it.
+- **Surgical changes only.** Edit what the spec requires; leave adjacent code, comments, and formatting alone. Match existing style. If you notice unrelated dead code, mention it — don't delete it.
+- **Define verifiable success criteria, then loop.** Every change should map to a \`test:\` line, a \`judge:\` line, or a Constraint in the spec. Run the tests yourself before finishing — "the tests will pass" is not the same as "I ran them and they pass".`;
+
+export function buildPrompt(args: {
   specSource: string;
   cwd: string;
   iteration: number;
@@ -388,6 +402,8 @@ function buildPrompt(args: {
     '',
     'The spec is the contract. The tests in its `test:` lines define correctness.',
     'Your job: edit files in the working directory below so those tests pass.',
+    '',
+    IMPLEMENTATION_GUIDELINES,
     '',
     '# Spec',
     '',

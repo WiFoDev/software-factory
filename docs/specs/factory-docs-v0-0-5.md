@@ -33,29 +33,29 @@ Pure docs. No exports change. No code changes. No new packages.
   When read after the fix
   Then the file contains the substring `docs/specs/<id>.md` AND `docs/technical-plans/<id>.md` (the parallel-tree paths). It does NOT contain the obsolete substrings `<id>.technical-plan.md` or `single-tree`. The "Filename convention" subsection explicitly explains the parallel-tree rationale: "specs and technical plans live in parallel directories so `factory spec lint docs/specs/` recurses without tripping over technical plans."
   Satisfaction:
-    - test: `packages/core/src/spec-template.test.ts` "SPEC_TEMPLATE references the parallel-tree convention and not the obsolete single-tree filename"
+    - test: packages/core/src/spec-template.test.ts "SPEC_TEMPLATE references the parallel-tree convention and not the obsolete single-tree filename"
 
 **S-2** — `SPEC_TEMPLATE.md` references `factory spec review` in the workflow
   Given the same file after the fix
   When read
   Then the closing section (after the skeleton block) contains a "Validating" or "Workflow" subsection that lists `factory spec lint docs/specs/<id>.md` AND `factory spec review docs/specs/<id>.md` as the two recommended pre-implementation checks. The text explains lint = format/free, review = quality/judges/subscription.
   Satisfaction:
-    - test: `packages/core/src/spec-template.test.ts` "SPEC_TEMPLATE recommends both factory spec lint and factory spec review"
+    - test: packages/core/src/spec-template.test.ts "SPEC_TEMPLATE recommends both factory spec lint and factory spec review"
 
 **S-3** — `packages/harness/README.md` and `packages/runtime/README.md` cross-link the reviewer
   Given the current harness + runtime READMEs
   When read after the fix
   Then each contains a one-paragraph "Related" or "See also" section pointing at `@wifo/factory-spec-review`'s `factory spec review` CLI, framed as "the spec-side analog of this package" (for harness — both run LLM judges; reviewer reuses the harness `JudgeClient` interface) or "the recommended pre-run quality check" (for runtime — review before you spend tokens on the loop). Each reference includes the relative path to the spec-review package's README.
   Satisfaction:
-    - test: `packages/core/src/spec-template.test.ts` "harness README references @wifo/factory-spec-review"
-    - test: `packages/core/src/spec-template.test.ts` "runtime README references @wifo/factory-spec-review"
+    - test: packages/core/src/spec-template.test.ts "harness README references @wifo/factory-spec-review"
+    - test: packages/core/src/spec-template.test.ts "runtime README references @wifo/factory-spec-review"
 
 **S-4** — `packages/core/README.md` documents the PostToolUse hook recipe
   Given the current core README after the fix
   When read
   Then a new section `## Harness-enforced spec linting + review (Claude Code hook recipe)` is present. The section contains a JSON snippet for `~/.claude/settings.json`'s `hooks.PostToolUse` block, configured to run `factory spec lint <path>` AND `factory spec review <path>` on every `Write` (or `Edit`) to a path matching `docs/specs/*.md`. The snippet uses the documented Claude Code hooks shape (`matcher`, `command`, `event`). The section frames this as opt-in: "drop this into your settings to make the agent literally unable to forget the linter." It also documents the single failure mode: the hook fires AFTER the write succeeds, so a failing review surfaces as a warning the agent sees, not a blocked write.
   Satisfaction:
-    - test: `packages/core/src/spec-template.test.ts` "core README contains the PostToolUse hook recipe with both lint and review commands"
+    - test: packages/core/src/spec-template.test.ts "core README contains the PostToolUse hook recipe with both lint and review commands"
     - judge: "the hook recipe is copy-paste runnable — a developer can drop the block into their settings.json verbatim, run the agent on a spec, and observe the lint/review output without any other configuration"
 
 ## Constraints / Decisions

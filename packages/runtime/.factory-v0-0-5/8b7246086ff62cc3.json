@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "id": "8b7246086ff62cc3",
+  "type": "factory-phase",
+  "recordedAt": "2026-05-01T17:59:46.881Z",
+  "parents": [
+    "ca8f2f2b86c9069e",
+    "50ad1c87ec47f0b0"
+  ],
+  "payload": {
+    "phaseName": "validate",
+    "iteration": 3,
+    "status": "fail",
+    "durationMs": 131,
+    "outputRecordIds": [
+      "b86ef692386c2568"
+    ]
+  }
+}

@@ -29,14 +29,14 @@ No public API changes. No new exports. No new packages.
   When their `package.json` files are read
   Then each has `"version": "0.0.5"`, `"publishConfig": {"access": "public"}`, `"repository"` pointing at the GitHub repo with the `directory` subpath set, `"homepage"`, `"bugs"`, `"keywords"` (at minimum `["software-factory", "agents", "spec-driven", ...package-specific]`), `"author": "Luis (WiFoDev)"`, `"license": "MIT"`. The existing `name`, `type`, `main`, `types`, `bin`, `exports`, `files`, `scripts`, `dependencies`, `devDependencies` fields are unchanged.
   Satisfaction:
-    - test: `packages/core/src/publish-meta.test.ts` "every workspace package has v0.0.5 + publishConfig + npm metadata fields"
+    - test: packages/core/src/publish-meta.test.ts "every workspace package has v0.0.5 + publishConfig + npm metadata fields"
 
 **S-2** — `pnpm publish -r --dry-run` succeeds across the whole workspace
   Given the workspace at HEAD with every package built
   When `pnpm -r exec npm pack --dry-run --json` is invoked from the repo root (or `pnpm publish -r --dry-run --no-git-checks` if available)
   Then every package's dry-run output is `success`; the published-file list for each contains exactly `dist/**`, `README.md`, `LICENSE` (no `src/**`, no `*.test.*`, no `tsconfig*`, no `test-fixtures/**`, no `node_modules`); the `package.json` in each tarball reports `"version": "0.0.5"` and `"publishConfig": {"access": "public"}`.
   Satisfaction:
-    - test: `packages/core/src/publish-meta.test.ts` "pnpm pack --dry-run produces clean tarballs across all packages"
+    - test: packages/core/src/publish-meta.test.ts "pnpm pack --dry-run produces clean tarballs across all packages"
     - judge: "the published file list per package contains only the artifacts a downstream consumer needs — no test fixtures, no source TS, no scaffolding files leaked"
 
 **S-3** — scaffold semver matches the published version
@@ -44,22 +44,22 @@ No public API changes. No new exports. No new packages.
   When the template is inspected
   Then every `@wifo/factory-*` dependency entry uses `^0.0.5` (not `^0.0.4`); the existing init-templates tests pass with the bumped version.
   Satisfaction:
-    - test: `packages/core/src/init-templates.test.ts` "PACKAGE_JSON_TEMPLATE has the expected keys + workspace-stripped semver deps" (asserts ^0.0.5 after the v0.0.5 bump)
-    - test: `packages/core/src/init.test.ts` "init in empty cwd creates the canonical scaffold + prints next-steps" (asserts the scaffold's package.json has ^0.0.5)
+    - test: packages/core/src/init-templates.test.ts "PACKAGE_JSON_TEMPLATE has the expected keys + workspace-stripped semver deps" (asserts ^0.0.5 after the v0.0.5 bump)
+    - test: packages/core/src/init.test.ts "init in empty cwd creates the canonical scaffold + prints next-steps" (asserts the scaffold's package.json has ^0.0.5)
 
 **S-4** — every README + scaffold README + scaffold template lacks the v0.0.4 monorepo-only caveat
   Given the current docs surface (`README.md`, `packages/core/README.md`, `packages/spec-review/README.md`, `examples/slugify/README.md`, `examples/gh-stars/README.md`, `examples/parse-size/README.md`, `packages/core/src/init-templates.ts` README_TEMPLATE)
   When their contents are read
   Then NONE of them contain the substring `monorepo-only` OR the substring `v0.0.4 caveat` OR the substring `not yet published to npm`. Where the caveat used to live, the docs now describe the standard `pnpm install` flow against published packages.
   Satisfaction:
-    - test: `packages/core/src/publish-meta.test.ts` "no doc references the v0.0.4 monorepo-only caveat after v0.0.5 publish"
+    - test: packages/core/src/publish-meta.test.ts "no doc references the v0.0.4 monorepo-only caveat after v0.0.5 publish"
 
 **S-5** — top-level `pnpm release` script publishes every package
   Given the top-level `package.json`
   When the `scripts` block is read
   Then a `"release"` script exists that runs (in order): typecheck → test → biome check → build (per package) → `pnpm publish -r --access public`. The script aborts on any failing gate. (The actual publish is a manual release-gate; the script makes a clean run reproducible.)
   Satisfaction:
-    - test: `packages/core/src/publish-meta.test.ts` "top-level package.json has a release script that gates on typecheck/test/check before publish"
+    - test: packages/core/src/publish-meta.test.ts "top-level package.json has a release script that gates on typecheck/test/check before publish"
 
 ## Constraints / Decisions
 

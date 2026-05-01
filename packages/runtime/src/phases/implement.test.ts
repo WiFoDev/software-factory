@@ -13,7 +13,15 @@ import {
   tryRegister,
 } from '../records.js';
 import type { PhaseContext } from '../types.js';
-import { implementPhase, parseAgentJson, spawnAgent, stripAnsi, tailDetail } from './implement.js';
+import {
+  IMPLEMENTATION_GUIDELINES,
+  buildPrompt,
+  implementPhase,
+  parseAgentJson,
+  spawnAgent,
+  stripAnsi,
+  tailDetail,
+} from './implement.js';
 import { validatePhase } from './validate.js';
 
 const RUNTIME_ROOT = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
@@ -46,6 +54,116 @@ describe('tailDetail', () => {
     const tailed = tailDetail(huge);
     expect(tailed).toContain('… [truncated]');
     expect(Buffer.byteLength(tailed, 'utf8')).toBeLessThan(5_000);
+  });
+});
+
+// ----- buildPrompt — Implementation guidelines (v0.0.5) -----------------
+
+describe('buildPrompt — Implementation guidelines section (v0.0.5)', () => {
+  test('buildPrompt emits Implementation guidelines section before # Spec', () => {
+    const prompt = buildPrompt({
+      specSource: 'fake spec source',
+      cwd: '/tmp/work',
+      iteration: 1,
+    });
+    const guidelinesIdx = prompt.indexOf('# Implementation guidelines');
+    const specIdx = prompt.indexOf('# Spec');
+    expect(guidelinesIdx).toBeGreaterThan(-1);
+    expect(specIdx).toBeGreaterThan(-1);
+    expect(guidelinesIdx).toBeLessThan(specIdx);
+    // Four behavior-prior bullet substrings (case-insensitive — the locked
+    // text capitalizes the phrase starts).
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain('state your assumptions');
+    expect(lower).toContain('minimum code');
+    expect(lower).toContain('surgical');
+    expect(lower).toContain('verifiable');
+    // Section is followed by a blank line then # Spec.
+    expect(prompt.slice(0, specIdx).endsWith('\n\n')).toBe(true);
+  });
+
+  test('Implementation guidelines section is byte-identical across iterations 1..5', () => {
+    const prompts = [1, 2, 3, 4, 5].map((iter) =>
+      buildPrompt({
+        specSource: 'fake spec source',
+        cwd: '/tmp/work',
+        iteration: iter,
+      }),
+    );
+    const sections = prompts.map((p) =>
+      p.slice(p.indexOf('# Implementation guidelines'), p.indexOf('# Spec')),
+    );
+    for (let i = 1; i < sections.length; i++) {
+      expect(sections[i]).toBe(sections[0] ?? '');
+    }
+  });
+
+  test('Implementation guidelines section bytes are stable under different priorSection inputs', () => {
+    const promptNoPrior = buildPrompt({
+      specSource: 'fake spec source',
+      cwd: '/tmp/work',
+      iteration: 2,
+    });
+    const promptWithPrior = buildPrompt({
+      specSource: 'fake spec source',
+      cwd: '/tmp/work',
+      iteration: 2,
+      priorSection: '# Prior validate report\n\n- **S-1 — sample**: failed something',
+    });
+    const promptDifferentPrior = buildPrompt({
+      specSource: 'fake spec source',
+      cwd: '/tmp/work',
+      iteration: 2,
+      priorSection: '# Prior validate report\n\n- **S-2 — other**: a totally different failure',
+    });
+    const extract = (p: string): string =>
+      p.slice(p.indexOf('# Implementation guidelines'), p.indexOf('# Spec'));
+    expect(extract(promptNoPrior)).toBe(extract(promptWithPrior));
+    expect(extract(promptWithPrior)).toBe(extract(promptDifferentPrior));
+    // Identical input → identical output (byte-stable).
+    const a = buildPrompt({
+      specSource: 'fake spec source',
+      cwd: '/tmp/work',
+      iteration: 1,
+    });
+    const b = buildPrompt({
+      specSource: 'fake spec source',
+      cwd: '/tmp/work',
+      iteration: 1,
+    });
+    expect(a).toBe(b);
+  });
+
+  test('IMPLEMENTATION_GUIDELINES is under the 2 KB cap', () => {
+    expect(Buffer.byteLength(IMPLEMENTATION_GUIDELINES, 'utf8')).toBeLessThanOrEqual(2048);
+  });
+
+  test('buildPrompt output preserves v0.0.4 section ordering with the new section inserted before # Spec', () => {
+    const priorSection = '# Prior validate report\n\n- **S-1 — sample**: failed something';
+    const prompt = buildPrompt({
+      specSource: 'fake spec source',
+      cwd: '/tmp/work',
+      iteration: 2,
+      priorSection,
+    });
+    const idxOpening = prompt.indexOf('You are an automated coding agent');
+    const idxGuidelines = prompt.indexOf('# Implementation guidelines');
+    const idxSpec = prompt.indexOf('# Spec\n');
+    const idxPrior = prompt.indexOf('# Prior validate report');
+    const idxWorking = prompt.indexOf('# Working directory');
+    const idxTools = prompt.indexOf('# Tools');
+    const idxConstraints = prompt.indexOf('# Constraints');
+    const idxDone = prompt.indexOf('# What "done" looks like');
+    const idxClosing = prompt.indexOf('finish your turn');
+    expect(idxOpening).toBeGreaterThan(-1);
+    expect(idxGuidelines).toBeGreaterThan(idxOpening);
+    expect(idxSpec).toBeGreaterThan(idxGuidelines);
+    expect(idxPrior).toBeGreaterThan(idxSpec);
+    expect(idxWorking).toBeGreaterThan(idxPrior);
+    expect(idxTools).toBeGreaterThan(idxWorking);
+    expect(idxConstraints).toBeGreaterThan(idxTools);
+    expect(idxDone).toBeGreaterThan(idxConstraints);
+    expect(idxClosing).toBeGreaterThan(idxDone);
   });
 });
 

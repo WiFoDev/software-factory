@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "id": "b86ef692386c2568",
+  "type": "factory-validate-report",
+  "recordedAt": "2026-05-01T17:59:46.880Z",
+  "parents": [
+    "ca8f2f2b86c9069e",
+    "50ad1c87ec47f0b0"
+  ],
+  "payload": {
+    "specId": "factory-runtime-v0-0-5",
+    "specPath": "../../docs/specs/factory-runtime-v0-0-5.md",
+    "startedAt": "2026-05-01T17:59:46.750Z",
+    "durationMs": 130,
+    "scenarios": [
+      {
+        "scenarioId": "S-1",
+        "scenarioKind": "scenario",
+        "status": "fail",
+        "satisfactions": [
+          {
+            "kind": "test",
+            "value": "`src/phases/implement.test.ts` \"buildPrompt emits Implementation guidelines section before # Spec\"",
+            "line": 35,
+            "status": "fail",
+            "durationMs": 36,
+            "detail": "The following filters did not match any test files in --cwd=\"/Users/wifo/dev/software-factory/packages/runtime\":\n `src/phases/implement.test.ts`\n75 files were searched [6.00ms]\n\nnote: Tests need \".test\", \"_test_\", \".spec\" or \"_spec_\" in the filename (ex: \"MyApp.test.ts\")\n\nbun test v1.3.10 (30e609e0)",
+            "exitCode": 1
+          },
+          {
+            "kind": "test",
+            "value": "`src/phases/implement.test.ts` \"Implementation guidelines section is byte-identical across iterations 1..5\"",
+            "line": 36,
+            "status": "fail",
+            "durationMs": 29,
+            "detail": "The following filters did not match any test files in --cwd=\"/Users/wifo/dev/software-factory/packages/runtime\":\n `src/phases/implement.test.ts`\n75 files were searched [3.00ms]\n\nnote: Tests need \".test\", \"_test_\", \".spec\" or \"_spec_\" in the filename (ex: \"MyApp.test.ts\")\n\nbun test v1.3.10 (30e609e0)",
+            "exitCode": 1
+          }
+        ],
+        "durationMs": 64
+      },
+      {
+        "scenarioId": "S-2",
+        "scenarioKind": "scenario",
+        "status": "fail",
+        "satisfactions": [
+          {
+            "kind": "test",
+            "value": "`src/phases/implement.test.ts` \"Implementation guidelines section bytes are stable under different priorSection inputs\"",
+            "line": 43,
+            "status": "fail",
+            "durationMs": 23,
+            "detail": "The following filters did not match any test files in --cwd=\"/Users/wifo/dev/software-factory/packages/runtime\":\n `src/phases/implement.test.ts`\n75 files were searched [3.00ms]\n\nnote: Tests need \".test\", \"_test_\", \".spec\" or \"_spec_\" in the filename (ex: \"MyApp.test.ts\")\n\nbun test v1.3.10 (30e609e0)",
+            "exitCode": 1
+          },
+          {
+            "kind": "judge",
+            "value": "the section's wording reads as a coherent set of behavior priors a developer would actually want their agent to follow — not a checklist the agent will skim past",
+            "line": 44,
+            "status": "skipped",
+            "durationMs": 0,
+            "detail": "--no-judge"
+          }
+        ],
+        "durationMs": 23
+      },
+      {
+        "scenarioId": "S-3",
+        "scenarioKind": "scenario",
+        "status": "fail",
+        "satisfactions": [
+          {
+            "kind": "test",
+            "value": "`src/phases/implement.test.ts` \"IMPLEMENTATION_GUIDELINES is under the 2 KB cap\"",
+            "line": 51,
+            "status": "fail",
+            "durationMs": 21,
+            "detail": "The following filters did not match any test files in --cwd=\"/Users/wifo/dev/software-factory/packages/runtime\":\n `src/phases/implement.test.ts`\n75 files were searched [3.00ms]\n\nnote: Tests need \".test\", \"_test_\", \".spec\" or \"_spec_\" in the filename (ex: \"MyApp.test.ts\")\n\nbun test v1.3.10 (30e609e0)",
+            "exitCode": 1
+          }
+        ],
+        "durationMs": 21
+      },
+      {
+        "scenarioId": "S-4",
+        "scenarioKind": "scenario",
+        "status": "fail",
+        "satisfactions": [
+          {
+            "kind": "test",
+            "value": "`src/phases/implement.test.ts` \"buildPrompt output preserves v0.0.4 section ordering with the new section inserted before # Spec\"",
+            "line": 58,
+            "status": "fail",
+            "durationMs": 21,
+            "detail": "The following filters did not match any test files in --cwd=\"/Users/wifo/dev/software-factory/packages/runtime\":\n `src/phases/implement.test.ts`\n75 files were searched [3.00ms]\n\nnote: Tests need \".test\", \"_test_\", \".spec\" or \"_spec_\" in the filename (ex: \"MyApp.test.ts\")\n\nbun test v1.3.10 (30e609e0)",
+            "exitCode": 1
+          }
+        ],
+        "durationMs": 21
+      }
+    ],
+    "summary": {
+      "pass": 0,
+      "fail": 4,
+      "error": 0,
+      "skipped": 0
+    },
+    "status": "fail"
+  }
+}

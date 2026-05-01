@@ -2,9 +2,31 @@
 
 Phase-graph runtime for software-factory. Composes `@wifo/factory-core`, `@wifo/factory-harness`, `@wifo/factory-twin`, and `@wifo/factory-context` into an end-to-end pipeline that executes a graph of phases against a parsed spec, persists provenance to the context store, and iterates until convergence or the iteration budget is exhausted.
 
-v0.0.1 shipped one built-in phase: `validatePhase`. v0.0.2 added `implementPhase` (single-shot agent). **v0.0.3 closes the loop**: `--max-iterations` defaults to **5**, iteration N+1's implement sees iteration N's validate-report (failed scenarios threaded into the prompt), the parent chain extends across iterations so `factory-context tree` walks the full ancestry, and a whole-run `--max-total-tokens` cap (default 500_000) bounds total cost. One spec goes in, the runtime drives `[implement → validate]` until convergence or budget, no human in the middle.
+v0.0.1 shipped one built-in phase: `validatePhase`. v0.0.2 added `implementPhase` (single-shot agent). **v0.0.3 closes the loop**: `--max-iterations` defaults to **5**, iteration N+1's implement sees iteration N's validate-report (failed scenarios threaded into the prompt), the parent chain extends across iterations so `factory-context tree` walks the full ancestry, and a whole-run `--max-total-tokens` cap (default 500_000) bounds total cost. **v0.0.5** layers a stable behavior-prior prompt prefix into every implement spawn — same bytes every iteration, cache-friendly, +~1.1 KB / ~2.5% of the per-phase cap.
 
 Requires Node 22+ and (for the default graph) the `claude` CLI on PATH, signed in via your Claude Pro/Max subscription.
+
+## v0.0.5 release notes
+
+- **Implementation guidelines prompt prefix.** `implementPhase`'s `buildPrompt` now emits a stable `# Implementation guidelines` section between the opening prose and `# Spec`. Four behavior priors: state assumptions, minimum code, surgical changes, verifiable success criteria. Same constant, same bytes, every invocation — so `claude -p`'s ephemeral cache hits the same key on every iteration. See "Implementation guidelines section (v0.0.5)" below for the wording, placement, byte-stability invariant, and budget impact.
+- **Public API surface unchanged.** Strict equality with v0.0.4's surface: 5 functions + 1 class + 13 types = **19 names**, zero new exports. `IMPLEMENTATION_GUIDELINES` is internal to `src/phases/implement.ts` and intentionally not re-exported from `src/index.ts`.
+
+## Implementation guidelines section (v0.0.5)
+
+Every `implementPhase` spawn now sees a `# Implementation guidelines` section emitted before `# Spec`. The section is a stable module-level constant (`IMPLEMENTATION_GUIDELINES` in `src/phases/implement.ts`) — byte-identical across iterations and across runs. Four bullets, one per behavior prior:
+
+- **State your assumptions.** Surface ambiguity, name multiple interpretations, push back when warranted.
+- **Minimum code that solves the problem.** No features beyond what was asked. No abstractions for single-use code. No gratuitous flexibility/configurability.
+- **Surgical changes only.** Edit what the spec requires; leave adjacent code, comments, and formatting alone. Match existing style.
+- **Define verifiable success criteria, then loop.** Map each change to a `test:` line, a `judge:` line, or a Constraint. Run the tests yourself before finishing.
+
+**Placement.** Between the opening prose (`'You are an automated coding agent…'`) and `# Spec`. The v0.0.3 `# Prior validate report` section still lives in its v0.0.3 position (between `# Spec` and `# Working directory`); the prefix sits above all of those.
+
+**Byte-stability invariant.** The constant is defined once and emitted unchanged. Tests pin `prompt1 === prompt2` across multiple `buildPrompt` invocations and verify the prefix's bytes are independent of `priorSection`. A stable prefix means `claude -p`'s prompt cache hits the same key every iteration; rewording the constant invalidates the cache for every cached run.
+
+**Default-budget tightness.** `IMPLEMENTATION_GUIDELINES` is bounded at **≤ 2 KB** (~500 tokens, pinned by test). The locked text is ~1.1 KB. Against the default 100k per-phase cap that's ~2.5%; against the 500k whole-run cap (5 iters) it's ~0.5%. The deliberate +N tokens per spawn buys fewer iterations on average — net win expected, measured against the gh-stars-v2 production runs in v0.0.5+ release notes.
+
+**Tradeoff.** Locked behavior priors are an opinion. Future point releases may layer per-spec-overridable priors, prefix variants by spec type (`feat` vs `refactor`), or iteration-count telemetry — all explicitly deferred from v0.0.5 so the locked prefix can soak first.
 
 ## v0.0.3 release notes
 
