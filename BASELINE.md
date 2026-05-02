@@ -107,18 +107,59 @@ The first baseline. The maintainer manually decomposed into 4 specs and ran them
 
 Yes — the per-feature sweet spot is real and the prompt cache makes it cheap. The friction is concrete and addressable: friction #1 is what v0.0.6 already targets; #2 and #3 land in BACKLOG below as v0.0.5.x candidates. **Net signal: the v0.0.6 roadmap is correctly aimed; nothing about this run suggests a re-theme.**
 
-##### v0.0.6 — pending (shipped 2026-05-02, BASELINE not yet re-run)
+##### v0.0.6 — shipped 2026-05-02
 
-The v0.0.5.x cluster. Did NOT add `/scope-project` (the originally-planned v0.0.6 theme moved to v0.0.7). Instead shipped the four BACKLOG-tracked v0.0.5 follow-ups: harness backtick stripping, `factory init` first-contact UX, `filesChanged` audit reliability, configurable per-phase agent timeout.
+The v0.0.5.x cluster. Shipped four BACKLOG-tracked v0.0.5 follow-ups (harness backtick stripping, `factory init` first-contact UX, `filesChanged` audit reliability, configurable per-phase agent timeout). Did NOT add `/scope-project` (that theme moved to v0.0.7).
 
-**Predicted improvements when re-running the URL-shortener prompt against v0.0.6:**
+**Actuals:**
 
-- **Friction #2 from v0.0.5 entry (`factory init` first-contact gaps) → should disappear.** The fresh `factory init` now ships with `@wifo/factory-spec-review` already in deps, `.factory-spec-review-cache` gitignored, and `factory.config.json` writing canonical defaults so the user types fewer flags.
-- **Friction #3 from v0.0.5 entry (`filesChanged` unreliable) → should disappear.** New-file-only runs now report new files; pre-dirty paths are filtered out.
-- **The harness backtick-quoted-path bug → should disappear.** Spec authors can write either form; the harness handles both.
-- **Predictions #3 + #4 from v0.0.5 (context-dir reuse oddness, status flipping) → still survive.** Those need v0.0.7's `/scope-project` + sequence-runner.
+| Spec | Iterations | Wall-clock | Tests cumulative | Notes |
+|---|---|---|---|---|
+| url-shortener-core | 1 | 63s | 4/4 | clean converge |
+| url-shortener-redirect | 1 | 64s | 8/8 | clean converge |
+| url-shortener-tracking | 1 | 88s | 12/12 | clean converge |
+| url-shortener-stats | 1 | 51s | 16/16 | clean converge |
+| **Total (all 4 runs)** | **4** | **4m 26s (266 s)** | **16 pass, 0 fail** | every spec converged first try |
 
-The v0.0.6 baseline will run when convenient — no specific date. If the v0.0.5.x cluster genuinely removed friction, friction #2 + #3 should be absent from the v0.0.6 row.
+| Metric | v0.0.5 | v0.0.6 | Delta |
+|---|---|---|---|
+| Wall-clock | 7m 3s (423s) | 4m 26s (266s) | **−37%** |
+| Tokens (cache-aware) | 2,920,000 | 2,202,884 | **−25%** |
+| Tests shipped | 14 | 16 | +2 (more tests per spec) |
+| Iterations / 4 specs | 4 (1 each) | 4 (1 each) | unchanged — per-feature sweet spot holds |
+| Commits | 7 | 6 | −1 |
+
+**Predicted-vs-actual scoring:**
+
+| Prediction | Outcome | Notes |
+|---|---|---|
+| Friction #2 from v0.0.5 (init UX) → gone | ✅ Confirmed | Agent did NOT mention init friction. The scaffold now ships with spec-review in deps, cache-gitignored, factory.config.json present. |
+| Friction #3 from v0.0.5 (filesChanged unreliable) → gone | ✅ Confirmed | Agent did NOT mention filesChanged friction. New-file-only specs (redirect, tracking, stats) all populated correctly. |
+| Backtick gotcha → gone | ✅ Confirmed | Agent had no test-path issues; harness tolerated both forms. |
+| Friction #1 from v0.0.5 (manual decomposition) → still bites | ✅ Confirmed | Agent ranked it #1 again, with new precision: "I hand-paraphrased spec 1's API in specs 2/3/4's Constraints blocks. /scope-project + depends-on: frontmatter would emit the four specs with a shared constraints block once." |
+| Friction #3+#4 from v0.0.5 (context-dir reuse, status flipping) → survive | ✅ Confirmed | Folded into the agent's new friction #2 below. |
+| Token totals — similar to v0.0.5 (~99% cache hit) | ❌ Better than predicted | 25% reduction in cache-aware tokens AND 37% wall-clock reduction. The v0.0.6 fixes (especially smoother init + no harness re-runs from backtick failures) are net token-positive. |
+
+**Top 3 friction points (ranked, post-run, per agent's JOURNAL):**
+
+1. **Manual decomposition + cross-spec API repetition.** The v0.0.7 keystone gap. The agent quantified: hand-paraphrased spec 1's API in specs 2/3/4's Constraints blocks. `/scope-project` + `depends-on:` frontmatter would emit the four specs with a shared constraints block once. **Maps to v0.0.7's `/scope-project` + `depends-on` cluster.**
+2. **No sequence-runner — 8 maintainer steps × 4 specs = 32 manual interventions.** Quantified evidence the v0.0.7+ entry required. Agent compute was ~4½ minutes; maintainer orchestration time was multiples of that. `factory-runtime sequence ./docs/specs/*.md` collapses 32 → ~8. **Maps directly to BACKLOG's spec-sequence runner — promote to v0.0.7 (was v0.0.8) based on this evidence.**
+3. **DoD-vs-runtime gap.** `factory-runtime run --no-judge` skipped the DoD shell gates (typecheck went unchecked). The agent had to add typescript himself post-spec-1 because `factory init` doesn't ship it. **NEW signal — two new BACKLOG entries below: (a) ship typescript in `factory init` devDeps; (b) DoD-verifier runtime phase.**
+
+**Mapped BACKLOG entries:**
+- Friction #1 → "Real-product workflow — close the project-scale gap" (existing v0.0.7 cluster)
+- Friction #2 → "factory-runtime: spec-sequence runner" (existing entry, **promoted from v0.0.8 to v0.0.7** based on quantified evidence)
+- Friction #3 → 2 NEW entries (factory init typescript + DoD-verifier runtime phase) — added to BACKLOG below
+
+**Surprises:**
+
+- **Wall-clock was 37% faster, not "similar."** The v0.0.6 fixes paid off MORE than predicted — likely because (a) no harness re-runs from backtick mis-parses and (b) factory.config.json removed flag-typing time across 4 runs. The IMPLEMENTATION_GUIDELINES cache hit rate (~99%) holds, but cumulative orchestration time per spec dropped meaningfully.
+- **`--no-judge` silently skips DoD gates.** The user (and I) assumed `--no-judge` only skipped LLM-judged satisfactions. It actually means "don't run the harness's judge phase at all" — and DoD bullets like "typecheck clean" never get verified. The runtime returns "converged" because tests pass, but a spec could ship with broken types and the runtime wouldn't notice. Audit-trust gap, not just UX.
+- **Agent ate one bug for breakfast** — typescript wasn't in the scaffold's devDeps, so spec 1's typecheck would have failed if anyone ran it. Agent added typescript himself (going slightly out of spec scope but correctly so). The factory init scaffold should ship with typescript so this never bites.
+
+**Would you want to use the factory for the next product?**
+
+Per the agent: *"Yes — I'd use the factory again. Convergence quality is excellent (4/4 first-try, every constraint honored). The pain is entirely on the maintainer side — I would not drive a 10-spec project by hand on v0.0.6's surface."* **Net signal: v0.0.6 was leverage; the maintainer-side pain is exactly the v0.0.7 target. Sequence-runner promoted to v0.0.7 alongside /scope-project per the quantified "32 interventions" evidence.**
 
 ##### v0.0.7 — pending
 

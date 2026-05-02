@@ -122,20 +122,24 @@ What's in your hands today:
 
 **Theme: real-product workflow.** Inherits the theme that was originally v0.0.6, pushed one slot because v0.0.5.x cluster shipped first. v0.0.5 + v0.0.6 validated the per-feature spec sweet spot — `factory-runtime` shipped slugify, gh-stars, parse-size, the v0.0.5 self-build, and now the v0.0.6 self-build (4 specs in sequence). The next ceiling is **products**, not features. A "URL shortener with stats dashboard" is a sequence of 4-6 specs in dependency order (`core` → `redirect` → `tracking` → `stats` → `dashboard`); manually decomposing and sequencing them is the friction that v0.0.7 removes.
 
-### Lead candidates
+### Lead candidates (post-v0.0.6 BASELINE evidence)
 
 | # | Piece | Notes |
 |---|---|---|
-| 1 | **`/scope-project` slash command** | Natural-language project description → N specs in dependency order under `docs/specs/`. First spec ships `status: ready`; the rest `status: drafting` until the prior spec converges. ~30 LOC of slash-command markdown in `~/.claude/commands/`. **Centerpiece of v0.0.7 — biggest UX win in the BACKLOG.** |
+| 1 | **`/scope-project` slash command** | Natural-language project description → N specs in dependency order under `docs/specs/`. First spec ships `status: ready`; the rest `status: drafting` until the prior spec converges. ~30 LOC of slash-command markdown in `~/.claude/commands/`. **Centerpiece of v0.0.7 — biggest UX win in the BACKLOG, validated as friction #1 in the v0.0.6 BASELINE run.** |
 | 2 | **`depends-on` frontmatter field** | Optional `depends-on: [<id>, ...]` on `SpecFrontmatter`. `factory spec lint` validates id format; `cross-doc-consistency` reviewer judge reads dep specs when scoring. Pairs with `/scope-project`. Field-level addition; zero new public exports. |
-| 3 | **PostToolUse hook for `factory spec lint`/`review`** | Harness-enforced linting on every `Write` to `docs/specs/*.md`. Now that `/scope-project` writes multiple specs at once, the hook becomes more valuable. Lives in `~/.claude/settings.json` — opt-in config recipe. |
-| 4 | **CI publish workflow** | Promote `pnpm release` to a tag-driven GitHub Actions workflow. Deferred from v0.0.5; v0.0.6 has soaked one more cycle (the v0.0.5.x cluster); v0.0.7 is the right time. |
+| 3 | **`factory-runtime run-sequence`** *(promoted from v0.0.8 by BASELINE evidence)* | One CLI command walks the `depends-on` DAG and runs specs in topological order. The v0.0.6 BASELINE quantified the friction: 8 maintainer steps × 4 specs = 32 manual interventions; agent compute was ~4½ minutes; orchestration time was multiples of that. `run-sequence` collapses 32 → ~8. Ships in v0.0.7 alongside #1 and #2 as the third leg of the real-product workflow. |
+
+### Deferred from v0.0.7 to v0.0.8
+
+- **PostToolUse hook for `factory spec lint`/`review`** — opt-in config recipe lives in `~/.claude/settings.json`, not this repo. Carry to v0.0.8.
+- **CI publish workflow** — promote `pnpm release` to a tag-driven GitHub Actions workflow. v0.0.6 manually publishing went smoothly; defer CI another release.
 
 ### Scope discipline
 
-Same framing as before — the binding constraint is "I can't easily build a real product." Fix that first. Worktree sandbox + holdout-aware convergence are hardening, not the bottleneck — they belong in v0.0.8 once `/scope-project` has unblocked the real-product flow.
+The original v0.0.7 plan was `/scope-project` + `depends-on` + (hook + CI publish). The v0.0.6 BASELINE run quantified the sequence-runner friction precisely (32 interventions per 4-spec product), so the runner gets promoted into the v0.0.7 cluster. Together, the three deliverables = the full "build a real product without manual orchestration" flow. Hook + CI publish are infrastructure polish; defer.
 
-Ship `/scope-project` + `depends-on` together (they're two halves of the same UX). Bundle the hook + CI publish if they fall out cheaply. The point release window after v0.0.7 should be calibrated against real-product pain — if you've shipped a URL shortener manually-sequenced, you'll know exactly which v0.0.8 candidate matters most.
+Ship `/scope-project` + `depends-on` + `run-sequence` together. They're three legs of the same stool — `/scope-project` writes the spec set, `depends-on` declares the order, `run-sequence` ships them. Each is independent enough to land as its own per-deliverable spec.
 
 ---
 
@@ -145,7 +149,9 @@ The post-real-product work. Roughly ordered by leverage; not committed.
 
 | Theme | Lead candidate from BACKLOG.md |
 |---|---|
-| **Spec-sequence runner** (`factory-runtime run-sequence`) | One CLI command walks the `depends-on` DAG and runs specs in topological order. Gated on evidence — trigger when the manual sequencing in v0.0.7 has become annoying enough to be specific about. |
+| **DoD-verifier runtime phase** *(NEW, surfaced by v0.0.6 BASELINE)* | Today `## Definition of Done` is documentation-only. `factory-runtime run` returns "converged" without verifying DoD shell gates ("typecheck clean", "biome clean"). New `dodPhase` parses shell-runnable DoD lines and executes them. Audit-trust gap, not just UX. ~300 LOC. |
+| **PostToolUse hook for `factory spec lint`/`review`** *(deferred from v0.0.7)* | Harness-enforced linting on every `Write` to `docs/specs/*.md`. Lives in `~/.claude/settings.json` — opt-in config recipe. |
+| **CI publish workflow** *(deferred from v0.0.7)* | Promote `pnpm release` to a tag-driven GitHub Actions workflow. |
 | **Worktree sandbox** | Agent runs in an isolated `git worktree` per run. Strong undo by construction. Ship after `/scope-project` proves the product workflow. |
 | **Holdout-aware automated convergence** | Validate runs holdouts at the end of every iteration; convergence requires both visible AND holdout passes. Quality knob; ride alongside worktree. |
 | **Scheduler (Layer 5)** — autonomous task queue | Pull `status: ready` specs and run them overnight. With `depends-on` declared, the scheduler can walk a project's DAG without human intervention. The end-state. |

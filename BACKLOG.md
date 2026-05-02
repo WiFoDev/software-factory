@@ -113,6 +113,44 @@ Five entries that were live candidates as of v0.0.5 shipped together as the v0.0
 - ✅ **`factory init` — first-contact gaps** — `@wifo/factory-spec-review` now in scaffold devDeps; `.factory-spec-review-cache` in scaffold gitignore; new `factory.config.json` with documented defaults; runtime CLI reads it (CLI flag > config > built-in default).
 - ✅ **`factory-implement-report.filesChanged` audit reliability** — pre/post working-tree snapshot replaces the buggy `git diff` capture. False negative on new-file-only runs + false positive on pre-dirty files both fixed.
 
+---
+
+## Lessons from the v0.0.6 URL-shortener baseline run
+
+Two friction points surfaced in the v0.0.6 baseline (see `BASELINE.md` v0.0.6 entry's "Surprises") that weren't on the v0.0.5-locked prediction list. Both came from a real run; both are concrete.
+
+### `factory init` — ship typescript in scaffold devDependencies
+
+**What:** `factory init` produces a scaffold whose `tsconfig.json` references TypeScript options but the scaffold doesn't add `typescript` to `devDependencies`. A user running `pnpm exec tsc --noEmit` (the canonical typecheck) gets `tsc: command not found` until they add typescript themselves. The v0.0.6 BASELINE-running agent caught this on spec 1 and fixed it post-hoc.
+
+**Why:** Same theme as the v0.0.5.x init-ergonomics fix — first-contact UX. The scaffold's `tsconfig.json` is meaningless without a tsc binary in `node_modules/.bin`. Either remove the tsconfig (silly) or include the typescript dep (right). The second is one line in `PACKAGE_JSON_TEMPLATE.devDependencies`.
+
+**The fix:** Add `'typescript': '^5.6.0'` to `PACKAGE_JSON_TEMPLATE.devDependencies` in `packages/core/src/init-templates.ts`. Match the version range used by the workspace root `package.json` (currently `^5.6.0`). Update the existing `init.test.ts` test that asserts the devDeps shape.
+
+**Touches:** `packages/core/src/init-templates.ts` (~1 LOC), `packages/core/src/init.test.ts` (~3 LOC), maybe `packages/core/src/init-templates.test.ts` if it asserts the full devDeps list.
+
+**Phasing suggestion:** v0.0.6.x point release, OR roll into v0.0.7's `/scope-project` work since both touch `factory init`'s output. Tiny lift either way.
+
+### DoD-verifier runtime phase — `factory-runtime run` should actually run the DoD
+
+**What:** A spec's `## Definition of Done` section lists shell-runnable gates ("typecheck clean", "biome clean", "pnpm test workspace-wide green"). Today these are documentation only — the runtime returns "converged" purely on test-pass + agent-success, never executing the DoD gates. Result: a spec can ship with broken types, lint failures, or workspace-wide test breakage and the runtime won't notice. The v0.0.6 BASELINE run surfaced this when `--no-judge` skipped the harness's judge phase, which apparently is the only thing that runs DoD checks today (and it doesn't even do it well).
+
+**Why:** Audit-trust gap, not just UX. The factory's central trust mechanism is "the runtime says converged → ship it." If converge doesn't include DoD verification, the trust contract is broken. The v0.0.5 `filesChanged` audit fix was about per-file truth; this is about whole-spec truth.
+
+**The shape (sketchy — needs scoping):**
+
+- New built-in phase `dodPhase` (or extend `validatePhase`) that parses the spec's `## Definition of Done` section, detects shell-runnable lines (lines starting with backtick code spans containing commands like `` `pnpm test` ``, `` `pnpm typecheck` ``, etc.), and runs each as a Bash step.
+- Convergence requires all DoD lines green AND all test/judge satisfactions green.
+- Non-shell DoD lines ("Public API surface unchanged") are LLM-judged via the existing harness judge runner (subscription-paid).
+
+**Why it's gated on more evidence:** The DoD-as-text design is intentional today — DoDs include human-readable assertions alongside shell-runnable ones. Mechanically running the shell ones is easy; the design question is "what about the human-readable ones?" Two real product runs (v0.0.5 + v0.0.6 URL-shorteners) surfaced this; one more run on a different shape (cron-scheduler, csv-pipeline) would calibrate whether DoD-verifier should ship as a unified phase or whether shell + judge should split into two passes.
+
+**Touches:** `packages/runtime/src/phases/` — new file `dod.ts` or extension of `validate.ts`. `packages/core/src/parser.ts` — add a `parseDoD(source)` helper that extracts shell-runnable lines from the DoD section (similar to how `parseScenarios` extracts Given/When/Then). `packages/runtime/src/runtime.ts` — wire dodPhase into the default graph. Tests + README. Probably ~300 LOC including tests; non-trivial.
+
+**Phasing suggestion:** v0.0.8+ (post real-product workflow). The v0.0.7 work (`/scope-project`, `depends-on`, sequence-runner) is more user-visible and has more evidence behind it. DoD-verifier is the right v0.0.8 candidate once the v0.0.7 ships and surfaces whatever DoD-related friction it surfaces.
+
+---
+
 ## Real-product workflow — close the project-scale gap
 
 The factory's sweet spot today (verified by slugify, gh-stars-{v1,v2}, parse-size, and the v0.0.5 self-build moneyball) is **one feature per spec**. The natural next step is a real product — "build a URL shortener with stats dashboard." That's not one spec, it's a sequence of 4-6 specs in dependency order: `core` → `redirect` → `tracking` → `stats` → `dashboard`.
