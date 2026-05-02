@@ -6,6 +6,58 @@ For the project's forward direction and shipped-release retrospectives, see [`RO
 
 ---
 
+## [0.0.6] — 2026-05-02
+
+**Theme: v0.0.5.x cluster shipped together.** Four BACKLOG-tracked follow-ups to v0.0.5, bundled because they're all small fixes / quality-of-life improvements that make every subsequent v0.0.6+ workflow cleaner. Three of the four runs hit the very 600s agent timeout that the fourth fix is making configurable — concrete validation that the friction is real.
+
+### Added
+
+- **`--max-agent-timeout-ms <n>` CLI flag + `RunOptions.maxAgentTimeoutMs?: number`** *(factory-runtime)*. Default 600_000 (unchanged). Mirrors the v0.0.3 `--max-total-tokens` pattern exactly: field-level addition, string-label CLI validation (NOT a new `RuntimeErrorCode`). Wide-blast-radius specs can raise the ceiling explicitly.
+- **`factory.config.json`** — optional config file at the consumer project root. Specifies defaults for `runtime: { maxIterations, maxTotalTokens, maxPromptTokens, noJudge }`. Read by `factory-runtime run` from cwd. Precedence: CLI flag > config file > built-in default. `factory init` writes one with documented defaults.
+- **`@wifo/factory-spec-review` in scaffolded `devDependencies`** *(factory-core)*. `factory init` now produces a scaffold where `factory spec review` works on first invocation (previously the dispatch's `findPackageRoot` walk failed because the package wasn't installed).
+- **`.factory-spec-review-cache` in `GITIGNORE_TEMPLATE`** *(factory-core)*. The reviewer cache no longer shows up in `git status` after a fresh `factory init` + `factory spec review` run.
+
+### Fixed
+
+- **Harness strips surrounding backticks from `test:` paths and patterns** *(factory-harness)*. Recurring spec-authoring pitfall — `parseTestLine` was passing the literal token (with backticks) to `bun test`, which never matched any file. Caught twice now (parse-size v1, factory-runtime-v0-0-5). The SPEC_TEMPLATE backtick-guidance BACKLOG entry is now obsolete; spec authors can write either backtick-quoted or bare paths and the harness handles both.
+- **`factory-implement-report.filesChanged` is reliable** *(factory-runtime)*. Replaces the simple post-run `git diff` with a pre/post working-tree snapshot (tracked + untracked + content hash). Two failure modes resolved:
+  - False negative on new-file-only runs (plain `git diff` doesn't report untracked files).
+  - False positive on pre-run uncommitted changes (the agent gets attributed for files that were already dirty).
+  Pre-dirty paths are filtered out — over-attributing the agent is worse than under-attributing.
+
+### Changed
+
+- **All six `@wifo/factory-*` packages bumped to `0.0.6`** in lockstep (matches the v0.0.5 publish coordination pattern). `init-templates` scaffold deps bumped from `^0.0.5` to `^0.0.6`.
+- **ROADMAP shift:** v0.0.6 was originally themed `/scope-project` + real-product workflow. That theme moves to **v0.0.7**; v0.0.6 contains the v0.0.5.x cluster shipped here.
+
+### Public API surface
+
+Unchanged across every package. Strictly equal to v0.0.5's surface (27 / 18 / ~16 / 19 / 10 / ~7). All v0.0.6 changes are field-level on already-exported types or internal-only helpers.
+
+| Package | Exports |
+|---|---|
+| `@wifo/factory-core` | 27 |
+| `@wifo/factory-context` | 18 |
+| `@wifo/factory-harness` | ~16 |
+| `@wifo/factory-runtime` | 19 |
+| `@wifo/factory-spec-review` | 10 |
+| `@wifo/factory-twin` | ~7 |
+
+### Test surface growth
+
+- `@wifo/factory-core`: 74 → 77 (+3 init-ergonomics scenarios)
+- `@wifo/factory-harness`: 56 → 60 (+4 backtick-stripping scenarios)
+- `@wifo/factory-runtime`: 131 → 138 (+4 filesChanged + 3 agent-timeout scenarios)
+- Workspace total: 446 → 462
+
+### Reconciliations worth knowing
+
+- **The cluster shipped as v0.0.6, not v0.0.5.1.** Spec ids stay as `factory-{harness,core,runtime}-v0-0-5-{1,2}` (they refer to the v0.0.5 follow-up cluster). The published npm version is v0.0.6 because 4-segment versions like `0.0.5.1` aren't strict SemVer and would be rejected by the registry.
+- **Three of four runs hit the 600s agent timeout** while implementing the cluster. The fourth fix (`--max-agent-timeout-ms`) is now in for the next run. Net effect: the v0.0.7 work will not hit this — the configurable knob exists.
+- **Lockstep bump even for unchanged packages.** spec-review/context/twin didn't change in v0.0.6 but bumped to 0.0.6 anyway. Matches the v0.0.5 publish-coordination pattern; keeps the scaffold's `^0.0.6` deps uniformly resolvable.
+
+---
+
 ## [0.0.5] — 2026-05-01
 
 **Theme: easier to adopt, smarter to use.** Every `@wifo/factory-*` package is now on the public npm registry. `factory init` scaffolds work outside this monorepo for the first time. The implementer agent gets a stable behavior-prior prompt prefix so prompt caching hits consistently across iterations.
@@ -125,6 +177,7 @@ Strict equality with v0.0.2 — 5 functions + 1 class + 13 types = 19 names in `
 - **Spec workflow** — `/scope-task`, `/finish-task`, `docs/specs/<id>.md` + `docs/technical-plans/<id>.md` convention.
 - **`examples/slugify`** — manual-loop walkthrough.
 
+[0.0.6]: https://github.com/WiFoDev/software-factory/releases/tag/v0.0.6
 [0.0.5]: https://github.com/WiFoDev/software-factory/releases/tag/v0.0.5
 [0.0.4]: https://github.com/WiFoDev/software-factory/releases/tag/v0.0.4
 [0.0.3]: https://github.com/WiFoDev/software-factory/releases/tag/v0.0.3

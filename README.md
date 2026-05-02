@@ -2,13 +2,13 @@
 
 A toolkit for **spec-driven, agent-friendly software development**. You write a spec describing the *intent* and the *scenarios* a feature must satisfy. The factory's tooling lints the spec, runs the scenarios as tests (and optionally as LLM-judged criteria for things tests can't capture), persists everything as content-addressable records, and gives you a typed convergence report with full DAG provenance.
 
-**v0.0.5 ships the toolkit to npm and tightens the implement prompt.** Every `@wifo/factory-*` package is published — `factory init`-generated scaffolds resolve `pnpm install` against the public registry. `implementPhase` now emits a stable `# Implementation guidelines` prefix above the spec on every iteration so the prompt cache hits consistently. v0.0.1 framework, v0.0.2 single-shot agent, v0.0.3 closed loop, v0.0.4 spec quality + bootstrap, **v0.0.5 publish + implement-guidelines**.
+**v0.0.6 ships the v0.0.5.x cluster** — harness backtick stripping, `factory init` first-contact UX, `filesChanged` audit reliability, configurable per-phase agent timeout. v0.0.5 shipped to npm + the implement prompt prefix; v0.0.6 closes four BACKLOG-tracked v0.0.5 follow-ups together so the v0.0.7 real-product-workflow work runs against a clean foundation. v0.0.1 framework, v0.0.2 single-shot agent, v0.0.3 closed loop, v0.0.4 spec quality + bootstrap, v0.0.5 publish + implement-guidelines, **v0.0.6 v0.0.5.x cluster**.
 
 Inspired by the [StrongDM Software Factory](https://factory.strongdm.ai/) model.
 
 ---
 
-## What you get today (v0.0.5)
+## What you get today (v0.0.6)
 
 The recommended end-to-end shape — same flow whether you implement by hand or let the agent do it:
 

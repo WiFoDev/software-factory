@@ -107,13 +107,26 @@ The first baseline. The maintainer manually decomposed into 4 specs and ran them
 
 Yes — the per-feature sweet spot is real and the prompt cache makes it cheap. The friction is concrete and addressable: friction #1 is what v0.0.6 already targets; #2 and #3 land in BACKLOG below as v0.0.5.x candidates. **Net signal: the v0.0.6 roadmap is correctly aimed; nothing about this run suggests a re-theme.**
 
-##### v0.0.6 — pending
+##### v0.0.6 — pending (shipped 2026-05-02, BASELINE not yet re-run)
 
-After `/scope-project` + `depends-on` ship. Same prompt, fresh `~/dev/url-shortener-v0.0.6/`. Predicted improvements: predictions #1, #2, #4 from the v0.0.5 entry should largely disappear or shrink. Predictions #3 and #5 should survive (they're v0.0.7 territory). New predictions land here when v0.0.6 is closer.
+The v0.0.5.x cluster. Did NOT add `/scope-project` (the originally-planned v0.0.6 theme moved to v0.0.7). Instead shipped the four BACKLOG-tracked v0.0.5 follow-ups: harness backtick stripping, `factory init` first-contact UX, `filesChanged` audit reliability, configurable per-phase agent timeout.
+
+**Predicted improvements when re-running the URL-shortener prompt against v0.0.6:**
+
+- **Friction #2 from v0.0.5 entry (`factory init` first-contact gaps) → should disappear.** The fresh `factory init` now ships with `@wifo/factory-spec-review` already in deps, `.factory-spec-review-cache` gitignored, and `factory.config.json` writing canonical defaults so the user types fewer flags.
+- **Friction #3 from v0.0.5 entry (`filesChanged` unreliable) → should disappear.** New-file-only runs now report new files; pre-dirty paths are filtered out.
+- **The harness backtick-quoted-path bug → should disappear.** Spec authors can write either form; the harness handles both.
+- **Predictions #3 + #4 from v0.0.5 (context-dir reuse oddness, status flipping) → still survive.** Those need v0.0.7's `/scope-project` + sequence-runner.
+
+The v0.0.6 baseline will run when convenient — no specific date. If the v0.0.5.x cluster genuinely removed friction, friction #2 + #3 should be absent from the v0.0.6 row.
 
 ##### v0.0.7 — pending
 
-After spec-sequence runner ships. Predicted improvements: prediction #3 (context-dir reuse oddness) becomes invisible — one CLI invocation walks all 4 specs and produces one DAG. Per-spec status flipping (#4) also goes away if the sequence-runner ships with status-aware iteration.
+After `/scope-project` + `depends-on` ship. Same prompt, fresh `~/dev/url-shortener-v0.0.7/`. Predicted improvements: friction #1 from v0.0.5 (manual decomposition + dependency invisibility) should largely disappear. Friction #4 (status flipping) should also shrink if `/scope-project` writes the first spec as `ready` and stages the rest. Sequence-runner gap (originally prediction #3) survives until v0.0.8.
+
+##### v0.0.8 — pending
+
+After spec-sequence runner ships. The context-dir reuse oddness becomes invisible — one CLI invocation walks all 4 specs and produces one DAG. Per-spec status flipping also goes away if the sequence-runner ships with status-aware iteration.
 
 ##### v0.1.0 — pending
 

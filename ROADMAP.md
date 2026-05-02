@@ -4,7 +4,29 @@ This file is the **direction**. `BACKLOG.md` is the candidate pile. The roadmap 
 
 ---
 
-## Where we are: v0.0.5 — shipped
+## Where we are: v0.0.6 — shipped
+
+**The v0.0.5.x cluster, bundled.** Four BACKLOG-tracked follow-ups to v0.0.5 — harness backtick stripping, `factory init` first-contact UX, `factory-implement-report.filesChanged` audit reliability, and configurable per-phase agent timeout — shipped together as one v0.0.6 release. The ROADMAP's prior v0.0.6 theme (`/scope-project` + real-product workflow) moves to v0.0.7.
+
+### What v0.0.6 added
+
+| # | Piece | Notes |
+|---|---|---|
+| 1 | **Harness backtick stripping** *(factory-harness)* | `parseTestLine` strips a leading + trailing backtick from both the file token and the pattern. Recurring spec-authoring pitfall closed at the source; SPEC_TEMPLATE backtick-guidance BACKLOG entry now obsolete. |
+| 2 | **`factory init` first-contact gaps** *(factory-core)* | (a) `@wifo/factory-spec-review` added to scaffold devDependencies; (b) `.factory-spec-review-cache` added to GITIGNORE_TEMPLATE; (c) new `FACTORY_CONFIG_TEMPLATE` writes `factory.config.json` with documented defaults; (d) runtime CLI reads optional `factory.config.json` from cwd (CLI flag > config > built-in default). |
+| 3 | **`filesChanged` audit reliability** *(factory-runtime)* | Pre/post working-tree snapshot replaces the buggy `git diff` capture. False negative on new-file-only runs + false positive on pre-dirty files both fixed. Pre-dirty paths filtered out (over-attribution > under-attribution). Schema unchanged. |
+| 4 | **Configurable per-phase agent timeout** *(factory-runtime)* | New `RunOptions.maxAgentTimeoutMs?: number` (default 600_000) + `--max-agent-timeout-ms <n>` CLI flag with positive-integer validation. Mirrors the v0.0.3 `--max-total-tokens` pattern; no new RuntimeErrorCode. |
+
+### Reconciliations worth knowing
+
+- **The cluster shipped as v0.0.6, not v0.0.5.1.** Spec ids (`factory-{harness,core,runtime}-v0-0-5-{1,2}`) refer to the v0.0.5 follow-up cluster; the published npm version is v0.0.6 because 4-segment versions like `0.0.5.1` aren't strict SemVer and the registry would reject.
+- **All 6 packages bumped to 0.0.6 in lockstep.** spec-review/context/twin didn't change but bumped anyway — matches v0.0.5's publish-coordination pattern; keeps the scaffold's `^0.0.6` deps uniformly resolvable.
+- **Three of four runs hit the 600s agent timeout** while implementing the cluster. Fix #4 is now in place — the agent timeout is configurable for v0.0.7's wider-blast-radius work.
+- **Public API surface unchanged across every package.** All four fixes are field-level on already-exported types or internal-only helpers. Strict equality with v0.0.5's surface counts.
+
+---
+
+## Where we were: v0.0.5 — shipped
 
 **npm publish + implement-guidelines.** v0.0.4 shipped `factory init` and `factory spec review` but the packages weren't on npm — `factory init`-generated scaffolds couldn't resolve `^0.0.4` deps outside this monorepo. v0.0.5 publishes every `@wifo/factory-*` package to the public registry under v0.0.5, removes the documented "monorepo-only" caveat from every consumer doc, and adds the cache-friendly `# Implementation guidelines` prompt prefix that `implementPhase` emits above every spec. Coordinated version bump across all six packages keeps the scaffold's `^0.0.5` deps correct.
 
@@ -96,46 +118,41 @@ What's in your hands today:
 
 ---
 
-## v0.0.6 — next
+## v0.0.7 — next
 
-**Theme: real-product workflow.** v0.0.5 validated the per-feature spec sweet spot — `factory-runtime` shipped slugify, gh-stars, parse-size, and the v0.0.5 self-build (3 specs in sequence) cleanly. The next ceiling is **products**, not features. A "URL shortener with stats dashboard" is a sequence of 4-6 specs in dependency order (`core` → `redirect` → `tracking` → `stats` → `dashboard`); manually decomposing and sequencing them is the friction that v0.0.6 removes.
+**Theme: real-product workflow.** Inherits the theme that was originally v0.0.6, pushed one slot because v0.0.5.x cluster shipped first. v0.0.5 + v0.0.6 validated the per-feature spec sweet spot — `factory-runtime` shipped slugify, gh-stars, parse-size, the v0.0.5 self-build, and now the v0.0.6 self-build (4 specs in sequence). The next ceiling is **products**, not features. A "URL shortener with stats dashboard" is a sequence of 4-6 specs in dependency order (`core` → `redirect` → `tracking` → `stats` → `dashboard`); manually decomposing and sequencing them is the friction that v0.0.7 removes.
 
-### Lead candidates (re-themed from prior v0.0.6)
+### Lead candidates
 
 | # | Piece | Notes |
 |---|---|---|
-| 1 | **`/scope-project` slash command** | Natural-language project description → N specs in dependency order under `docs/specs/`. First spec ships `status: ready`; the rest `status: drafting` until the prior spec converges. ~30 LOC of slash-command markdown in `~/.claude/commands/`. **Centerpiece of v0.0.6 — biggest UX win in the BACKLOG.** |
+| 1 | **`/scope-project` slash command** | Natural-language project description → N specs in dependency order under `docs/specs/`. First spec ships `status: ready`; the rest `status: drafting` until the prior spec converges. ~30 LOC of slash-command markdown in `~/.claude/commands/`. **Centerpiece of v0.0.7 — biggest UX win in the BACKLOG.** |
 | 2 | **`depends-on` frontmatter field** | Optional `depends-on: [<id>, ...]` on `SpecFrontmatter`. `factory spec lint` validates id format; `cross-doc-consistency` reviewer judge reads dep specs when scoring. Pairs with `/scope-project`. Field-level addition; zero new public exports. |
-| 3 | **PostToolUse hook for `factory spec lint`/`review`** | Carryover from prior v0.0.6 candidate. Harness-enforced linting on every `Write` to `docs/specs/*.md`. Now that `/scope-project` writes multiple specs at once, the hook becomes more valuable. Lives in `~/.claude/settings.json` — opt-in config recipe. |
-| 4 | **CI publish workflow** | Promote `pnpm release` to a tag-driven GitHub Actions workflow. Deferred from v0.0.5 until the manual flow soaked. v0.0.5 has soaked one cycle (this release); v0.0.6 is the right time. |
-
-### Deferred from prior v0.0.6 (now v0.0.7+)
-
-- **Worktree sandbox** — agent isolation. Real safety win, but not the binding constraint right now. The binding constraint is "I can't easily build a real product" — fix that first.
-- **Holdout-aware automated convergence** — same logic. Quality knob, not the UX bottleneck.
-- **Streaming cost monitoring** — speculative; defer until cost-cap-exceeded is common.
+| 3 | **PostToolUse hook for `factory spec lint`/`review`** | Harness-enforced linting on every `Write` to `docs/specs/*.md`. Now that `/scope-project` writes multiple specs at once, the hook becomes more valuable. Lives in `~/.claude/settings.json` — opt-in config recipe. |
+| 4 | **CI publish workflow** | Promote `pnpm release` to a tag-driven GitHub Actions workflow. Deferred from v0.0.5; v0.0.6 has soaked one more cycle (the v0.0.5.x cluster); v0.0.7 is the right time. |
 
 ### Scope discipline
 
-The v0.0.5 moneyball lesson plus the URL-shortener-mental-model conversation re-themed this release. The original v0.0.6 ("worktree + holdout") was about *agent guarantees* for solo features. The new v0.0.6 is about **product-scale orchestration**, because that's the gap real users hit first when they try to use the factory for actual work. Worktree and holdout-aware are great hardening — they belong in v0.0.7 once `/scope-project` has unblocked the real-product flow.
+Same framing as before — the binding constraint is "I can't easily build a real product." Fix that first. Worktree sandbox + holdout-aware convergence are hardening, not the bottleneck — they belong in v0.0.8 once `/scope-project` has unblocked the real-product flow.
 
-Ship `/scope-project` + `depends-on` together (they're two halves of the same UX). Bundle the hook + CI publish if they fall out cheaply. The point release window after v0.0.6 should be calibrated against real-product pain — if you've shipped a URL shortener manually-sequenced, you'll know exactly which v0.0.7 candidate matters most.
+Ship `/scope-project` + `depends-on` together (they're two halves of the same UX). Bundle the hook + CI publish if they fall out cheaply. The point release window after v0.0.7 should be calibrated against real-product pain — if you've shipped a URL shortener manually-sequenced, you'll know exactly which v0.0.8 candidate matters most.
 
 ---
 
-## v0.0.7+ — future
+## v0.0.8+ — future
 
 The post-real-product work. Roughly ordered by leverage; not committed.
 
 | Theme | Lead candidate from BACKLOG.md |
 |---|---|
-| **Spec-sequence runner** (`factory-runtime run-sequence`) | One CLI command walks the `depends-on` DAG and runs specs in topological order. Gated on evidence — trigger when the manual sequencing in v0.0.6 has become annoying enough to be specific about. |
-| **Worktree sandbox** | Agent runs in an isolated `git worktree` per run. Strong undo by construction. Pushed from v0.0.6 to here; ship after `/scope-project` proves the product workflow. |
+| **Spec-sequence runner** (`factory-runtime run-sequence`) | One CLI command walks the `depends-on` DAG and runs specs in topological order. Gated on evidence — trigger when the manual sequencing in v0.0.7 has become annoying enough to be specific about. |
+| **Worktree sandbox** | Agent runs in an isolated `git worktree` per run. Strong undo by construction. Ship after `/scope-project` proves the product workflow. |
 | **Holdout-aware automated convergence** | Validate runs holdouts at the end of every iteration; convergence requires both visible AND holdout passes. Quality knob; ride alongside worktree. |
 | **Scheduler (Layer 5)** — autonomous task queue | Pull `status: ready` specs and run them overnight. With `depends-on` declared, the scheduler can walk a project's DAG without human intervention. The end-state. |
 | **Reviewer's deferred judges** | `review/api-surface-drift`, `review/feasibility`, `review/scope-creep`. Each ships per-judge with a "this real spec would have caught X" justification. |
 | **`explorePhase` / `planPhase`** | Separate "understand the codebase" and "plan the change" steps. Speculative — only if a real run shows `implement` is too low-context. |
 | **Domain packs** — schema + judges + twins per domain | `@wifo/factory-pack-web`, `-pack-api`; OLH-specific pack stays private. v1.0.0 territory. |
+| **Streaming cost monitoring** | Mid-stream abort instead of post-hoc. Worth pursuing once cost-cap-exceeded events become common enough. |
 | **Streaming cost monitoring** | Mid-stream abort instead of post-hoc. Worth pursuing once cost-cap-exceeded events become common enough. |
 | **Multi-agent coordination** | Beyond a single agent per phase. Out of scope until single-agent's ceiling is clearly hit. |
 
