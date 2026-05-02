@@ -83,7 +83,7 @@ describe('runInit — happy path', () => {
       .replace(/[^a-z0-9_-]+/g, '-')
       .replace(/^-+/, '');
     expect(pkg.name).toBe(expectedName);
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.5');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.6');
 
     // tsconfig.json is self-contained.
     const tsconfig = JSON.parse(readFileSync(join(dir, 'tsconfig.json'), 'utf8'));
@@ -146,6 +146,48 @@ describe('runInit — name validation', () => {
     run(['--name=-bad'], io.io);
     expect(io.exitCode()).toBe(2);
     expect(io.stderr()).toContain('init/invalid-name');
+  });
+});
+
+describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
+  test('scaffold devDependencies include @wifo/factory-spec-review at ^0.0.5', () => {
+    const io = makeIo();
+    run(['--name', 'test'], io.io);
+    expect(io.exitCode()).toBe(0);
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.6');
+    // Existing devDep stays alongside.
+    expect(pkg.devDependencies['@types/bun']).toBeDefined();
+  });
+
+  test('scaffold gitignore includes .factory-spec-review-cache', () => {
+    const io = makeIo();
+    run(['--name', 'test'], io.io);
+    expect(io.exitCode()).toBe(0);
+    const gitignore = readFileSync(join(dir, '.gitignore'), 'utf8');
+    expect(gitignore).toContain('.factory-spec-review-cache');
+    // Existing entries still present.
+    expect(gitignore).toContain('node_modules');
+    expect(gitignore).toContain('.factory');
+    expect(gitignore).toContain('*.log');
+    expect(gitignore).toContain('.DS_Store');
+  });
+
+  test('scaffold writes factory.config.json with documented defaults', () => {
+    const io = makeIo();
+    run(['--name', 'test'], io.io);
+    expect(io.exitCode()).toBe(0);
+    const configPath = join(dir, 'factory.config.json');
+    expect(existsSync(configPath)).toBe(true);
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    expect(config).toEqual({
+      runtime: {
+        maxIterations: 5,
+        maxTotalTokens: 1000000,
+        maxPromptTokens: 100000,
+        noJudge: false,
+      },
+    });
   });
 });
 

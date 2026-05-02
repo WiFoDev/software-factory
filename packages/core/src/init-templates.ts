@@ -9,12 +9,13 @@ export const PACKAGE_JSON_TEMPLATE = {
   type: 'module',
   scripts: {},
   dependencies: {
-    '@wifo/factory-context': '^0.0.5',
-    '@wifo/factory-core': '^0.0.5',
-    '@wifo/factory-runtime': '^0.0.5',
+    '@wifo/factory-context': '^0.0.6',
+    '@wifo/factory-core': '^0.0.6',
+    '@wifo/factory-runtime': '^0.0.6',
   },
   devDependencies: {
     '@types/bun': '^1.1.14',
+    '@wifo/factory-spec-review': '^0.0.6',
   },
 } as const;
 
@@ -50,7 +51,20 @@ export const GITIGNORE_TEMPLATE = `node_modules
 .factory
 *.log
 .DS_Store
+.factory-spec-review-cache
 `;
+
+// Canonical defaults documented for the v0.0.5 URL-shortener workflow. Users
+// edit to taste; CLI flags always override. Internal-only — NOT exported from
+// `core/src/index.ts`.
+export const FACTORY_CONFIG_TEMPLATE = {
+  runtime: {
+    maxIterations: 5,
+    maxTotalTokens: 1000000,
+    maxPromptTokens: 100000,
+    noJudge: false,
+  },
+} as const;
 
 export const README_TEMPLATE = `# {{name}}
 

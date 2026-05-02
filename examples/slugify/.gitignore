@@ -2,3 +2,4 @@ node_modules
 .factory
 *.log
 .DS_Store
+.factory-spec-review-cache

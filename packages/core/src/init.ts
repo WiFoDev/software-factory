@@ -3,6 +3,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { CliIo } from './cli.js';
 import {
+  FACTORY_CONFIG_TEMPLATE,
   GITIGNORE_TEMPLATE,
   PACKAGE_JSON_TEMPLATE,
   README_TEMPLATE,
@@ -27,6 +28,10 @@ function planFiles(name: string): PlannedFile[] {
       contents: `${JSON.stringify(TSCONFIG_TEMPLATE, null, 2)}\n`,
     },
     { relPath: '.gitignore', contents: GITIGNORE_TEMPLATE },
+    {
+      relPath: 'factory.config.json',
+      contents: `${JSON.stringify(FACTORY_CONFIG_TEMPLATE, null, 2)}\n`,
+    },
     { relPath: 'README.md', contents: README_TEMPLATE.replaceAll('{{name}}', name) },
     { relPath: 'src/.gitkeep', contents: '' },
     { relPath: 'docs/specs/done/.gitkeep', contents: '' },

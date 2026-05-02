@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +15,7 @@ import {
 } from '../records.js';
 import type { PhaseContext } from '../types.js';
 import {
+  DEFAULT_TIMEOUT_MS,
   IMPLEMENTATION_GUIDELINES,
   buildPrompt,
   implementPhase,
@@ -1259,5 +1261,207 @@ describe('implementPhase — integration with validatePhase', () => {
       Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
       Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_RESULT');
     }
+  });
+});
+
+// ----- v0.0.5.1: filesChanged audit reliability ---------------------------
+
+describe('implementPhase — filesChanged audit reliability (v0.0.5.1)', () => {
+  function runGit(args: string[], cwd: string): void {
+    const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    if (r.status !== 0) {
+      throw new Error(`git ${args.join(' ')} failed: ${r.stderr ?? ''}${r.stdout ?? ''}`);
+    }
+  }
+
+  function gitInit(dir: string): void {
+    runGit(['init', '-q'], dir);
+    runGit(['config', 'user.name', 'test'], dir);
+    runGit(['config', 'user.email', 'test@test.example'], dir);
+    runGit(['config', 'commit.gpgsign', 'false'], dir);
+  }
+
+  let v051WorkDir: string;
+  let v051StoreDir: string;
+
+  beforeEach(() => {
+    v051WorkDir = mkdtempSync(join(tmpdir(), 'runtime-impl-v051-work-'));
+    v051StoreDir = mkdtempSync(join(tmpdir(), 'runtime-impl-v051-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(v051WorkDir, { recursive: true, force: true });
+    rmSync(v051StoreDir, { recursive: true, force: true });
+  });
+
+  async function buildCtx(dir: string): Promise<PhaseContext> {
+    const store = createContextStore({ dir: v051StoreDir });
+    tryRegister(store, 'factory-run', FactoryRunSchema);
+    tryRegister(store, 'factory-implement-report', FactoryImplementReportSchema);
+
+    const specPath = join(dir, 'v051-spec.md');
+    writeFileSync(
+      specPath,
+      `---
+id: v051-fileschanged
+classification: light
+type: fix
+status: ready
+---
+
+# v051-fileschanged
+
+## Scenarios
+
+**S-1** — sample
+  Given a thing
+  When something
+  Then something
+  Satisfaction:
+    - judge: works
+
+## Definition of Done
+
+- it works
+`,
+    );
+    runGit(['add', 'v051-spec.md'], dir);
+    runGit(['commit', '-q', '-m', 'spec'], dir);
+
+    const runId = await store.put(
+      'factory-run',
+      {
+        specId: 'v051-fileschanged',
+        graphPhases: ['implement'],
+        maxIterations: 1,
+        startedAt: new Date().toISOString(),
+      },
+      { parents: [] },
+    );
+
+    const source = readFileSync(specPath, 'utf8');
+    const spec = parseSpec(source, { filename: specPath });
+    return {
+      spec,
+      contextStore: store,
+      log: () => {},
+      runId,
+      iteration: 1,
+      inputs: [],
+    };
+  }
+
+  function pathsOf(records: readonly { payload: unknown }[]): string[] {
+    const payload = records[0]?.payload as { filesChanged: { path: string }[] };
+    return payload.filesChanged.map((f) => f.path);
+  }
+
+  test('filesChanged includes newly created files', async () => {
+    gitInit(v051WorkDir);
+    const ctx = await buildCtx(v051WorkDir);
+    const phase = implementPhase({ cwd: v051WorkDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(v051WorkDir, 'src/foo.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export const foo = 42;\n';
+    try {
+      const result = await phase.run(ctx);
+      expect(result.status).toBe('pass');
+      expect(pathsOf(result.records)).toContain('src/foo.ts');
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('filesChanged includes modified tracked files (regression gate)', async () => {
+    gitInit(v051WorkDir);
+    mkdirSync(join(v051WorkDir, 'src'), { recursive: true });
+    writeFileSync(join(v051WorkDir, 'src/foo.ts'), 'export const foo = 1;\n');
+    runGit(['add', 'src/foo.ts'], v051WorkDir);
+    runGit(['commit', '-q', '-m', 'init foo'], v051WorkDir);
+    const ctx = await buildCtx(v051WorkDir);
+    const phase = implementPhase({ cwd: v051WorkDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(v051WorkDir, 'src/foo.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export const foo = 42;\n';
+    try {
+      const result = await phase.run(ctx);
+      expect(result.status).toBe('pass');
+      expect(pathsOf(result.records)).toContain('src/foo.ts');
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('filesChanged excludes pre-dirty files', async () => {
+    gitInit(v051WorkDir);
+    writeFileSync(join(v051WorkDir, 'JOURNAL.md'), '# initial\n');
+    runGit(['add', 'JOURNAL.md'], v051WorkDir);
+    runGit(['commit', '-q', '-m', 'init journal'], v051WorkDir);
+    const ctx = await buildCtx(v051WorkDir);
+    // Make JOURNAL.md pre-dirty (uncommitted maintainer edit) before the phase runs.
+    writeFileSync(join(v051WorkDir, 'JOURNAL.md'), '# initial\nmaintainer added this line\n');
+
+    const phase = implementPhase({ cwd: v051WorkDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(v051WorkDir, 'JOURNAL.md');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = '# initial\nthe agent wrote this\n';
+    try {
+      const result = await phase.run(ctx);
+      expect(result.status).toBe('pass');
+      expect(pathsOf(result.records)).not.toContain('JOURNAL.md');
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('filesChanged includes deleted files', async () => {
+    gitInit(v051WorkDir);
+    mkdirSync(join(v051WorkDir, 'src'), { recursive: true });
+    writeFileSync(join(v051WorkDir, 'src/old.ts'), 'export const old = 1;\n');
+    runGit(['add', 'src/old.ts'], v051WorkDir);
+    runGit(['commit', '-q', '-m', 'init old'], v051WorkDir);
+    const ctx = await buildCtx(v051WorkDir);
+    const phase = implementPhase({ cwd: v051WorkDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+
+    process.env.FAKE_CLAUDE_MODE = 'delete';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(v051WorkDir, 'src/old.ts');
+    try {
+      const result = await phase.run(ctx);
+      expect(result.status).toBe('pass');
+      expect(pathsOf(result.records)).toContain('src/old.ts');
+      expect(existsSync(join(v051WorkDir, 'src/old.ts'))).toBe(false);
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+    }
+  });
+});
+
+// ----- v0.0.5.2: configurable per-phase agent timeout (S-1) --------------
+
+describe('implementPhase — configurable agent timeout (v0.0.5.2)', () => {
+  test('default agent timeout remains 600000ms when no override is provided', () => {
+    // Regression gate: the hardcoded default timeout used by implementPhase
+    // when neither the explicit `timeoutMs` opt nor `ctx.maxAgentTimeoutMs`
+    // is set. Byte-equal to v0.0.5 behavior — moving this constant changes
+    // the default agent wall-clock budget for every existing call site.
+    expect(DEFAULT_TIMEOUT_MS).toBe(600_000);
   });
 });

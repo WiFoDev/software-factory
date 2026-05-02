@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, realpathSync } from 'node:fs';
+import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type CliIo, runCli } from './cli.js';
@@ -536,4 +536,205 @@ describe('factory-runtime CLI — v0.0.3 --max-total-tokens', () => {
     expect(cap.stderr()).toContain('--max-total-tokens <n>');
     expect(cap.stderr()).toContain('default: 500000');
   });
+});
+
+// ----- v0.0.5.1: optional factory.config.json defaults -----------------
+
+async function readFactoryRunMaxIterations(ctxDir: string): Promise<number | null> {
+  const fileList = (await Bun.$`ls ${ctxDir}`.quiet().text()).trim().split('\n');
+  for (const fname of fileList) {
+    const text = await Bun.file(join(ctxDir, fname)).text();
+    const rec = JSON.parse(text) as { type: string; payload: { maxIterations?: number } };
+    if (rec.type === 'factory-run') {
+      return rec.payload.maxIterations ?? null;
+    }
+  }
+  return null;
+}
+
+async function setupConfigWorkdir(prefix: string): Promise<string> {
+  // The validate phase runs `bun test` from cwd. Copy the spec + the test it
+  // references into the workdir so resolution doesn't depend on RUNTIME_ROOT.
+  const work = mkdtempSync(join(tmpdir(), prefix));
+  await Bun.write(join(work, 'all-pass.md'), await Bun.file(ALL_PASS).text());
+  await Bun.write(
+    join(work, 'trivial-pass.test.ts'),
+    await Bun.file(join(RUNTIME_ROOT, 'test-fixtures/trivial-pass.test.ts')).text(),
+  );
+  return work;
+}
+
+describe('factory-runtime CLI — v0.0.5.1 factory.config.json', () => {
+  test('factory.config.json defaults are honored when CLI flag absent; CLI flag overrides config', async () => {
+    const work = await setupConfigWorkdir('runtime-cli-config-');
+    writeFileSync(
+      join(work, 'factory.config.json'),
+      JSON.stringify({ runtime: { maxIterations: 3 } }),
+    );
+
+    const prevCwd = process.cwd();
+    process.chdir(work);
+    try {
+      // Case A: no --max-iterations flag → config wins (3, not built-in 5).
+      const ctxA = mkdtempSync(join(tmpdir(), 'runtime-cli-config-ctxA-'));
+      const capA = makeIo();
+      await invoke(
+        ['run', 'all-pass.md', '--no-judge', '--no-implement', '--context-dir', ctxA],
+        capA.io,
+      );
+      expect(capA.exitCode()).toBe(0);
+      expect(await readFactoryRunMaxIterations(ctxA)).toBe(3);
+      await Bun.$`rm -rf ${ctxA}`.quiet().nothrow();
+
+      // Case B: --max-iterations 7 flag → CLI wins over config.
+      const ctxB = mkdtempSync(join(tmpdir(), 'runtime-cli-config-ctxB-'));
+      const capB = makeIo();
+      await invoke(
+        [
+          'run',
+          'all-pass.md',
+          '--no-judge',
+          '--no-implement',
+          '--max-iterations',
+          '7',
+          '--context-dir',
+          ctxB,
+        ],
+        capB.io,
+      );
+      expect(capB.exitCode()).toBe(0);
+      expect(await readFactoryRunMaxIterations(ctxB)).toBe(7);
+      await Bun.$`rm -rf ${ctxB}`.quiet().nothrow();
+    } finally {
+      process.chdir(prevCwd);
+      await Bun.$`rm -rf ${work}`.quiet().nothrow();
+    }
+  });
+
+  test('absent factory.config.json leaves built-in defaults intact', async () => {
+    const work = await setupConfigWorkdir('runtime-cli-noconfig-');
+    const prevCwd = process.cwd();
+    process.chdir(work);
+    try {
+      const cap = makeIo();
+      await invoke(
+        ['run', 'all-pass.md', '--no-judge', '--no-implement', '--context-dir', ctxDir],
+        cap.io,
+      );
+      expect(cap.exitCode()).toBe(0);
+      expect(await readFactoryRunMaxIterations(ctxDir)).toBe(5);
+    } finally {
+      process.chdir(prevCwd);
+      await Bun.$`rm -rf ${work}`.quiet().nothrow();
+    }
+  });
+});
+
+// ----- v0.0.5.2: --max-agent-timeout-ms ---------------------------------
+
+describe('factory-runtime CLI — v0.0.5.2 --max-agent-timeout-ms', () => {
+  test('--max-agent-timeout-ms 0 / abc / -5 → exit 2 with stderr label runtime/invalid-max-agent-timeout-ms', async () => {
+    for (const bad of ['0', 'abc']) {
+      const cap = makeIo();
+      await invoke(
+        [
+          'run',
+          ALL_PASS,
+          '--no-judge',
+          '--no-implement',
+          '--max-agent-timeout-ms',
+          bad,
+          '--context-dir',
+          ctxDir,
+        ],
+        cap.io,
+      );
+      expect(cap.exitCode()).toBe(2);
+      expect(cap.stderr()).toContain('runtime/invalid-max-agent-timeout-ms');
+      expect(cap.stderr()).toContain('must be a positive integer');
+      expect(cap.stderr()).toContain(`(got '${bad}')`);
+    }
+
+    // Negative values require the `=` form because parseArgs would otherwise
+    // treat `-5` as a flag (mirrors the --max-total-tokens precedent).
+    const capNeg = makeIo();
+    await invoke(
+      [
+        'run',
+        ALL_PASS,
+        '--no-judge',
+        '--no-implement',
+        '--max-agent-timeout-ms=-5',
+        '--context-dir',
+        ctxDir,
+      ],
+      capNeg.io,
+    );
+    expect(capNeg.exitCode()).toBe(2);
+    expect(capNeg.stderr()).toContain('runtime/invalid-max-agent-timeout-ms');
+    expect(capNeg.stderr()).toContain("(got '-5')");
+  });
+
+  test('--max-agent-timeout-ms 30000 honored end-to-end via fake-claude hang fixture', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'runtime-cli-timeout-work-'));
+    const specMd = await Bun.file(NEEDS_IMPL).text();
+    const testTs = await Bun.file(join(RUNTIME_ROOT, 'test-fixtures/needs-impl.test.ts')).text();
+    await Bun.write(join(work, 'needs-impl.md'), specMd);
+    await Bun.write(join(work, 'needs-impl.test.ts'), testTs);
+
+    const cap = makeIo();
+    const prevCwd = process.cwd();
+    process.chdir(work);
+    process.env.FAKE_CLAUDE_MODE = 'hang';
+    const t0 = performance.now();
+    try {
+      await invoke(
+        [
+          'run',
+          'needs-impl.md',
+          '--no-judge',
+          '--claude-bin',
+          FAKE_CLAUDE,
+          '--max-agent-timeout-ms',
+          '30000',
+          '--twin-mode',
+          'off',
+          '--context-dir',
+          ctxDir,
+        ],
+        cap.io,
+      );
+      const wall = performance.now() - t0;
+      // Resolved cap (30s), not the default 600s. Generous upper bound to
+      // cover slow CI; the regression we're guarding is a hang at ~600s.
+      expect(wall).toBeLessThan(35_000);
+      expect(cap.exitCode()).toBe(3);
+      expect(cap.stdout()).toContain("error during phase 'implement' iteration 1");
+      expect(cap.stdout()).toContain('runtime/agent-failed: agent-timeout (after 30000ms):');
+
+      // Persisted factory-phase has status='error' with the timeout
+      // failureDetail prefix using the resolved 30000ms value.
+      let foundError = false;
+      const fileList = (await Bun.$`ls ${ctxDir}`.quiet().text()).trim().split('\n');
+      for (const fname of fileList) {
+        const text = await Bun.file(join(ctxDir, fname)).text();
+        const rec = JSON.parse(text) as {
+          type: string;
+          payload: { phaseName?: string; status?: string; failureDetail?: string };
+        };
+        if (rec.type === 'factory-phase' && rec.payload.phaseName === 'implement') {
+          expect(rec.payload.status).toBe('error');
+          expect(rec.payload.failureDetail).toContain(
+            'runtime/agent-failed: agent-timeout (after 30000ms):',
+          );
+          foundError = true;
+        }
+      }
+      expect(foundError).toBe(true);
+    } finally {
+      process.chdir(prevCwd);
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      await Bun.$`rm -rf ${work}`.quiet().nothrow();
+    }
+  }, 60_000);
 });

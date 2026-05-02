@@ -20,6 +20,14 @@ function stripQuotes(text: string): string {
   return trimmed;
 }
 
+function stripBackticks(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length >= 2 && trimmed.startsWith('`') && trimmed.endsWith('`')) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
 /**
  * Parse a `test:` satisfaction value into `{ file?, pattern? }`.
  *
@@ -45,18 +53,19 @@ export function parseTestLine(value: string): ParsedTestLine {
 
   const firstSpace = trimmed.search(/\s/);
   if (firstSpace < 0) {
-    if (looksLikeFile(trimmed)) return { file: trimmed };
-    return { pattern: trimmed };
+    const token = stripBackticks(trimmed);
+    if (looksLikeFile(token)) return { file: token };
+    return { pattern: token };
   }
 
-  const head = trimmed.slice(0, firstSpace);
+  const head = stripBackticks(trimmed.slice(0, firstSpace));
   const tail = trimmed.slice(firstSpace + 1).trim();
 
   if (looksLikeFile(head)) {
-    const pattern = stripQuotes(tail);
+    const pattern = stripBackticks(stripQuotes(tail));
     if (pattern === '') return { file: head };
     return { file: head, pattern };
   }
 
-  return { pattern: stripQuotes(trimmed) };
+  return { pattern: stripBackticks(stripQuotes(trimmed)) };
 }

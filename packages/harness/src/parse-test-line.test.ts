@@ -49,4 +49,32 @@ describe('parseTestLine', () => {
       expect(parseTestLine(`a${ext}`).file).toBe(`a${ext}`);
     }
   });
+
+  test('bare path passes through unchanged', () => {
+    expect(parseTestLine('src/foo.test.ts "happy path"')).toEqual({
+      file: 'src/foo.test.ts',
+      pattern: 'happy path',
+    });
+  });
+
+  test('backtick-wrapped path strips to bare', () => {
+    expect(parseTestLine('`src/foo.test.ts` "happy path"')).toEqual({
+      file: 'src/foo.test.ts',
+      pattern: 'happy path',
+    });
+  });
+
+  test('backtick-wrapped pattern strips to bare', () => {
+    expect(parseTestLine('src/foo.test.ts `happy path`')).toEqual({
+      file: 'src/foo.test.ts',
+      pattern: 'happy path',
+    });
+  });
+
+  test('mid-string backticks survive', () => {
+    expect(parseTestLine('`src/foo.test.ts` "match `inner` token"')).toEqual({
+      file: 'src/foo.test.ts',
+      pattern: 'match `inner` token',
+    });
+  });
 });

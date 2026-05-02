@@ -27,6 +27,23 @@ Idempotent and safe by default: if any target file or directory already exists, 
 
 The scaffold's `package.json` pins `@wifo/factory-*` deps to `^0.0.5` — `pnpm install` resolves them from the public npm registry.
 
+### factory.config.json (v0.0.5.1+)
+
+`factory init` writes a `factory.config.json` at the repo root with the documented runtime defaults:
+
+```json
+{
+  "runtime": {
+    "maxIterations": 5,
+    "maxTotalTokens": 1000000,
+    "maxPromptTokens": 100000,
+    "noJudge": false
+  }
+}
+```
+
+`factory-runtime run` reads this file from `cwd` if present and applies any subset of the `runtime.*` keys as defaults. Precedence is **CLI flag > config file > built-in default** — the canonical `--max-iterations 5 --max-total-tokens 1000000 --no-judge --max-prompt-tokens 100000` invocation collapses to a flagless `factory-runtime run <spec>`. Edit the file to taste; absent or malformed files are ignored silently (the file is OPTIONAL by design). Unknown keys are tolerated for forward-compatibility.
+
 ## Harness-enforced spec linting + review (Claude Code hook recipe)
 
 Both `factory spec lint` and `factory spec review` are most valuable when they run on every save — but agents forget to run them. The fix is harness-enforced: a [Claude Code `PostToolUse` hook](https://docs.claude.com/en/docs/claude-code/hooks) runs both checkers automatically whenever the agent writes a spec file. Harness-enforced means the hook fires regardless of whether the agent remembered to run the linter — drop this into your settings to make the agent literally unable to forget.

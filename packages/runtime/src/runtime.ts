@@ -20,6 +20,7 @@ import type {
 
 const DEFAULT_MAX_ITERATIONS = 5;
 const DEFAULT_MAX_TOTAL_TOKENS = 500_000;
+const DEFAULT_MAX_AGENT_TIMEOUT_MS = 600_000;
 
 interface ImplementTokens {
   input?: number;
@@ -97,6 +98,7 @@ export async function run(args: RunArgs): Promise<RunReport> {
     );
   }
   const maxTotalTokens = options.maxTotalTokens ?? DEFAULT_MAX_TOTAL_TOKENS;
+  const maxAgentTimeoutMs = options.maxAgentTimeoutMs ?? DEFAULT_MAX_AGENT_TIMEOUT_MS;
   const log = options.log ?? defaultLog;
 
   tryRegister(contextStore, 'factory-run', FactoryRunSchema);
@@ -190,6 +192,7 @@ export async function run(args: RunArgs): Promise<RunReport> {
           runId,
           iteration,
           inputs: ctxInputs,
+          maxAgentTimeoutMs,
         });
         status = result.status;
         outputRecords = result.records;

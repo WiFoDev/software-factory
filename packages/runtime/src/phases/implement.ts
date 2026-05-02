@@ -232,7 +232,7 @@ export function parseAgentJson(stdout: string): AgentJsonEnvelope {
 const DEFAULT_MAX_PROMPT_TOKENS = 100_000;
 const DEFAULT_ALLOWED_TOOLS = 'Read,Edit,Write,Bash';
 const DEFAULT_CLAUDE_PATH = 'claude';
-const DEFAULT_TIMEOUT_MS = 600_000; // 10 min
+export const DEFAULT_TIMEOUT_MS = 600_000; // 10 min
 const DEFAULT_TWIN_DIR = '.factory/twin-recordings';
 
 const HASH_WALK_IGNORE = new Set([
@@ -505,54 +505,98 @@ interface FileChangeEntry {
   diff: string;
 }
 
-function captureFileChanges(args: {
-  cwd: string;
-  pre: FileSnapshot | null;
-  log: (line: string) => void;
-}): FileChangeEntry[] {
-  // Git path: spawn git diff --no-color HEAD --
-  if (existsSync(join(args.cwd, '.git'))) {
-    const result = spawnSync('git', ['diff', '--no-color', 'HEAD', '--'], {
-      cwd: args.cwd,
+/**
+ * v0.0.5.1 — Snapshot the working tree as a path → sha256-hex map. Invoked
+ * before AND after the agent spawn. The diff between pre and post is the
+ * canonical attribution surface for `filesChanged`. Replaces v0.0.5's
+ * post-run `git diff HEAD --` (which missed untracked-created files) and
+ * couldn't distinguish agent edits from pre-existing dirty content.
+ *
+ * In a git repo, `git ls-files -co --exclude-standard -z` enumerates the
+ * working tree (tracked + untracked, respecting .gitignore). Outside a git
+ * repo, falls back to the directory walk in `snapshotFiles`.
+ */
+function captureFileSnapshot(cwd: string): Map<string, string> {
+  if (existsSync(join(cwd, '.git'))) {
+    const result = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], {
+      cwd,
       encoding: 'utf8',
       maxBuffer: 16 * 1024 * 1024,
     });
-    if (result.status === 0 && result.stdout) {
-      return parseGitDiff(result.stdout);
+    if (result.status === 0 && typeof result.stdout === 'string') {
+      const hashes = new Map<string, string>();
+      const paths = result.stdout.split('\0').filter((p) => p !== '');
+      for (const path of paths) {
+        try {
+          const buf = readFileSync(join(cwd, path));
+          hashes.set(path, createHash('sha256').update(buf).digest('hex'));
+        } catch {
+          // file may be tracked-but-deleted from disk; skip.
+        }
+      }
+      return hashes;
     }
-    // Fall through to hash-based capture if git diff fails (e.g. no HEAD yet).
   }
+  return snapshotFiles(cwd).hashes;
+}
 
-  // Hash fallback.
-  if (args.pre === null) return [];
-  if (args.pre.truncated) {
-    args.log(
-      'implement: pre-state file walk exceeded 5 MB cap; recording paths only without diffs',
-    );
+/**
+ * v0.0.5.1 — The set of paths reported by `git status --porcelain` at
+ * pre-implement time. Used to filter out paths whose pre-state already
+ * differed from HEAD; we cannot honestly attribute later changes to those
+ * paths to the agent (the maintainer's pre-existing edit could be the
+ * reason post-snapshot differs). Empty when not in a git repo.
+ *
+ * Trade-off: false negatives (under-attributing the agent's work on
+ * pre-dirty files) are preferable to false positives (over-attributing).
+ * The maintainer keeps a clean tree if they want full audit fidelity.
+ */
+function captureDirtyPaths(cwd: string): Set<string> {
+  const dirty = new Set<string>();
+  if (!existsSync(join(cwd, '.git'))) return dirty;
+  const result = spawnSync('git', ['status', '--porcelain', '-z'], {
+    cwd,
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (result.status !== 0 || typeof result.stdout !== 'string') return dirty;
+  // -z format: each entry is "XY <path>\0". Rename/copy entries are followed
+  // by a separate "<origpath>\0" record; capture both sides so a pre-rename
+  // doesn't leak into the post-diff as a phantom create + delete.
+  const entries = result.stdout.split('\0');
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry === undefined || entry === '') continue;
+    if (entry.length < 3) continue;
+    const xy = entry.slice(0, 2);
+    dirty.add(entry.slice(3));
+    if (xy[0] === 'R' || xy[0] === 'C') {
+      i++;
+      const orig = entries[i];
+      if (orig !== undefined && orig !== '') dirty.add(orig);
+    }
   }
-  const post = snapshotFiles(args.cwd);
+  return dirty;
+}
+
+function captureFileChanges(args: {
+  cwd: string;
+  pre: Map<string, string>;
+  dirty: Set<string>;
+}): FileChangeEntry[] {
+  const post = captureFileSnapshot(args.cwd);
   const changed: FileChangeEntry[] = [];
-  // Modified files (in pre with different hash) and new files (not in pre).
-  for (const [path, hash] of post.hashes) {
-    const preHash = args.pre.hashes.get(path);
-    if (preHash === hash) continue;
-    if (args.pre.truncated || post.truncated) {
-      changed.push({ path, diff: '' });
-      continue;
-    }
-    const preContent = preHash !== undefined ? safeReadRel(args.cwd, path) : '';
-    const postContent = safeReadRel(args.cwd, path);
-    changed.push({ path, diff: simpleDiff(preContent, postContent) });
+  // Created (in post, not in pre) and modified (in both with differing hash).
+  for (const [path, hash] of post) {
+    if (args.dirty.has(path)) continue;
+    if (args.pre.get(path) === hash) continue;
+    changed.push({ path, diff: simpleDiff('', safeReadRel(args.cwd, path)) });
   }
-  // Deleted files.
-  for (const [path] of args.pre.hashes) {
-    if (post.hashes.has(path)) continue;
-    if (args.pre.truncated) {
-      changed.push({ path, diff: '' });
-      continue;
-    }
-    const preContent = safeReadRel(args.cwd, path);
-    changed.push({ path, diff: simpleDiff(preContent, '') });
+  // Deleted (in pre, not in post).
+  for (const [path] of args.pre) {
+    if (args.dirty.has(path)) continue;
+    if (post.has(path)) continue;
+    changed.push({ path, diff: simpleDiff('deleted', '') });
   }
   return changed;
 }
@@ -566,42 +610,14 @@ function safeReadRel(cwd: string, relPath: string): string {
 }
 
 /**
- * Minimal before/after representation. Not a unified diff — for the hash
- * fallback we just record both sides separated by a marker line. The git
- * path produces the real unified diff and is the v0.0.2 happy path.
+ * Minimal before/after representation. Not a unified diff — the v0.0.5.1
+ * snapshot path stores hashes only, so we don't have pre-content available.
+ * `diff` is best-effort; the canonical audit signal is `path`.
  */
 function simpleDiff(before: string, after: string): string {
   if (before === '' && after !== '') return `+ ${after}`;
   if (before !== '' && after === '') return `- ${before}`;
   return `--- before\n${before}\n--- after\n${after}`;
-}
-
-/**
- * Split a combined `git diff` blob into per-file entries. Each chunk starts
- * with `diff --git a/<path> b/<path>` — we extract the b-side path.
- */
-function parseGitDiff(diff: string): FileChangeEntry[] {
-  const entries: FileChangeEntry[] = [];
-  const HEADER = /^diff --git a\/(.+?) b\/(.+)$/;
-  const lines = diff.split('\n');
-  let currentPath: string | null = null;
-  let currentBuf: string[] = [];
-  for (const line of lines) {
-    const match = HEADER.exec(line);
-    if (match !== null) {
-      if (currentPath !== null) {
-        entries.push({ path: currentPath, diff: currentBuf.join('\n') });
-      }
-      currentPath = match[2] ?? match[1] ?? null;
-      currentBuf = [line];
-      continue;
-    }
-    currentBuf.push(line);
-  }
-  if (currentPath !== null) {
-    entries.push({ path: currentPath, diff: currentBuf.join('\n') });
-  }
-  return entries;
 }
 
 function extractToolsUsed(env: AgentJsonEnvelope, files: FileChangeEntry[]): string[] {
@@ -687,7 +703,11 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
     const maxPromptTokens = opts.maxPromptTokens ?? DEFAULT_MAX_PROMPT_TOKENS;
     const allowedTools = opts.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
     const claudePath = opts.claudePath ?? DEFAULT_CLAUDE_PATH;
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    // v0.0.5.2 — Resolution order: explicit per-phase opt > runtime-threaded
+    // ctx.maxAgentTimeoutMs (set from RunOptions.maxAgentTimeoutMs by run())
+    // > the built-in 600_000 default. The explicit constructor option wins so
+    // programmatic callers that pin a per-phase timeout still get it.
+    const timeoutMs = opts.timeoutMs ?? ctx.maxAgentTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     const twin = resolveTwin(opts.twin, cwd);
 
     // v0.0.3 — extract the prior iteration's factory-validate-report from
@@ -718,11 +738,14 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
     const startedAt = new Date();
     const t0 = performance.now();
 
-    // Pre-state snapshot for hash-based diff fallback. The git path doesn't
-    // need this, but we don't know which path we'll use until we look at the
-    // cwd's .git presence — and even then git diff may fail (e.g. no HEAD).
-    // Cheap to pre-walk; bounded by HASH_WALK_TOTAL_BYTES_CAP.
-    const pre = existsSync(join(cwd, '.git')) ? null : snapshotFiles(cwd);
+    // v0.0.5.1 — Pre-implement snapshot of the working tree (path → hash) +
+    // the set of paths that were already dirty against HEAD. After the agent
+    // returns we re-snapshot and diff: created/modified/deleted minus the
+    // pre-dirty set is the agent's verifiable contribution this iteration.
+    // Replaces v0.0.5's post-run `git diff HEAD --`, which missed untracked
+    // creates and over-attributed pre-dirty edits.
+    const pre = captureFileSnapshot(cwd);
+    const dirty = captureDirtyPaths(cwd);
 
     // Spawn the agent. Operational failures throw RuntimeError({ code:
     // 'runtime/agent-failed' }) via spawnAgent — we let those propagate;
@@ -749,8 +772,8 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
     // with agent-output-invalid prefix on parse failure.
     const envelope = parseAgentJson(spawnResult.stdout);
 
-    // Capture file changes (git path or hash fallback).
-    const filesChanged = captureFileChanges({ cwd, pre, log: ctx.log });
+    // Capture file changes via pre/post snapshot diff, filtered by pre-dirty.
+    const filesChanged = captureFileChanges({ cwd, pre, dirty });
 
     // Token extraction.
     const u = envelope.usage ?? {};

@@ -16,6 +16,13 @@ Before spending agent tokens on the loop, run two cheap checks against the spec:
 
 Lint then review then run is the recommended sequence — running the loop on a spec that wouldn't pass review is the most common way to burn the `--max-total-tokens` budget on a no-converge.
 
+## v0.0.5.2 release notes
+
+- **Configurable per-phase agent timeout.** New `RunOptions.maxAgentTimeoutMs?: number` (default 600_000) and CLI flag `--max-agent-timeout-ms <n>` raise the previously hardcoded 10-minute wall-clock cap on the `claude -p` subprocess. Wide-blast-radius specs (e.g. v0.0.5's `factory-publish-v0-0-5`, which touched 14 files and tripped the cap on iteration 2 with the agent making real progress) can now opt into a longer ceiling without rebuilding the runtime. The default stays tight as a guardrail against truly hung agents.
+- **Resolution order in `implementPhase`**: explicit `opts.timeoutMs` > runtime-threaded `ctx.maxAgentTimeoutMs` > built-in 600_000. Programmatic callers that pin a per-phase override still get it; everyone else inherits the run-level value the runtime threads via `PhaseContext.maxAgentTimeoutMs`.
+- **CLI validation mirrors `--max-prompt-tokens`.** Non-positive or non-numeric → exit 2 with stderr line `runtime/invalid-max-agent-timeout-ms: --max-agent-timeout-ms must be a positive integer (got '<raw>')`. The label is a string format only — **not** a `RuntimeErrorCode` value (zero new codes in v0.0.5.2; `RuntimeErrorCode` stays at 10 members from v0.0.3). The existing `runtime/agent-failed` code still covers timeout, with the `agent-timeout (after Nms)` message reporting the resolved value (so a 30000ms run reports `after 30000ms`, not `after 600000ms`).
+- **Public API surface unchanged.** Two field-level additions to already-exported types (`RunOptions.maxAgentTimeoutMs?: number`, `PhaseContext.maxAgentTimeoutMs?: number`). Top-level exports from `src/index.ts` stay at **19 names**.
+
 ## v0.0.5 release notes
 
 - **Implementation guidelines prompt prefix.** `implementPhase`'s `buildPrompt` now emits a stable `# Implementation guidelines` section between the opening prose and `# Spec`. Four behavior priors: state assumptions, minimum code, surgical changes, verifiable success criteria. Same constant, same bytes, every invocation — so `claude -p`'s ephemeral cache hits the same key on every iteration. See "Implementation guidelines section (v0.0.5)" below for the wording, placement, byte-stability invariant, and budget impact.

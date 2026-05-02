@@ -50,11 +50,21 @@ export function tailDetail(text: string): string {
   return acc;
 }
 
+// `bun test -t <pattern>` interprets the pattern as a regex. Spec authors
+// almost always write satisfactions as literal substrings (e.g.
+// `"... at ^0.0.5"`); escape the standard regex metacharacters so a literal
+// `^`, `+`, or `.` in a satisfaction matches the literal character in the
+// test name rather than acting as an anchor or quantifier.
+const REGEX_META_RE = /[.*+?^${}()|[\]\\]/g;
+function escapeRegex(s: string): string {
+  return s.replace(REGEX_META_RE, '\\$&');
+}
+
 function buildArgs(value: string): string[] {
   const parsed = parseTestLine(value);
   const args: string[] = ['test'];
   if (parsed.file !== undefined) args.push(parsed.file);
-  if (parsed.pattern !== undefined) args.push('-t', parsed.pattern);
+  if (parsed.pattern !== undefined) args.push('-t', escapeRegex(parsed.pattern));
   return args;
 }
 

@@ -10,9 +10,9 @@ import {
 
 describe('init-templates', () => {
   test('PACKAGE_JSON_TEMPLATE has the expected keys + workspace-stripped semver deps', () => {
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.5');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.5');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.5');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.6');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.6');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.6');
     expect(PACKAGE_JSON_TEMPLATE.type).toBe('module');
     expect(PACKAGE_JSON_TEMPLATE.private).toBe(true);
   });

@@ -5,7 +5,7 @@
 // Behavior is selected via env vars:
 //   FAKE_CLAUDE_MODE         success | self-fail | exit-nonzero | malformed-json
 //                            | hang | cost-overrun | echo-env | self-kill
-//                            | fail-then-pass | fail-fail-then-pass
+//                            | fail-then-pass | fail-fail-then-pass | delete
 //                            (default: success)
 //   FAKE_CLAUDE_STATE_DIR    directory holding `counter` for fail-then-pass /
 //                            fail-fail-then-pass modes (required for those)
@@ -200,6 +200,25 @@ if (mode === 'success') {
     );
     process.exit(0);
   }
+} else if (mode === 'delete') {
+  // Delete FAKE_CLAUDE_EDIT_FILE (absolute path) and emit a success envelope.
+  // Used by v0.0.5.1 filesChanged tests to exercise the deleted-file path.
+  if (editFile !== undefined) {
+    try {
+      const { unlinkSync } = await import('node:fs');
+      unlinkSync(editFile);
+    } catch {
+      // ignore — test asserts post-state, not deletion success
+    }
+  }
+  process.stdout.write(
+    JSON.stringify(
+      makeEnvelope({
+        result: process.env.FAKE_CLAUDE_RESULT ?? 'fake-claude: deleted',
+      }),
+    ),
+  );
+  process.exit(0);
 } else if (mode === 'self-kill') {
   // Write a partial fragment, flush, then send SIGTERM to ourselves so the
   // runtime sees a child closed by signal (not by our timer). Deterministic

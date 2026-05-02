@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createContextStore } from '@wifo/factory-context';
 import { SpecParseError, parseSpec } from '@wifo/factory-core';
+import { z } from 'zod';
 import { RuntimeError } from './errors.js';
 import { definePhaseGraph } from './graph.js';
 import { type ImplementPhaseOptions, implementPhase } from './phases/implement.js';
@@ -22,6 +23,7 @@ Flags:
   --no-judge                        Skip judge satisfactions in the harness
   --no-implement                    Drop the implement phase (v0.0.1 [validate]-only graph)
   --max-prompt-tokens <n>           Per-phase cap on agent input tokens (default: 100000)
+  --max-agent-timeout-ms <n>        Per-phase agent subprocess wall-clock timeout in ms (default: 600000)
   --claude-bin <path>               Path to the claude executable (default: 'claude' on PATH)
   --twin-mode <record|replay|off>   Twin recording mode (default: record)
   --twin-recordings-dir <path>      Twin recordings dir (default: <cwd>/.factory/twin-recordings)
@@ -31,6 +33,41 @@ export interface CliIo {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
   exit: (code: number) => void;
+}
+
+// v0.0.5.1: optional `<cwd>/factory.config.json`. Validated with Zod; absent
+// or malformed files return null silently (config is OPTIONAL by design).
+// Unknown keys are ignored so v0.0.6 sections can be added without breaking
+// older runtimes.
+const FactoryConfigRuntimeSchema = z
+  .object({
+    maxIterations: z.number().int().positive().optional(),
+    maxTotalTokens: z.number().int().positive().optional(),
+    maxPromptTokens: z.number().int().positive().optional(),
+    noJudge: z.boolean().optional(),
+  })
+  .partial();
+
+const FactoryConfigSchema = z
+  .object({
+    runtime: FactoryConfigRuntimeSchema.optional(),
+  })
+  .partial();
+
+type FactoryConfig = z.infer<typeof FactoryConfigSchema>;
+
+function readFactoryConfig(cwd: string): FactoryConfig | null {
+  const path = resolve(cwd, 'factory.config.json');
+  if (!existsSync(path)) return null;
+  try {
+    const text = readFileSync(path, 'utf8');
+    const parsed: unknown = JSON.parse(text);
+    const result = FactoryConfigSchema.safeParse(parsed);
+    if (!result.success) return null;
+    return result.data;
+  } catch {
+    return null;
+  }
 }
 
 const defaultIo: CliIo = {
@@ -74,6 +111,7 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
         'no-judge': { type: 'boolean' },
         'no-implement': { type: 'boolean' },
         'max-prompt-tokens': { type: 'string' },
+        'max-agent-timeout-ms': { type: 'string' },
         'claude-bin': { type: 'string' },
         'twin-mode': { type: 'string' },
         'twin-recordings-dir': { type: 'string' },
@@ -190,6 +228,12 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
   // inert in this mode (no warning emitted).
   const noImplement = parsed.values['no-implement'] === true;
 
+  // v0.0.5.1: optional `<cwd>/factory.config.json` supplies defaults for the
+  // matching options. Precedence: CLI flag > config file > built-in default.
+  // Absent/malformed config returns null silently — config is OPTIONAL.
+  const fileConfig = readFactoryConfig(process.cwd());
+  const fileRuntime = fileConfig?.runtime;
+
   // --max-prompt-tokens: positive integer or fail with exit 2. Manual stderr
   // line mirrors the --max-iterations pattern; the CLI does not construct
   // RuntimeError directly (that fires for programmatic implementPhase callers).
@@ -206,6 +250,40 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
     }
     maxPromptTokens = n;
   }
+
+  // v0.0.5.2 — --max-agent-timeout-ms: positive integer or fail with exit 2.
+  // Mirrors --max-prompt-tokens validation. The stderr label
+  // 'runtime/invalid-max-agent-timeout-ms' is a string format only — there
+  // is NO matching RuntimeErrorCode (zero new codes in v0.0.5.2).
+  // Programmatic RunOptions.maxAgentTimeoutMs is unvalidated.
+  const maxAgentTimeoutMsRaw = parsed.values['max-agent-timeout-ms'];
+  let maxAgentTimeoutMs: number | undefined;
+  if (typeof maxAgentTimeoutMsRaw === 'string') {
+    const n = Number.parseInt(maxAgentTimeoutMsRaw, 10);
+    if (!Number.isFinite(n) || n <= 0 || String(n) !== maxAgentTimeoutMsRaw.trim()) {
+      io.stderr(
+        `runtime/invalid-max-agent-timeout-ms: --max-agent-timeout-ms must be a positive integer (got '${maxAgentTimeoutMsRaw}')\n${USAGE}`,
+      );
+      io.exit(2);
+      return;
+    }
+    maxAgentTimeoutMs = n;
+  }
+
+  // v0.0.5.1: layer config-file values under any unset CLI flag.
+  if (maxIterations === undefined && fileRuntime?.maxIterations !== undefined) {
+    maxIterations = fileRuntime.maxIterations;
+  }
+  if (maxTotalTokens === undefined && fileRuntime?.maxTotalTokens !== undefined) {
+    maxTotalTokens = fileRuntime.maxTotalTokens;
+  }
+  if (maxPromptTokens === undefined && fileRuntime?.maxPromptTokens !== undefined) {
+    maxPromptTokens = fileRuntime.maxPromptTokens;
+  }
+  // --no-judge has no negative form on the CLI; if the flag isn't passed,
+  // config can opt-in. CLI passing `--no-judge` always wins (already true).
+  const noJudgeFromCli = parsed.values['no-judge'] === true;
+  const noJudge = noJudgeFromCli || fileRuntime?.noJudge === true;
 
   // --twin-mode: validate set membership (record|replay|off). The 'off'
   // value drives `opts.twin = 'off'`; others drive `opts.twin = { mode, ... }`.
@@ -245,7 +323,7 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
   const validate = validatePhase({
     cwd: process.cwd(),
     ...(scenarioIds !== undefined ? { scenarioIds } : {}),
-    ...(parsed.values['no-judge'] === true ? { noJudge: true } : {}),
+    ...(noJudge ? { noJudge: true } : {}),
   });
 
   let graph: ReturnType<typeof definePhaseGraph>;
@@ -285,6 +363,7 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
       options: {
         ...(maxIterations !== undefined ? { maxIterations } : {}),
         ...(maxTotalTokens !== undefined ? { maxTotalTokens } : {}),
+        ...(maxAgentTimeoutMs !== undefined ? { maxAgentTimeoutMs } : {}),
       },
     });
   } catch (err) {

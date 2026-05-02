@@ -24,6 +24,14 @@ export interface PhaseContext {
    * carries same-iteration predecessor ids — see runtime.ts for the split.
    */
   inputs: readonly ContextRecord[];
+  /**
+   * v0.0.5.2 — Per-phase agent subprocess timeout in milliseconds. Resolved
+   * by the runtime from `RunOptions.maxAgentTimeoutMs ?? 600_000` and
+   * threaded to every phase invocation. Phases that spawn agent subprocesses
+   * (built-in `implementPhase`) consult this when their own `timeoutMs`
+   * option is unset; an explicit per-phase `timeoutMs` always wins.
+   */
+  maxAgentTimeoutMs?: number;
 }
 
 export interface Phase {
@@ -52,6 +60,18 @@ export interface RunOptions {
    * `--max-total-tokens` does pre-validate for friendlier UX.
    */
   maxTotalTokens?: number;
+  /**
+   * v0.0.5.2 — Per-phase agent subprocess wall-clock timeout, in
+   * milliseconds. Default 600_000 (10 min). Threaded to phases via
+   * `PhaseContext.maxAgentTimeoutMs`. Wide-blast-radius specs that touch
+   * many files can exceed the default — raise this rather than the
+   * per-phase token cap.
+   *
+   * Not validated programmatically (a non-positive value would fire the
+   * timeout immediately on the first spawn). The CLI flag
+   * `--max-agent-timeout-ms` does pre-validate for friendlier UX.
+   */
+  maxAgentTimeoutMs?: number;
 }
 
 export interface PhaseInvocationResult {
