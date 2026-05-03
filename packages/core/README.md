@@ -44,6 +44,39 @@ The scaffold's `package.json` pins `@wifo/factory-*` deps to `^0.0.5` — `pnpm 
 
 `factory-runtime run` reads this file from `cwd` if present and applies any subset of the `runtime.*` keys as defaults. Precedence is **CLI flag > config file > built-in default** — the canonical `--max-iterations 5 --max-total-tokens 1000000 --no-judge --max-prompt-tokens 100000` invocation collapses to a flagless `factory-runtime run <spec>`. Edit the file to taste; absent or malformed files are ignored silently (the file is OPTIONAL by design). Unknown keys are tolerated for forward-compatibility.
 
+v0.0.7 adds two new optional keys:
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `runtime.maxSequenceTokens` | number | unbounded | Whole-sequence cap on summed agent tokens for `factory-runtime run-sequence`. |
+| `runtime.continueOnFail` | boolean | false | Continue running independent specs after a failure (transitive dependents still skip). |
+
+## Slash commands
+
+### `/scope-project` (v0.0.7)
+
+A Claude Code slash command that takes a natural-language product description and writes 4-6 LIGHT specs in dependency order under `docs/specs/`. The first generated spec ships `status: ready`; the rest ship `status: drafting` so the maintainer flips them one at a time as each prior spec converges. Every generated spec populates the new `depends-on:` frontmatter field so `factory-runtime run-sequence` can walk the DAG.
+
+**Install:**
+
+```sh
+# Copy the canonical source into your dotfiles. Symlink works too.
+cp docs/commands/scope-project.md ~/.claude/commands/scope-project.md
+```
+
+**Invoke (inside a project repo, after `factory init`):**
+
+```text
+/scope-project A URL shortener with click tracking and a JSON stats endpoint.
+               JSON-over-HTTP, in-memory storage, no auth.
+```
+
+The slash command writes 4-6 spec files under `docs/specs/`. Run `factory spec lint docs/specs/` (and `factory spec review docs/specs/<first-id>.md` on the first spec) before kicking off the runtime. See `docs/baselines/scope-project-fixtures/url-shortener/` for a worked-example output set against the canonical URL-shortener prompt.
+
+### `/scope-task`
+
+The single-task analog of `/scope-project`. Lives under `~/.claude/commands/scope-task.md` (predates v0.0.7's "ship in repo" pattern). Documents the canonical spec skeleton + tier classification (LIGHT vs DEEP).
+
 ## Harness-enforced spec linting + review (Claude Code hook recipe)
 
 Both `factory spec lint` and `factory spec review` are most valuable when they run on every save — but agents forget to run them. The fix is harness-enforced: a [Claude Code `PostToolUse` hook](https://docs.claude.com/en/docs/claude-code/hooks) runs both checkers automatically whenever the agent writes a spec file. Harness-enforced means the hook fires regardless of whether the agent remembered to run the linter — drop this into your settings to make the agent literally unable to forget.
