@@ -232,6 +232,257 @@ describe('lintSpec', () => {
     expect(errs.filter((e) => e.code === 'spec/depends-on-missing')).toHaveLength(0);
   });
 
+  test('lintSpec emits spec/wide-blast-radius when Subtasks names >= 8 distinct file paths', () => {
+    const sample = [
+      '---',
+      'id: demo-wbr',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+      '## Subtasks',
+      '- T1 — touches `packages/core/src/a.ts`',
+      '- T2 — touches `packages/core/src/b.ts`',
+      '- T3 — touches `packages/core/src/c.ts`',
+      '- T4 — touches `packages/runtime/src/d.ts`',
+      '- T5 — touches `packages/runtime/src/e.ts`',
+      '- T6 — touches `packages/runtime/src/f.ts`',
+      '- T7 — touches `docs/specs/g.md`',
+      '- T8 — touches `docs/specs/h.md`',
+      '- T9 — touches `docs/specs/i.md`',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    const warnings = errs.filter((e) => e.code === 'spec/wide-blast-radius');
+    expect(warnings).toHaveLength(1);
+    const w = warnings[0];
+    if (!w) return;
+    expect(w.severity).toBe('warning');
+    expect(w.message).toBe(
+      '## Subtasks references 9 distinct file paths; specs touching >= 8 files commonly exceed the 600s implement-phase budget. Consider splitting or setting agent-timeout-ms in frontmatter.',
+    );
+    // Heading line should point at `## Subtasks` (1-indexed line of the `## Subtasks` heading).
+    expect(w.line).toBe(16);
+  });
+
+  test('lintSpec does not emit spec/wide-blast-radius for < 8 paths', () => {
+    const sample = [
+      '---',
+      'id: demo-narrow',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+      '## Subtasks',
+      '- T1 — touches `packages/core/src/a.ts`',
+      '- T2 — touches `packages/core/src/b.ts`',
+      '- T3 — touches `packages/core/src/c.ts`',
+      '- T4 — touches `packages/core/src/d.ts`',
+      '- T5 — touches `packages/core/src/e.ts`',
+      '- T6 — touches `packages/core/src/f.ts`',
+      '- T7 — touches `packages/core/src/g.ts`',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    expect(errs.filter((e) => e.code === 'spec/wide-blast-radius')).toHaveLength(0);
+  });
+
+  test('lintSpec emits spec/wide-blast-radius regardless of agent-timeout-ms declaration', () => {
+    const sample = [
+      '---',
+      'id: demo-timeout-set',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      'agent-timeout-ms: 1800000',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+      '## Subtasks',
+      '- T1 — `packages/core/src/a.ts`',
+      '- T2 — `packages/core/src/b.ts`',
+      '- T3 — `packages/core/src/c.ts`',
+      '- T4 — `packages/core/src/d.ts`',
+      '- T5 — `packages/core/src/e.ts`',
+      '- T6 — `packages/runtime/src/f.ts`',
+      '- T7 — `packages/runtime/src/g.ts`',
+      '- T8 — `packages/runtime/src/h.ts`',
+      '- T9 — `packages/runtime/src/i.ts`',
+      '- T10 — `packages/runtime/src/j.ts`',
+      '- T11 — `packages/runtime/src/k.ts`',
+      '- T12 — `packages/runtime/src/l.ts`',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    const warnings = errs.filter((e) => e.code === 'spec/wide-blast-radius');
+    expect(warnings).toHaveLength(1);
+    const w = warnings[0];
+    if (!w) return;
+    expect(w.message).toContain('12 distinct file paths');
+  });
+
+  test('wide-blast-radius scanner detects backtick-wrapped paths in Subtasks', () => {
+    const sample = [
+      '---',
+      'id: demo-bt',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+      '## Subtasks',
+      '- T1 — touches `packages/core/src/a.ts`',
+      '- T2 — touches `packages/core/src/b.ts`',
+      '- T3 — touches `packages/core/src/c.ts`',
+      '- T4 — touches `packages/core/src/d.ts`',
+      '- T5 — touches `packages/core/src/e.ts`',
+      '- T6 — touches `packages/core/src/f.ts`',
+      '- T7 — touches `packages/core/src/g.ts`',
+      '- T8 — touches `packages/core/src/h.ts`',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    const warnings = errs.filter((e) => e.code === 'spec/wide-blast-radius');
+    expect(warnings).toHaveLength(1);
+    const w = warnings[0];
+    if (!w) return;
+    expect(w.message).toContain('8 distinct file paths');
+  });
+
+  test('wide-blast-radius scanner detects plain-prose paths in Subtasks', () => {
+    const sample = [
+      '---',
+      'id: demo-prose',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+      '## Subtasks',
+      '- T1 — touches packages/core/src/a.ts',
+      '- T2 — touches packages/core/src/b.ts',
+      '- T3 — touches packages/core/src/c.ts',
+      '- T4 — touches packages/core/src/d.ts',
+      '- T5 — touches packages/runtime/src/e.ts',
+      '- T6 — touches docs/specs/f.md',
+      '- T7 — touches README.md and CHANGELOG.md',
+      '- T8 — touches BACKLOG.md',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    const warnings = errs.filter((e) => e.code === 'spec/wide-blast-radius');
+    expect(warnings).toHaveLength(1);
+    const w = warnings[0];
+    if (!w) return;
+    expect(w.message).toContain('9 distinct file paths');
+  });
+
+  test('wide-blast-radius scanner deduplicates repeated paths', () => {
+    const sample = [
+      '---',
+      'id: demo-dedup',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+      '## Subtasks',
+      '- T1 — touches `package.json` and again `package.json`',
+      '- T2 — touches `package.json`',
+      '- T3 — touches `package.json`',
+      '- T4 — touches `package.json`',
+      '- T5 — touches `package.json`',
+      '- T6 — touches `package.json`',
+      '- T7 — touches `package.json`',
+      '- T8 — touches `package.json`',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    expect(errs.filter((e) => e.code === 'spec/wide-blast-radius')).toHaveLength(0);
+  });
+
+  test('wide-blast-radius scanner returns 0 for prose-only Subtasks', () => {
+    const sample = [
+      '---',
+      'id: demo-prose-only',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+      '## Subtasks',
+      '- T1 — update the README',
+      '- T2 — add tests',
+      '- T3 — write the docs',
+      '- T4 — refactor the helper',
+      '- T5 — wire up the runner',
+      '- T6 — fix the bug',
+      '- T7 — bump version',
+      '- T8 — release notes',
+      '- T9 — celebrate',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    expect(errs.filter((e) => e.code === 'spec/wide-blast-radius')).toHaveLength(0);
+  });
+
   test('lintSpec skips file existence check for entries that fail id-format', () => {
     const dir = mkdtempSync(join(tmpdir(), 'lint-deps-'));
     try {

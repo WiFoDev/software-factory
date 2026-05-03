@@ -14,7 +14,9 @@ export type RuntimeErrorCode =
   // v0.0.7 — sequence-runner
   | 'runtime/sequence-cycle'
   | 'runtime/sequence-dep-not-found'
-  | 'runtime/sequence-cost-cap-exceeded';
+  | 'runtime/sequence-cost-cap-exceeded'
+  // v0.0.9 — sequence-runner drafting filter
+  | 'runtime/sequence-empty';
 
 export class RuntimeError extends Error {
   readonly code: RuntimeErrorCode;

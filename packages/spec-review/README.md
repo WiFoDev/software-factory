@@ -48,7 +48,7 @@ All ship at `severity: 'warning'` by default. The reviewer's exit-1 condition is
 
 | Code | Reads | What it catches |
 |---|---|---|
-| `review/internal-consistency` | full body | Constraints reference deps that aren't declared; scenarios reference test files outside `cwd`; DoD checks don't match constraints |
+| `review/internal-consistency` | full body + `depends-on` deps' Constraints | Constraints reference deps that aren't declared; scenarios reference test files outside `cwd`; DoD checks don't match constraints. **v0.0.9:** when the spec under review declares `depends-on:`, each dep's `## Constraints / Decisions` section is appended to the artifact (under `## Deps Constraints (referenced via depends-on)`) so shared constraints declared in a parent spec no longer fire as unreferenced. |
 | `review/judge-parity` | scenarios + holdouts | Same category of scenario should have the same satisfaction kinds. If two error-UX scenarios but only one has a `judge:` line — flag it |
 | `review/dod-precision` | DoD section (sliced) | "X matches Y" / "X validates Y" without explicit operator (equal vs subset vs superset). |
 | `review/holdout-distinctness` | scenarios + holdouts | Holdouts overlap with visible scenarios (overfit) OR probe completely unrelated concerns (irrelevant) |

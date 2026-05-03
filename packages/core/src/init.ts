@@ -3,6 +3,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { CliIo } from './cli.js';
 import {
+  BIOME_CONFIG_TEMPLATE,
   FACTORY_CONFIG_TEMPLATE,
   GITIGNORE_TEMPLATE,
   PACKAGE_JSON_TEMPLATE,
@@ -33,6 +34,7 @@ function planFiles(name: string): PlannedFile[] {
       relPath: 'factory.config.json',
       contents: `${JSON.stringify(FACTORY_CONFIG_TEMPLATE, null, 2)}\n`,
     },
+    { relPath: 'biome.json', contents: BIOME_CONFIG_TEMPLATE },
     {
       relPath: '.claude/commands/scope-project.md',
       contents: readScopeProjectCommandTemplate(),

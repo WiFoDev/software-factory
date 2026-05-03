@@ -35,6 +35,7 @@ Flags (run only):
 Flags (run-sequence only):
   --max-sequence-tokens <n>        Whole-sequence cap on summed agent tokens (default: unbounded)
   --continue-on-fail               Continue running independent specs after a failure (default: stop)
+  --include-drafting               Walk specs with status: drafting (default: skip them)
 `;
 
 export interface CliIo {
@@ -56,6 +57,8 @@ const FactoryConfigRuntimeSchema = z
     // v0.0.7 — sequence-runner
     maxSequenceTokens: z.number().int().positive().optional(),
     continueOnFail: z.boolean().optional(),
+    // v0.0.9 — sequence-runner drafting filter
+    includeDrafting: z.boolean().optional(),
   })
   .partial();
 
@@ -430,6 +433,7 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
         'max-sequence-tokens': { type: 'string' },
         'max-agent-timeout-ms': { type: 'string' },
         'continue-on-fail': { type: 'boolean' },
+        'include-drafting': { type: 'boolean' },
         'context-dir': { type: 'string' },
         'no-judge': { type: 'boolean' },
         'no-implement': { type: 'boolean' },
@@ -542,6 +546,11 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
   const noJudge = noJudgeFromCli || fileRuntime?.noJudge === true;
   const continueOnFailFromCli = parsed.values['continue-on-fail'] === true;
   const continueOnFail = continueOnFailFromCli || fileRuntime?.continueOnFail === true;
+  // v0.0.9 — --include-drafting: CLI flag (when set) wins over config; config
+  // wins over built-in default (false). Boolean flags have no false form, so
+  // an absent flag falls through to config.
+  const includeDraftingFromCli = parsed.values['include-drafting'] === true;
+  const includeDrafting = includeDraftingFromCli || fileRuntime?.includeDrafting === true;
 
   const twinModeRaw = parsed.values['twin-mode'];
   let twinOption: ImplementPhaseOptions['twin'];
@@ -613,12 +622,17 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
         ...(maxSequenceTokens !== undefined ? { maxSequenceTokens } : {}),
         ...(maxAgentTimeoutMs !== undefined ? { maxAgentTimeoutMs } : {}),
         continueOnFail,
+        includeDrafting,
+        skipLog: (line: string) => io.stdout(`${line}\n`),
       },
     });
   } catch (err) {
     if (err instanceof RuntimeError) {
       io.stderr(`${err.message}\n`);
-      io.exit(3);
+      // v0.0.9 — sequence-empty is an empty-DAG signal (no work to do), not a
+      // runtime error. Exit 1 mirrors the partial/no-converge family; the
+      // stderr label format mirrors runtime/invalid-twin-mode.
+      io.exit(err.code === 'runtime/sequence-empty' ? 1 : 3);
       return;
     }
     if (err instanceof Error && err.name === 'SpecParseError') {

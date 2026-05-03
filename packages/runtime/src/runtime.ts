@@ -104,7 +104,14 @@ export async function run(args: RunArgs): Promise<RunReport> {
     );
   }
   const maxTotalTokens = options.maxTotalTokens ?? DEFAULT_MAX_TOTAL_TOKENS;
-  const maxAgentTimeoutMs = options.maxAgentTimeoutMs ?? DEFAULT_MAX_AGENT_TIMEOUT_MS;
+  // v0.0.9 — per-spec agent-timeout-ms layer between RunOptions and the
+  // built-in default. RunOptions wins (CLI/programmatic override is
+  // intentional); spec frontmatter is the spec author's declared budget;
+  // built-in is the floor.
+  const maxAgentTimeoutMs =
+    options.maxAgentTimeoutMs ??
+    spec.frontmatter['agent-timeout-ms'] ??
+    DEFAULT_MAX_AGENT_TIMEOUT_MS;
   const log = options.log ?? defaultLog;
 
   tryRegister(contextStore, 'factory-run', FactoryRunSchema);

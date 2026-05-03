@@ -9,15 +9,22 @@ export const PACKAGE_JSON_TEMPLATE = {
   description: '',
   private: true,
   type: 'module',
-  scripts: {},
+  scripts: {
+    typecheck: 'tsc --noEmit',
+    test: 'bun test src',
+    check: 'biome check',
+    build: 'tsc -p tsconfig.build.json',
+  },
   dependencies: {
-    '@wifo/factory-context': '^0.0.8',
-    '@wifo/factory-core': '^0.0.8',
-    '@wifo/factory-runtime': '^0.0.8',
+    '@wifo/factory-context': '^0.0.9',
+    '@wifo/factory-core': '^0.0.9',
+    '@wifo/factory-runtime': '^0.0.9',
   },
   devDependencies: {
+    '@biomejs/biome': '^2.4.4',
     '@types/bun': '^1.1.14',
-    '@wifo/factory-spec-review': '^0.0.8',
+    '@wifo/factory-spec-review': '^0.0.9',
+    typescript: '^5.6.0',
   },
 } as const;
 
@@ -78,6 +85,22 @@ export const FACTORY_CONFIG_TEMPLATE = {
     noJudge: false,
   },
 } as const;
+
+// Minimal biome.json shipped with the scaffold so `pnpm check` resolves a real
+// config out of the box. Mirrors the monorepo's biome.json shape (linter +
+// formatter both on; recommended ruleset; src/** scoped) without project-
+// specific overrides. JSON-serialized with 2-space indent. Internal-only —
+// NOT exported from `core/src/index.ts`.
+export const BIOME_CONFIG_TEMPLATE = `${JSON.stringify(
+  {
+    $schema: 'https://biomejs.dev/schemas/2.4.4/schema.json',
+    linter: { enabled: true, rules: { recommended: true } },
+    formatter: { enabled: true, indentWidth: 2, lineWidth: 100 },
+    files: { include: ['src/**/*.ts', 'src/**/*.tsx'] },
+  },
+  null,
+  2,
+)}\n`;
 
 export const README_TEMPLATE = `# {{name}}
 

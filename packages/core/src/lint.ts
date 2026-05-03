@@ -142,6 +142,26 @@ export function lintSpec(source: string, opts: LintOptions = {}): LintError[] {
     }
   }
 
+  const subtasksSection = findSection(source, 'Subtasks');
+  if (subtasksSection) {
+    const body = subtasksSection.lines.join('\n');
+    const PATH_REGEX =
+      /(?:(?:packages|docs|src|examples|test-fixtures|scripts)\/[\w./\-]+|\b\w[\w./\-]*\.(?:md|ts|tsx|js|jsx|json|sh|yaml|yml|toml))/g;
+    const matches = body.match(PATH_REGEX) ?? [];
+    const seen = new Set<string>();
+    for (const m of matches) {
+      seen.add(m.toLowerCase());
+    }
+    if (seen.size >= 8) {
+      push({
+        line: subtasksSection.headingLine,
+        severity: 'warning',
+        code: 'spec/wide-blast-radius',
+        message: `## Subtasks references ${seen.size} distinct file paths; specs touching >= 8 files commonly exceed the 600s implement-phase budget. Consider splitting or setting agent-timeout-ms in frontmatter.`,
+      });
+    }
+  }
+
   const scenariosSection = findSection(source, 'Scenarios');
   if (!scenariosSection) {
     push({

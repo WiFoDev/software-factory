@@ -35,15 +35,12 @@ function readPackageJson(rel: string): PackageJson {
 }
 
 describe('publish-meta — workspace package metadata (S-1)', () => {
-  test('every workspace package has v0.0.8 + publishConfig + npm metadata fields', () => {
+  test('every workspace package has v0.0.9 + publishConfig + npm metadata fields', () => {
     for (const name of WORKSPACE_PACKAGES) {
       const pkgPath = `packages/${name}/package.json`;
       const pkg = readPackageJson(pkgPath);
 
-      // v0.0.8 — discoverability + baseline reset cluster (factory init drops
-      // /scope-project, scaffold README documents the multi-spec flow,
-      // baseline prompt reset) — coordinated bump across all six packages.
-      expect(pkg.version).toMatch(/^0\.0\.8$/);
+      expect(pkg.version).toMatch(/^0\.0\.9$/);
       expect(pkg.license).toBe('MIT');
       expect(pkg.author).toBe('Luis (WiFoDev)');
 
@@ -136,7 +133,7 @@ describe('publish-meta — pnpm pack --dry-run (S-2)', () => {
       if (!tarball) continue;
 
       expect(tarball.name).toBe(`@wifo/factory-${name}`);
-      expect(tarball.version).toMatch(/^0\.0\.8$/);
+      expect(tarball.version).toMatch(/^0\.0\.9$/);
 
       const paths = tarball.files.map((f) => f.path);
       expect(paths).toContain('README.md');

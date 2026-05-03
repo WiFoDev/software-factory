@@ -108,6 +108,56 @@ describe('SpecFrontmatterSchema', () => {
     });
     expect(result['depends-on']).toEqual([]);
   });
+
+  test('SpecFrontmatterSchema accepts agent-timeout-ms as a positive integer', () => {
+    const result = SpecFrontmatterSchema.parse({
+      id: 'demo-9',
+      classification: 'light',
+      type: 'feat',
+      status: 'ready',
+      'agent-timeout-ms': 1_200_000,
+    });
+    expect(result['agent-timeout-ms']).toBe(1_200_000);
+  });
+
+  test('SpecFrontmatterSchema leaves agent-timeout-ms undefined when absent', () => {
+    const result = SpecFrontmatterSchema.parse({
+      id: 'demo-10',
+      classification: 'light',
+      type: 'feat',
+      status: 'ready',
+    });
+    expect(result['agent-timeout-ms']).toBeUndefined();
+  });
+
+  test('SpecFrontmatterSchema rejects non-positive agent-timeout-ms', () => {
+    const zero = SpecFrontmatterSchema.safeParse({
+      id: 'demo-11',
+      classification: 'light',
+      type: 'feat',
+      status: 'ready',
+      'agent-timeout-ms': 0,
+    });
+    expect(zero.success).toBe(false);
+
+    const negative = SpecFrontmatterSchema.safeParse({
+      id: 'demo-11',
+      classification: 'light',
+      type: 'feat',
+      status: 'ready',
+      'agent-timeout-ms': -100,
+    });
+    expect(negative.success).toBe(false);
+
+    const float = SpecFrontmatterSchema.safeParse({
+      id: 'demo-11',
+      classification: 'light',
+      type: 'feat',
+      status: 'ready',
+      'agent-timeout-ms': 1.5,
+    });
+    expect(float.success).toBe(false);
+  });
 });
 
 describe('KEBAB_ID_REGEX', () => {

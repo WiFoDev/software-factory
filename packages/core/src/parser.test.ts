@@ -79,6 +79,18 @@ describe('parseSpec', () => {
     expect(spec.frontmatter['depends-on']).toEqual(['foo-bar', 'baz-qux']);
   });
 
+  test('parseSpec exposes agent-timeout-ms on frontmatter', () => {
+    const withTimeout = VALID_SPEC.replace(
+      'status: ready\n',
+      'status: ready\nagent-timeout-ms: 1200000\n',
+    );
+    const spec = parseSpec(withTimeout, { filename: 'demo.md' });
+    expect(spec.frontmatter['agent-timeout-ms']).toBe(1_200_000);
+
+    const withoutTimeout = parseSpec(VALID_SPEC, { filename: 'demo.md' });
+    expect(withoutTimeout.frontmatter['agent-timeout-ms']).toBeUndefined();
+  });
+
   test('throws SpecParseError on schema failure with line pointing into YAML block', () => {
     const broken = VALID_SPEC.replace('id: demo-1\n', '');
     let caught: SpecParseError | null = null;

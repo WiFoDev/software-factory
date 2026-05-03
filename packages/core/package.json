@@ -1,6 +1,6 @@
 {
   "name": "@wifo/factory-core",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Universal spec format, schema, parser, and lint CLI for software factories",
   "license": "MIT",
   "author": "Luis (WiFoDev)",

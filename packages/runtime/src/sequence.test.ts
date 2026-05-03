@@ -351,3 +351,110 @@ describe('runSequence — provenance (S-5 / H-3)', () => {
     expect(runRecs).toHaveLength(2);
   });
 });
+
+// ----- v0.0.9: drafting filter (S-1) ------------------------------------
+
+describe('runSequence — v0.0.9 drafting filter', () => {
+  function specSourceWithStatus(
+    id: string,
+    status: 'ready' | 'drafting',
+    deps: string[] = [],
+  ): string {
+    const depsLine =
+      deps.length === 0 ? '' : `depends-on:\n${deps.map((d) => `  - ${d}`).join('\n')}\n`;
+    return [
+      '---',
+      `id: ${id}`,
+      'classification: light',
+      'type: feat',
+      `status: ${status}`,
+      depsLine.replace(/\n$/, ''),
+      '---',
+      '',
+      `# ${id}`,
+      '',
+      '## Intent',
+      'Test fixture spec.',
+      '',
+      '## Scenarios',
+      '**S-1** — passes',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: nope.test.ts',
+      '',
+      '## Definition of Done',
+      '- ok',
+      '',
+    ]
+      .filter((line, i, arr) => !(line === '' && arr[i - 1] === ''))
+      .join('\n');
+  }
+  function writeSpecStatus(id: string, status: 'ready' | 'drafting', deps: string[] = []): void {
+    writeFileSync(join(specsDir, `${id}.md`), specSourceWithStatus(id, status, deps));
+  }
+
+  test('run-sequence default skips status: drafting; runs only ready', async () => {
+    writeSpecStatus('a', 'ready');
+    writeSpecStatus('b', 'drafting', ['a']);
+    writeSpecStatus('c', 'drafting', ['b']);
+    const skips: string[] = [];
+    const report = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: createContextStore({ dir: ctxDir }),
+      options: { maxIterations: 1, skipLog: (line) => skips.push(line) },
+    });
+    expect(report.status).toBe('converged');
+    expect(report.topoOrder).toEqual(['a']);
+    expect(report.specs).toHaveLength(1);
+    expect(report.specs[0]?.specId).toBe('a');
+    expect(report.specs[0]?.status).toBe('converged');
+    // Skipped specs noted via skipLog only — one line per drafting spec, in
+    // alphabetic order ('b' before 'c').
+    expect(skips).toEqual([
+      'factory-runtime: skipping b (status: drafting)',
+      'factory-runtime: skipping c (status: drafting)',
+    ]);
+    // No factory-run records persisted for b or c.
+    const all: ContextRecord[] = (await listRecords(ctxDir)).records;
+    const runRecs = all.filter((r) => r.type === 'factory-run');
+    expect(runRecs).toHaveLength(1);
+  });
+
+  test('run-sequence --include-drafting walks every spec regardless of status', async () => {
+    writeSpecStatus('a', 'ready');
+    writeSpecStatus('b', 'drafting', ['a']);
+    writeSpecStatus('c', 'drafting', ['b']);
+    const report = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: createContextStore({ dir: ctxDir }),
+      options: { maxIterations: 1, includeDrafting: true },
+    });
+    expect(report.status).toBe('converged');
+    expect(report.topoOrder).toEqual(['a', 'b', 'c']);
+    expect(report.specs).toHaveLength(3);
+  });
+
+  test('run-sequence with no ready specs exits with runtime/sequence-empty', async () => {
+    writeSpecStatus('a', 'drafting');
+    writeSpecStatus('b', 'drafting', ['a']);
+    let caught: RuntimeError | null = null;
+    try {
+      await runSequence({
+        specsDir,
+        graph: makeSyntheticGraph({ status: 'pass' }),
+        contextStore: createContextStore({ dir: ctxDir }),
+        options: { maxIterations: 1 },
+      });
+    } catch (e) {
+      caught = e as RuntimeError;
+    }
+    expect(caught).toBeInstanceOf(RuntimeError);
+    expect(caught?.code).toBe('runtime/sequence-empty');
+    expect(caught?.message).toContain('no specs with status: ready found in');
+    expect(caught?.message).toContain('--include-drafting');
+  });
+});

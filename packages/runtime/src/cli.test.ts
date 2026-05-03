@@ -856,3 +856,190 @@ describe('factory-runtime run-sequence CLI (v0.0.7)', () => {
     }
   });
 });
+
+// ----- v0.0.9: --include-drafting + factory.config runtime.includeDrafting -
+
+describe('factory-runtime run-sequence CLI — v0.0.9 drafting filter', () => {
+  function specSourceWithStatus(
+    id: string,
+    status: 'ready' | 'drafting',
+    deps: string[] = [],
+  ): string {
+    const depsLine =
+      deps.length === 0 ? '' : `depends-on:\n${deps.map((d) => `  - ${d}`).join('\n')}\n`;
+    return [
+      '---',
+      `id: ${id}`,
+      'classification: light',
+      'type: feat',
+      `status: ${status}`,
+      depsLine.replace(/\n$/, ''),
+      '---',
+      '',
+      `# ${id}`,
+      '',
+      '## Intent',
+      'Test fixture spec.',
+      '',
+      '## Scenarios',
+      '**S-1** — passes',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: trivial-pass.test.ts "trivial passes"',
+      '',
+      '## Definition of Done',
+      '- ok',
+      '',
+    ]
+      .filter((line, i, arr) => !(line === '' && arr[i - 1] === ''))
+      .join('\n');
+  }
+
+  async function setupRunseqWorkdir(): Promise<{ work: string; specs: string }> {
+    const work = mkdtempSync(join(tmpdir(), 'runseq-v9-work-'));
+    writeFileSync(
+      join(work, 'trivial-pass.test.ts'),
+      `import { test, expect } from 'bun:test';\ntest('trivial passes', () => { expect(1).toBe(1); });\n`,
+    );
+    const specs = mkdtempSync(join(tmpdir(), 'runseq-v9-specs-'));
+    return { work, specs };
+  }
+
+  test('run-sequence skipping logs one line per skipped spec to stdout', async () => {
+    const { work, specs } = await setupRunseqWorkdir();
+    const prevCwd = process.cwd();
+    try {
+      process.chdir(realpathSync(work));
+      writeFileSync(join(specs, 'a.md'), specSourceWithStatus('a', 'ready'));
+      writeFileSync(join(specs, 'b.md'), specSourceWithStatus('b', 'drafting', ['a']));
+      writeFileSync(join(specs, 'c.md'), specSourceWithStatus('c', 'drafting', ['b']));
+
+      const cap = makeIo();
+      await invoke(
+        [
+          'run-sequence',
+          specs,
+          '--no-implement',
+          '--no-judge',
+          '--max-iterations',
+          '1',
+          '--context-dir',
+          ctxDir,
+        ],
+        cap.io,
+      );
+      expect(cap.exitCode()).toBe(0);
+      expect(cap.stdout()).toContain('factory-runtime: skipping b (status: drafting)');
+      expect(cap.stdout()).toContain('factory-runtime: skipping c (status: drafting)');
+      // Skip lines come before the converged summary line.
+      const skipBIdx = cap.stdout().indexOf('skipping b');
+      const summaryIdx = cap.stdout().indexOf('sequence converged');
+      expect(skipBIdx).toBeGreaterThanOrEqual(0);
+      expect(summaryIdx).toBeGreaterThan(skipBIdx);
+      expect(cap.stdout()).toContain('sequence converged (1/1 specs');
+    } finally {
+      process.chdir(prevCwd);
+      await Bun.$`rm -rf ${work} ${specs}`.quiet().nothrow();
+    }
+  });
+
+  test('run-sequence with no ready specs exits 1 with runtime/sequence-empty stderr label', async () => {
+    const { work, specs } = await setupRunseqWorkdir();
+    const prevCwd = process.cwd();
+    try {
+      process.chdir(realpathSync(work));
+      writeFileSync(join(specs, 'a.md'), specSourceWithStatus('a', 'drafting'));
+      writeFileSync(join(specs, 'b.md'), specSourceWithStatus('b', 'drafting', ['a']));
+
+      const cap = makeIo();
+      await invoke(
+        [
+          'run-sequence',
+          specs,
+          '--no-implement',
+          '--no-judge',
+          '--max-iterations',
+          '1',
+          '--context-dir',
+          ctxDir,
+        ],
+        cap.io,
+      );
+      expect(cap.exitCode()).toBe(1);
+      expect(cap.stderr()).toContain('runtime/sequence-empty');
+      expect(cap.stderr()).toContain('--include-drafting');
+    } finally {
+      process.chdir(prevCwd);
+      await Bun.$`rm -rf ${work} ${specs}`.quiet().nothrow();
+    }
+  });
+
+  test('factory.config.json runtime.includeDrafting=true makes run-sequence walk drafting specs', async () => {
+    const { work, specs } = await setupRunseqWorkdir();
+    const prevCwd = process.cwd();
+    try {
+      process.chdir(realpathSync(work));
+      writeFileSync(
+        join(work, 'factory.config.json'),
+        JSON.stringify({ runtime: { includeDrafting: true } }),
+      );
+      writeFileSync(join(specs, 'a.md'), specSourceWithStatus('a', 'ready'));
+      writeFileSync(join(specs, 'b.md'), specSourceWithStatus('b', 'drafting', ['a']));
+      writeFileSync(join(specs, 'c.md'), specSourceWithStatus('c', 'drafting', ['b']));
+
+      const cap = makeIo();
+      await invoke(
+        [
+          'run-sequence',
+          specs,
+          '--no-implement',
+          '--no-judge',
+          '--max-iterations',
+          '1',
+          '--context-dir',
+          ctxDir,
+        ],
+        cap.io,
+      );
+      expect(cap.exitCode()).toBe(0);
+      expect(cap.stdout()).toContain('sequence converged (3/3 specs');
+      expect(cap.stdout()).not.toContain('skipping');
+    } finally {
+      process.chdir(prevCwd);
+      await Bun.$`rm -rf ${work} ${specs}`.quiet().nothrow();
+    }
+  });
+
+  test('absent factory.config.json leaves run-sequence default (drafting skipped)', async () => {
+    const { work, specs } = await setupRunseqWorkdir();
+    const prevCwd = process.cwd();
+    try {
+      process.chdir(realpathSync(work));
+      writeFileSync(join(specs, 'a.md'), specSourceWithStatus('a', 'ready'));
+      writeFileSync(join(specs, 'b.md'), specSourceWithStatus('b', 'drafting', ['a']));
+
+      const cap = makeIo();
+      await invoke(
+        [
+          'run-sequence',
+          specs,
+          '--no-implement',
+          '--no-judge',
+          '--max-iterations',
+          '1',
+          '--context-dir',
+          ctxDir,
+        ],
+        cap.io,
+      );
+      expect(cap.exitCode()).toBe(0);
+      expect(cap.stdout()).toContain('sequence converged (1/1 specs');
+      expect(cap.stdout()).toContain('skipping b (status: drafting)');
+    } finally {
+      process.chdir(prevCwd);
+      await Bun.$`rm -rf ${work} ${specs}`.quiet().nothrow();
+    }
+  });
+});

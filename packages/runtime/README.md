@@ -16,6 +16,14 @@ Before spending agent tokens on the loop, run two cheap checks against the spec:
 
 Lint then review then run is the recommended sequence — running the loop on a spec that wouldn't pass review is the most common way to burn the `--max-total-tokens` budget on a no-converge.
 
+## v0.0.9 release notes
+
+- **`run-sequence` skips `status: drafting` specs by default.** v0.0.7 documented this behavior but never enforced it; v0.0.8 self-build hit the regression. The default invocation now walks only `status: ready` specs and emits one `factory-runtime: skipping <id> (status: drafting)` line to stdout per skipped spec (in topological order, before the converged/partial summary). `SequenceReport.specs` does NOT include skipped specs as entries — `report.specs.length` reflects only what was actually walked.
+- **`--include-drafting` flag** restores the legacy walk-everything mode for cluster-atomic shipping. Boolean (no value), mirrors `--continue-on-fail`'s shape. Also configurable via `factory.config.json` `runtime.includeDrafting?: boolean` (default `false`); CLI flag wins over config wins over built-in default.
+- **New `runtime/sequence-empty` `RuntimeErrorCode`.** Fired before any spec runs when the input directory has no `status: ready` specs (and `--include-drafting` is not set). The CLI exits **1** with stderr label `runtime/sequence-empty: no specs with status: ready found in <dir> (use --include-drafting to walk all specs regardless of status)`. Exit 1 (not 3) because this is an empty-DAG signal, not a runtime error — the maintainer has work to do (flip a status to ready or pass the flag), not a bug to file.
+- **Per-spec `agent-timeout-ms` consumption.** `run()` now consults `spec.frontmatter['agent-timeout-ms']` (added to the `factory-core` schema in v0.0.9) when resolving `PhaseContext.maxAgentTimeoutMs`. Precedence: `RunOptions.maxAgentTimeoutMs` > `spec.frontmatter['agent-timeout-ms']` > built-in `600_000`. RunOptions wins because the maintainer's CLI flag is intentional; the spec's declaration beats the built-in floor.
+- **`RuntimeErrorCode` enum: 13 → 14 values** (+`runtime/sequence-empty`). Public API surface from `src/index.ts` unchanged at 21 names.
+
 ## v0.0.5.2 release notes
 
 - **Configurable per-phase agent timeout.** New `RunOptions.maxAgentTimeoutMs?: number` (default 600_000) and CLI flag `--max-agent-timeout-ms <n>` raise the previously hardcoded 10-minute wall-clock cap on the `claude -p` subprocess. Wide-blast-radius specs (e.g. v0.0.5's `factory-publish-v0-0-5`, which touched 14 files and tripped the cap on iteration 2 with the agent making real progress) can now opt into a longer ceiling without rebuilding the runtime. The default stays tight as a guardrail against truly hung agents.

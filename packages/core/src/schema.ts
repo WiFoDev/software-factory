@@ -32,6 +32,7 @@ export const SpecFrontmatterSchema = z
     status: SpecStatusSchema,
     exemplars: z.array(SpecExemplarSchema).default([]),
     'depends-on': z.array(z.string()).default([]),
+    'agent-timeout-ms': z.number().int().positive().optional(),
   })
   .strict();
 export type SpecFrontmatter = z.infer<typeof SpecFrontmatterSchema>;

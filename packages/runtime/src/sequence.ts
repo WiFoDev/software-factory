@@ -36,6 +36,18 @@ export interface RunSequenceOptions extends RunOptions {
    * > maxSequenceTokens` aborts before invoking `run()` for the next spec.
    */
   maxSequenceTokens?: number;
+  /**
+   * v0.0.9 — when true, walk every spec in the directory regardless of
+   * `frontmatter.status`. Default false: skip specs with `status: drafting`
+   * (preserving cluster-atomic shipping requires opting in).
+   */
+  includeDrafting?: boolean;
+  /**
+   * v0.0.9 — sink for one-line "skipping <id> (status: drafting)" notices
+   * emitted before the sequence runs. Defaults to stdout. Distinct from
+   * `RunOptions.log`, which goes to stderr per-phase.
+   */
+  skipLog?: (line: string) => void;
 }
 
 export type SequenceSpecStatus = 'converged' | 'no-converge' | 'error' | 'skipped';
@@ -70,33 +82,48 @@ interface LoadedSpec {
   deps: string[];
 }
 
+interface LoadSpecsResult {
+  included: LoadedSpec[];
+  skippedDrafting: LoadedSpec[];
+}
+
 /**
  * Walk `<specsDir>/*.md` (non-recursive — `done/` is intentionally skipped).
- * Parse each via `parseSpec`. Returns a deterministic-ordered list (by
- * filename ASC) with `deps` extracted from each spec's `depends-on`.
+ * Parse each via `parseSpec`. Returns deterministic-ordered lists (by id
+ * ASC). When `includeDrafting === false` (default), specs with
+ * `frontmatter.status === 'drafting'` are routed to `skippedDrafting`
+ * instead of `included`; the sequence-runner logs a one-line skip notice
+ * for each and they are absent from `topoOrder` and `SequenceReport.specs`.
  */
-function loadSpecs(specsDir: string): LoadedSpec[] {
+function loadSpecs(specsDir: string, includeDrafting: boolean): LoadSpecsResult {
   const stat = statSync(specsDir);
   if (!stat.isDirectory()) {
     throw new RuntimeError('runtime/io-error', `not a directory: ${specsDir}`);
   }
   const entries = readdirSync(specsDir, { withFileTypes: true });
-  const out: LoadedSpec[] = [];
+  const included: LoadedSpec[] = [];
+  const skippedDrafting: LoadedSpec[] = [];
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (!entry.name.endsWith('.md')) continue;
     const fullPath = join(specsDir, entry.name);
     const source = readFileSync(fullPath, 'utf8');
     const spec = parseSpec(source, { filename: fullPath });
-    out.push({
+    const loaded: LoadedSpec = {
       id: spec.frontmatter.id,
       path: fullPath,
       spec,
       deps: [...spec.frontmatter['depends-on']],
-    });
+    };
+    if (!includeDrafting && spec.frontmatter.status === 'drafting') {
+      skippedDrafting.push(loaded);
+    } else {
+      included.push(loaded);
+    }
   }
-  out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return out;
+  included.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  skippedDrafting.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return { included, skippedDrafting };
 }
 
 /**
@@ -245,6 +272,8 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
   const continueOnFail = options.continueOnFail ?? false;
   const maxSequenceTokens = options.maxSequenceTokens;
   const perSpecMaxTotalTokens = options.maxTotalTokens ?? DEFAULT_MAX_TOTAL_TOKENS;
+  const includeDrafting = options.includeDrafting ?? false;
+  const skipLog = options.skipLog ?? ((line: string) => process.stdout.write(`${line}\n`));
 
   tryRegister(contextStore, 'factory-run', FactoryRunSchema);
   tryRegister(contextStore, 'factory-sequence', FactorySequenceSchema);
@@ -252,7 +281,16 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
   const startedAt = new Date();
   const t0 = performance.now();
 
-  const loaded = loadSpecs(specsDir);
+  const { included: loaded, skippedDrafting } = loadSpecs(specsDir, includeDrafting);
+  for (const s of skippedDrafting) {
+    skipLog(`factory-runtime: skipping ${s.id} (status: drafting)`);
+  }
+  if (loaded.length === 0) {
+    throw new RuntimeError(
+      'runtime/sequence-empty',
+      `no specs with status: ready found in ${specsDir} (use --include-drafting to walk all specs regardless of status)`,
+    );
+  }
   const topoOrder = buildDag(loaded, specsDir);
   const byId = new Map(loaded.map((s) => [s.id, s]));
 

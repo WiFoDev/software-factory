@@ -4,7 +4,31 @@ This file is the **direction**. `BACKLOG.md` is the candidate pile. The roadmap 
 
 ---
 
-## Where we are: v0.0.8 — shipped
+## Where we are: v0.0.9 — shipped
+
+**Theme: status-aware run-sequence + per-spec timeout + scaffold scripts + dep-aware internal-consistency.** Four small frictions surfaced in the v0.0.8 BASELINE: drafting specs got pulled into `run-sequence`; wide-blast-radius specs hit the 600s agent-timeout ceiling with no per-spec override; the scaffold's `package.json` shipped empty `scripts` even as every spec's DoD claimed they were runnable; `internal-consistency` flagged shared constraints in multi-spec products as unreferenced because it didn't follow `depends-on` edges. v0.0.9 closes all four.
+
+### What v0.0.9 added
+
+| # | Piece | Notes |
+|---|---|---|
+| 1 | **`agent-timeout-ms` frontmatter + `spec/wide-blast-radius` lint** *(factory-core)* | Optional positive-int field on `SpecFrontmatterSchema`. New `spec/wide-blast-radius` warning when a spec's Subtasks section names ≥ 8 distinct file paths. Field-level addition; zero new public exports. |
+| 2 | **Scaffold `scripts: { typecheck, test, check, build }`** *(factory-core)* | `PACKAGE_JSON_TEMPLATE.scripts` now matches the monorepo's own conventions so a fresh `factory init` project can immediately run the gates its DoD claims. |
+| 3 | **`run-sequence` skips drafting + per-spec `agent-timeout-ms`** *(factory-runtime)* | `loadSpecs` filters `frontmatter.status === 'drafting'` unless `--include-drafting`. `run()` resolves agent timeout via `spec.frontmatter['agent-timeout-ms'] > options.maxAgentTimeoutMs > default`. New `factory.config.json` key `runtime.includeDrafting`. |
+| 4 | **`internal-consistency` follows `depends-on` edges** *(factory-spec-review)* | Judge's `buildPrompt` consumes the existing `JudgePromptCtx.deps` (v0.0.7 plumbing) and appends a `## Deps Constraints (referenced via depends-on)` section sliced via `findSection`. Criterion gains a sentence so the LLM scores against the union of this spec's Constraints + every dep's Constraints. |
+
+### Reconciliations worth knowing
+
+- **All 6 packages bumped to 0.0.9 in lockstep.** Even packages that didn't change (context, twin, harness) bumped — matches v0.0.5 / v0.0.6 / v0.0.7 / v0.0.8 publish-coordination pattern; keeps the scaffold's `^0.0.9` deps uniformly resolvable.
+- **`internal-consistency` cache invalidates on first run after upgrade.** Criterion text gains one sentence → `ruleSetHash()` flips → v0.0.8 cache misses on first run. Expected and correct.
+- **Dep loading remains the CLI's responsibility.** v0.0.7 already wired the CLI to auto-load deps; v0.0.9 only teaches `internal-consistency` to opt into the existing data flow.
+- **Transitive dep loading is NOT yet shipped.** Direct deps only. Walking a dep's own `depends-on` chain is deferred to a future release.
+- **Drafting-by-default is `run-sequence` only.** `factory-runtime run` (single-spec) still runs whatever spec you point it at regardless of status.
+- **Public API surface unchanged across every package.** All changes are field-level on already-exported schemas/templates or internal-only logic. Strict-equality DoD per package still holds (29 / 21 / 10 / 18 / ~16 / ~7).
+
+---
+
+## Where we were: v0.0.8 — shipped
 
 **Theme: discoverability + baseline reset.** The v0.0.7 BASELINE run (2026-05-03) shipped a critical finding: v0.0.7's three deliverables (`/scope-project`, `depends-on`, `run-sequence`) were on npm but invisible to a fresh-repo agent — `factory init` didn't auto-install the slash command, the scaffold README didn't mention `run-sequence`, and the canonical baseline prompt explicitly told the agent those tools didn't exist. v0.0.8 closes all three gaps so v0.0.7's value is actually exercised.
 

@@ -6,6 +6,36 @@ For the project's forward direction and shipped-release retrospectives, see [`RO
 
 ---
 
+## [0.0.9] — 2026-05-03
+
+**Theme: status-aware run-sequence + per-spec timeout + scaffold scripts + dep-aware internal-consistency.** Four small frictions surfaced in the v0.0.8 BASELINE — drafting specs got pulled into `run-sequence`; wide-blast-radius specs hit the 600s agent-timeout ceiling with no override; the scaffold's `package.json` shipped empty `scripts` even as every spec's DoD claimed they were runnable; `internal-consistency` flagged shared constraints in multi-spec products as unreferenced because it didn't follow `depends-on` edges. v0.0.9 closes all four.
+
+### Added
+
+- **`agent-timeout-ms` frontmatter field + `spec/wide-blast-radius` lint warning** *(factory-core)*. New optional `'agent-timeout-ms': z.number().int().positive().optional()` on `SpecFrontmatterSchema`. New lint code `spec/wide-blast-radius` (severity: warning) emitted when a spec's Subtasks section names ≥ 8 distinct file paths. Field-level addition; zero new public exports.
+- **Scaffold `scripts: { typecheck, test, check, build }`** *(factory-core)*. `PACKAGE_JSON_TEMPLATE.scripts` now ships the four canonical entries matching the monorepo's own conventions, so a fresh `factory init` project can immediately run the gates its DoD claims.
+- **`run-sequence` skips drafting specs by default + `--include-drafting` flag** *(factory-runtime)*. `loadSpecs` now filters `frontmatter.status === 'drafting'` unless `includeDrafting: true`. New CLI flag `--include-drafting` and `factory.config.json` key `runtime.includeDrafting` (default `false`). CLI flag > config > built-in default.
+- **Per-spec `agent-timeout-ms` consumption** *(factory-runtime)*. `run()` now resolves the agent timeout via `spec.frontmatter['agent-timeout-ms'] ?? options.maxAgentTimeoutMs ?? DEFAULT_MAX_AGENT_TIMEOUT_MS`. Wide-blast-radius specs override the 600s ceiling without bumping the global default for everyone.
+- **`internal-consistency` judge follows `depends-on` edges** *(factory-spec-review)*. The judge's `buildPrompt` consumes the existing `JudgePromptCtx.deps` (plumbed through in v0.0.7 by `cross-doc-consistency`) and appends a `## Deps Constraints (referenced via depends-on)` section to the artifact, with each dep's `## Constraints / Decisions` block sliced via `findSection`. The criterion gains a sentence instructing the LLM judge to score against the union of this spec's Constraints + every dep's Constraints. Field-level on existing types; zero new exports.
+
+### Changed
+
+- **All six `@wifo/factory-*` packages bumped to `0.0.9`** in lockstep. `init-templates.ts` `PACKAGE_JSON_TEMPLATE.dependencies` bumped from `^0.0.8` to `^0.0.9` for every `@wifo/factory-*` dep.
+
+### Public API surface
+
+Unchanged across every package. Strictly equal to v0.0.8's surface (29 / 21 / 10 / 18 / ~16 / ~7). All v0.0.9 changes are field-level on existing schemas/types/templates + version metadata.
+
+### Reconciliations worth knowing
+
+- **`internal-consistency` cache invalidates on first run after upgrade.** The criterion text gains one sentence, so `ruleSetHash()` flips and v0.0.8 cache entries miss. Expected and correct.
+- **Dep loading remains the CLI's responsibility.** v0.0.7 already wired the CLI to auto-load each declared dep from `docs/specs/<id>.md` or `docs/specs/done/<id>.md` and thread them through `runReview`'s `deps` option. v0.0.9 just teaches `internal-consistency` to opt into the existing data flow.
+- **`internal-consistency` still applies on every spec.** The judge's `applies()` is unchanged (returns true unconditionally). The dep-awareness affects scoring, not whether the judge fires. A spec without deps still gets scored, just without dep-context.
+- **Transitive dep loading is NOT yet shipped.** The CLI loads direct deps only. Walking a dep's own `depends-on` chain is deferred to a future release.
+- **Drafting-by-default is `run-sequence` only.** `factory-runtime run` (single-spec) still runs whatever spec you point it at regardless of status. The status filter is purely a sequence-level guard.
+
+---
+
 ## [0.0.8] — 2026-05-03
 
 **Theme: discoverability + baseline reset.** The v0.0.7 BASELINE run shipped a critical finding: v0.0.7's three deliverables (`/scope-project`, `depends-on`, `run-sequence`) were on npm but invisible to a fresh-repo agent — `factory init` didn't auto-install the slash command into `.claude/commands/`, the scaffold README didn't mention `run-sequence`, and the canonical baseline prompt explicitly told the agent those tools didn't exist (the prompt was authored when they were future work). v0.0.8 closes all three gaps so v0.0.7's value is actually exercised by a fresh-repo agent.

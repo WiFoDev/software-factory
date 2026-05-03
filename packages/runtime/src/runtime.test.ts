@@ -630,6 +630,72 @@ describe('run() — multi-phase input dedup', () => {
     expect(runRec?.parents).toEqual([]);
   });
 
+  test("v0.0.9: run() resolves maxAgentTimeoutMs from spec.frontmatter['agent-timeout-ms'] when set", async () => {
+    const store = createContextStore({ dir });
+    let seenMaxAgentTimeoutMs: number | undefined;
+    const phase = definePhase('p', async (ctx) => {
+      seenMaxAgentTimeoutMs = ctx.maxAgentTimeoutMs;
+      return { status: 'pass', records: [] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    const spec: Spec = {
+      ...makeSpec(),
+      frontmatter: { ...makeSpec().frontmatter, 'agent-timeout-ms': 1_200_000 },
+    };
+    await run({ spec, graph, contextStore: store });
+    expect(seenMaxAgentTimeoutMs).toBe(1_200_000);
+  });
+
+  test("v0.0.9: run() lets RunOptions.maxAgentTimeoutMs override spec.frontmatter['agent-timeout-ms']", async () => {
+    const store = createContextStore({ dir });
+    let seenMaxAgentTimeoutMs: number | undefined;
+    const phase = definePhase('p', async (ctx) => {
+      seenMaxAgentTimeoutMs = ctx.maxAgentTimeoutMs;
+      return { status: 'pass', records: [] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    const spec: Spec = {
+      ...makeSpec(),
+      frontmatter: { ...makeSpec().frontmatter, 'agent-timeout-ms': 1_200_000 },
+    };
+    await run({
+      spec,
+      graph,
+      contextStore: store,
+      options: { maxAgentTimeoutMs: 1_800_000 },
+    });
+    expect(seenMaxAgentTimeoutMs).toBe(1_800_000);
+  });
+
+  test('v0.0.9: run() falls back to 600_000 when neither spec frontmatter nor RunOptions sets it', async () => {
+    const store = createContextStore({ dir });
+    let seenMaxAgentTimeoutMs: number | undefined;
+    const phase = definePhase('p', async (ctx) => {
+      seenMaxAgentTimeoutMs = ctx.maxAgentTimeoutMs;
+      return { status: 'pass', records: [] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    await run({ spec: makeSpec(), graph, contextStore: store });
+    expect(seenMaxAgentTimeoutMs).toBe(600_000);
+  });
+
+  test('v0.0.9: run() with only RunOptions.maxAgentTimeoutMs set uses that value (existing v0.0.6 behavior)', async () => {
+    const store = createContextStore({ dir });
+    let seenMaxAgentTimeoutMs: number | undefined;
+    const phase = definePhase('p', async (ctx) => {
+      seenMaxAgentTimeoutMs = ctx.maxAgentTimeoutMs;
+      return { status: 'pass', records: [] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxAgentTimeoutMs: 900_000 },
+    });
+    expect(seenMaxAgentTimeoutMs).toBe(900_000);
+  });
+
   test('RunReport.totalTokens sums implement-report tokens across iterations', async () => {
     const store = createContextStore({ dir });
     const phase = definePhase('p', async (ctx) => {

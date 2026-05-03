@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  BIOME_CONFIG_TEMPLATE,
   GITIGNORE_TEMPLATE,
   PACKAGE_JSON_TEMPLATE,
   README_TEMPLATE,
@@ -11,18 +12,18 @@ import {
 
 describe('init-templates', () => {
   test('PACKAGE_JSON_TEMPLATE has the expected keys + workspace-stripped semver deps', () => {
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.8');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.8');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.8');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.9');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.9');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.9');
     expect(PACKAGE_JSON_TEMPLATE.type).toBe('module');
     expect(PACKAGE_JSON_TEMPLATE.private).toBe(true);
   });
 
-  test('PACKAGE_JSON_TEMPLATE pins @wifo/factory-* deps at ^0.0.8', () => {
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.8');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.8');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.8');
-    expect(PACKAGE_JSON_TEMPLATE.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.8');
+  test('PACKAGE_JSON_TEMPLATE pins @wifo/factory-* deps at ^0.0.9', () => {
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.9');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.9');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.9');
+    expect(PACKAGE_JSON_TEMPLATE.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.9');
   });
 
   test('TSCONFIG_TEMPLATE is self-contained — does NOT extend a relative path', () => {
@@ -100,5 +101,34 @@ describe('init-templates', () => {
       'utf8',
     );
     expect(readScopeProjectCommandTemplate()).toBe(canonical);
+  });
+
+  test('PACKAGE_JSON_TEMPLATE.scripts has the four canonical entries', () => {
+    expect(PACKAGE_JSON_TEMPLATE.scripts).toEqual({
+      typecheck: 'tsc --noEmit',
+      test: 'bun test src',
+      check: 'biome check',
+      build: 'tsc -p tsconfig.build.json',
+    });
+    // Insertion-order ⇒ JSON.stringify order matches the natural CI sequence.
+    expect(Object.keys(PACKAGE_JSON_TEMPLATE.scripts)).toEqual([
+      'typecheck',
+      'test',
+      'check',
+      'build',
+    ]);
+  });
+
+  test('PACKAGE_JSON_TEMPLATE.devDependencies includes @biomejs/biome at the canonical version range', () => {
+    expect(PACKAGE_JSON_TEMPLATE.devDependencies['@biomejs/biome']).toBe('^2.4.4');
+    expect(PACKAGE_JSON_TEMPLATE.devDependencies.typescript).toBe('^5.6.0');
+  });
+
+  test('BIOME_CONFIG_TEMPLATE has the minimal canonical shape', () => {
+    const parsed = JSON.parse(BIOME_CONFIG_TEMPLATE);
+    expect(parsed.$schema).toBe('https://biomejs.dev/schemas/2.4.4/schema.json');
+    expect(parsed.linter).toEqual({ enabled: true, rules: { recommended: true } });
+    expect(parsed.formatter).toEqual({ enabled: true, indentWidth: 2, lineWidth: 100 });
+    expect(parsed.files).toEqual({ include: ['src/**/*.ts', 'src/**/*.tsx'] });
   });
 });
