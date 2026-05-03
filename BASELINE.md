@@ -253,9 +253,70 @@ Two-pronged:
 
 Both ship before any v0.0.8 BASELINE re-run. The v0.0.8 BASELINE entry below depends on both landing first.
 
-##### v0.0.8 — pending
+##### v0.0.8 — shipped 2026-05-03 (FIRST run where the friction list actually shrunk)
 
-After (1) baseline reset and (2) `factory init` scaffold drop ship. New canonical prompt opens with `/scope-project`; agent decomposes via the slash command; `factory-runtime run-sequence docs/specs/` walks the four shipped specs in topological order. Predicted improvements: friction #1 (manual decomposition) genuinely disappears for the first time; friction #2 (sequence orchestration, 32 manual interventions on v0.0.6) collapses to ~1 invocation; the v0.0.7 friction list stops repeating. Wall-clock + token totals expected flat (the bottleneck is agent compute, not orchestration). Maintainer interventions expected: ≤4 (one per spec review, vs 32 on v0.0.6).
+The discoverability + baseline reset cluster shipped (`/scope-project` auto-installed by `factory init`, scaffold README documents the multi-spec flow, baseline prompt reset). Run executed against the new canonical prompt in `~/dev/url-shortener-v0.0.8/`.
+
+**Predictions (locked before the run):**
+
+1. Friction #1 (manual decomposition) genuinely disappears for the first time — `/scope-project` is auto-installed and the new prompt opens with it.
+2. Friction #2 (sequence orchestration, 32 manual interventions on v0.0.6) collapses to ~4-8 (one `/scope-project` + one `run-sequence` + per-spec review checkpoints).
+3. Wall-clock + cache-aware tokens stay flat — agent compute didn't change, only orchestration did.
+4. Possible NEW friction: agent timeout on a wide-blast-radius spec (the v0.0.8 self-build hit this on a 12-file spec).
+5. Friction #3 (DoD-precision predictability) may persist — v0.0.8 didn't address it.
+
+**Actuals:**
+
+| Spec | Iterations | Notes |
+|---|---|---|
+| url-store | 1 | clean converge (the `ready` root) |
+| click-store | 1 | clean converge |
+| shorten-endpoint | 1 | clean converge |
+| redirect-endpoint | 1 | clean converge — diamond join, NO timeout |
+| stats-endpoint | 1 | clean converge |
+| **Total (all 5 specs)** | **5** | **6m 26s (385.8 s)** | every spec converged first try |
+
+| Metric | v0.0.5 | v0.0.6 | v0.0.7 | v0.0.8 | Per-spec (v0.0.8) |
+|---|---|---|---|---|---|
+| Specs shipped | 4 (linear) | 4 (linear) | 4 (linear) | **5 (diamond)** | — |
+| Wall-clock | 7m 3s | 4m 26s | 5m 9s | 6m 26s | **77 s/spec** |
+| Wall-clock per spec | 106 s | 67 s | 77 s | **77 s** | identical to v0.0.7 |
+| Raw tokens | 22,703 | — | 17,009 | 20,900 | ~4,200/spec |
+| Tests shipped | 14 | 16 | 19 | 16 | — |
+| Commits | 7 | 6 | 6 | **4** | — |
+| Maintainer interventions | ~32 | 32 | 32 (prompt-biased) | **~3-8** | **≥4× collapse** |
+
+**End-to-end smoke:** all 7 `curl` calls in the cookbook behave per spec. Live HTTP + click tracking + JSON stats verified.
+
+**Top 3 friction points (per agent's JOURNAL):**
+
+1. **`run-sequence` is not status-aware.** It walked all 5 specs even though only `url-store` was `status: ready`. The "I'll flip drafting → ready as each spec converges" workflow documented in the new canonical prompt is fictional in v0.0.8 — once you invoke `run-sequence`, the runtime walks the full DAG to convergence with no maintainer checkpoint between specs. The prompt itself acknowledged this as a TODO. **Maps directly to existing v0.0.9 BACKLOG entry** ("`factory-runtime run-sequence` should skip `status: drafting` specs by default") — surfaced again, twice now (v0.0.8 self-build + v0.0.8 BASELINE).
+2. **Scaffold ships `scripts: {}` but every spec DoD says "typecheck + lint + tests green."** `factory init` and `/scope-project`'s default DoD disagree about what "green" means. Only `bun test` works in a fresh scaffold; `pnpm typecheck` and `pnpm lint` are aspirational. The reviewer's `internal-consistency` judge caught this. **NEW v0.0.9 BACKLOG entry needed:** scaffold should ship `scripts: { typecheck, test, check }` matching the monorepo conventions, OR the spec template's default DoD should not promise gates that don't exist in fresh scaffolds.
+3. **`/scope-project` and the spec-reviewer disagree about shared constraints.** `/scope-project` says "cross-spec decisions live in spec #1's Constraints"; the `internal-consistency` judge flags those as unreferenced because it doesn't follow `depends-on` edges to see downstream references. The pattern worked end-to-end (the warning was substance-light), but it forced a stop-and-think at the very moment the maintainer was supposed to trust the scoper. **NEW v0.0.9 BACKLOG entry needed:** the reviewer's `internal-consistency` judge needs `depends-on`-awareness — when scoring spec N, treat constraints declared in any spec in `depends-on*` chain as already-covered (or referenced via known patterns).
+
+**Predicted-vs-actual scoring:**
+
+| Prediction | Outcome | Notes |
+|---|---|---|
+| #1 Manual decomposition disappears | ✅ **LANDED** | `/scope-project` invoked once; 5 specs out; zero hand-decomposition. **First time the friction list has actually shrunk version-over-version.** |
+| #2 32 → ~4-8 interventions | ✅ **LANDED** | 4 commits total (vs 6 in v0.0.6). Estimated ~3-8 maintainer touches (one `/scope-project` + one review pass + one `run-sequence` + per-spec eyeballing). **≥4× collapse.** |
+| #3 Wall-clock + tokens flat per spec | ✅ **LANDED EXACTLY** | 77 s/spec wall-clock, identical to v0.0.7. ~4,200 raw tokens/spec. The bottleneck genuinely is agent compute; orchestration collapse doesn't move that needle (correctly predicted). |
+| #4 Wide-blast-radius timeout | ❌ **Did NOT land** | None of the 5 specs hit the 600s timeout. `/scope-project`'s implicit decomposition discipline (5 narrow specs vs 1 wide one) prevented it. The v0.0.8 self-build's timeout finding is real but only fires when a spec is hand-authored to span 10+ files (the version-bump-coordination spec, e.g.) — not when `/scope-project` produced it. |
+| #5 DoD-precision persists | ✅ **LANDED in NEW shape** | Surfaced concretely as "scaffold scripts are empty; DoD claims are aspirational." More actionable than v0.0.7's vague "review fires after authoring" — this is a specific scaffold gap that pairs with the v0.0.6 BASELINE's DoD-verifier finding. |
+
+**Surprises:**
+
+- **`/scope-project` produced a strictly better decomposition than the hand-authored prompt ever did.** v0.0.5–v0.0.7 always produced a 4-spec linear chain (`core → redirect → tracking → stats`). `/scope-project` produced a 5-spec diamond: two pure stores at the base (`url-store` + `click-store` separated by SRP), three HTTP endpoints stacked (`shorten-endpoint`, `redirect-endpoint` joining both stores, `stats-endpoint`). The agent's decomposition is cleaner architecture — separation of concerns, deeper depends-on graph, smaller per-spec blast radius. **This is the kind of unlock that justifies `/scope-project`'s existence.**
+- **The runtime's friction list FINALLY shrunk.** Every prior baseline produced essentially the same friction list (manual decomp + sequence orchestration + DoD gap). v0.0.8 is the first where the headline frictions are GONE. New frictions surfaced (status-aware `run-sequence`, scaffold scripts, reviewer-vs-scoper tension) — but they're at a higher level of abstraction than the prior list, which is the right kind of progress.
+- **Per-spec agent compute is invariant.** 77 s/spec across v0.0.7 and v0.0.8 — exact match despite different specs. The implementation guidelines prefix from v0.0.5 + the prompt-cache invariant continues to hold. v0.0.9+ work that touches the agent prompt should preserve this baseline carefully.
+- **Two of the three new frictions had already been predicted as v0.0.9 BACKLOG entries** (status-aware run-sequence + scaffold scripts gap). Independent confirmation = strong signal. The third (reviewer-vs-scoper tension) is genuinely new and worth its own BACKLOG entry.
+
+**Mapped BACKLOG entries:**
+- Friction #1 (status-aware run-sequence) → existing v0.0.9 entry "Per-spec agent-timeout override + run-sequence skips drafting" (two-finding cluster). Now confirmed twice; promote priority.
+- Friction #2 (scaffold scripts vs DoD) → NEW v0.0.9 entry needed: scaffold ships `scripts: { typecheck, test, check }`. Pairs with the long-deferred DoD-verifier work.
+- Friction #3 (reviewer-vs-scoper shared-constraints tension) → NEW v0.0.9 entry needed: `internal-consistency` judge gains `depends-on`-awareness.
+
+**Would you want to use the factory for the next product?** Per the agent: 5 specs converged, 16 tests pass, all 7 curl calls behave per spec. Yes — and for the first time, the friction is at a higher level than "manual decomposition." Net signal: **v0.0.8 is the first release where the factory genuinely got better at building real things, measured empirically.**
 
 ##### v0.1.0 — pending
 

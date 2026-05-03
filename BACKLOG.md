@@ -151,6 +151,44 @@ Two friction points surfaced in the v0.0.6 baseline (see `BASELINE.md` v0.0.6 en
 
 ---
 
+## Scaffold ships `scripts: { typecheck, test, check }` matching its DoD claims *(NEW, surfaced by v0.0.8 BASELINE)*
+
+**What:** `factory init` produces a scaffold whose `package.json` has `scripts: {}` (empty), but every spec template's default DoD says "typecheck + lint + tests green" and the `internal-consistency` reviewer judge flags the gap as a finding. Only `bun test src` works in a fresh scaffold; `pnpm typecheck`, `pnpm lint`/`pnpm check`, and `pnpm test` are all aspirational until the maintainer adds them by hand.
+
+**Why:** This is a more concrete, more actionable shape of the v0.0.6 BASELINE's "DoD-verifier" finding. The v0.0.6 angle was "the runtime doesn't enforce DoD"; the v0.0.8 BASELINE angle is "the scaffold doesn't even ship the commands the DoD claims will run." Closing the second is much cheaper than closing the first, and unlocks a clean "DoD says X, X exists, runtime can verify X" chain.
+
+**Shape options:**
+- (a) Scaffold ships `scripts: { typecheck: 'tsc --noEmit', test: 'bun test src', check: 'biome check', build: 'tsc -p tsconfig.build.json' }` matching this monorepo's conventions. Pair with the existing scaffold devDeps (typescript already lands in v0.0.6.x).
+- (b) Scaffold ships `scripts: { typecheck, test }` only (more minimal); biome/build are user-driven.
+- (c) Spec template's default DoD shrinks to only what the scaffold ships. Documents the floor honestly.
+
+Lean: (a). The convention is well-established in this monorepo and the published packages are the reference; copy them. Adds zero ambiguity for users.
+
+**Touches:** `packages/core/src/init-templates.ts` (`PACKAGE_JSON_TEMPLATE.scripts` field), tests in `init-templates.test.ts` + `init.test.ts`, scaffold README's flow snippets reference the new scripts. Small — ~30 LOC.
+
+**Phasing suggestion:** v0.0.9 lead candidate alongside the per-spec timeout override + run-sequence drafting filter. Three small fixes that together close every concrete friction the v0.0.8 BASELINE surfaced.
+
+---
+
+## `internal-consistency` judge gains `depends-on`-awareness *(NEW, surfaced by v0.0.8 BASELINE)*
+
+**What:** When `/scope-project` writes a multi-spec product, its decomposition discipline says "shared decisions live in the FIRST spec's `## Constraints / Decisions` block; later specs reference them." But the `internal-consistency` reviewer judge (which scores each spec in isolation) flags those shared constraints as unreferenced — because it doesn't follow `depends-on` edges to see how downstream specs use them. Result: the v0.0.8 BASELINE's first spec (`url-store`) collected a `review/internal-consistency` warning on the "Project-wide JSON conventions" block, even though the pattern worked end-to-end.
+
+**Why:** The judge fires at the very moment the maintainer is supposed to trust the scoper. It's a substance-light warning (won't block the run-sequence), but it injects a stop-and-think where the workflow promised seamlessness. Worse, the warning could push future maintainers to either (a) duplicate shared constraints across every spec (defeats the whole point of `depends-on`-aware decomposition), or (b) move shared decisions out of the spec format into a separate `docs/conventions.md` (changes the workflow). Neither resolution is desirable; the right fix is in the judge.
+
+**Shape options:**
+- (a) When scoring spec N with non-empty `depends-on`, the judge reads each transitive dep's body via the same machinery v0.0.7's `cross-doc-consistency` already uses. Constraints declared in any dep are treated as "available context" — references to them in scenarios don't have to be local.
+- (b) Add a recognized section header `## Project-wide constraints` (parallel to the existing `## Constraints / Decisions`) that the judge knows is informational + downstream-shared. Stricter signal but adds a new section to the spec format.
+- (c) Add a frontmatter flag `shared-constraints: true` on the first spec of a product to opt that spec's Constraints block into the "downstream-shared" interpretation.
+
+Lean: (a). It reuses existing machinery (the dep-loading CLI path from v0.0.7's `cross-doc-consistency` work) and doesn't add new spec format. The judge becomes "internal-consistency-with-dep-context."
+
+**Touches:** `packages/spec-review/src/judges/internal-consistency.ts` (extend `applies()` and `buildPrompt()` to consume `JudgePromptCtx.deps` — already plumbed through in v0.0.7), `packages/spec-review/src/review.ts` (no changes — deps are already threaded), tests. ~40 LOC.
+
+**Phasing suggestion:** v0.0.9 alongside the other v0.0.8 BASELINE follow-ups. Small fix; closes the only "trust pause" the new flow currently introduces.
+
+---
+
 ## Per-spec agent-timeout override + file-blast-radius guidance *(NEW, surfaced by v0.0.8 self-build)*
 
 **What:** When `factory-runtime run-sequence` ran the v0.0.8 cluster against itself, spec 3 (`factory-core-v0-0-8-1`) hit `runtime/agent-failed: agent-timeout (after 600000ms)` during implement phase iteration 1. The agent's work landed (all 544 workspace tests pass post-timeout; biome + spec lint clean), but validate phase never ran — the runtime classified the spec as `'error'` because the implement phase didn't return cleanly within budget.
