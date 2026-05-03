@@ -151,6 +151,45 @@ Two friction points surfaced in the v0.0.6 baseline (see `BASELINE.md` v0.0.6 en
 
 ---
 
+## Per-spec agent-timeout override + file-blast-radius guidance *(NEW, surfaced by v0.0.8 self-build)*
+
+**What:** When `factory-runtime run-sequence` ran the v0.0.8 cluster against itself, spec 3 (`factory-core-v0-0-8-1`) hit `runtime/agent-failed: agent-timeout (after 600000ms)` during implement phase iteration 1. The agent's work landed (all 544 workspace tests pass post-timeout; biome + spec lint clean), but validate phase never ran — the runtime classified the spec as `'error'` because the implement phase didn't return cleanly within budget.
+
+The blast radius was 12 files: 6 `package.json` version bumps + 4 doc updates (CHANGELOG / ROADMAP / top-level README / packages/core/README.md) + 2 test files (init.test.ts version assertions + publish-meta.test.ts version regex). Per-file LOC was small; the cumulative time-per-edit + repeated typecheck/test runs across 12 files exhausted the 600s default.
+
+**Why:** The v0.0.6 BASELINE evidence said "per-feature sweet spot is 50-200 LOC." That was correct as far as it went, but blast-radius (file count) is a separate axis the runtime doesn't currently surface. A spec at 250 LOC across 4 files is fine; a spec at 250 LOC across 12 files isn't.
+
+**Shape options:**
+- (a) Raise default `--max-agent-timeout-ms` to 1_200_000 (20 min). Trivial. Side effect: hides the constraint instead of surfacing it.
+- (b) Per-spec `agent-timeout-ms` field on `SpecFrontmatter` so wide-blast-radius specs declare their own budget. Field-level addition; zero new exports.
+- (c) `factory spec lint`-time warning when a spec's Subtasks block names ≥ 8 distinct file paths. Catches the bomb at scoping time, not run time.
+- (d) Resume-from-partial-work: if the implement phase times out mid-edit, the runtime persists the agent's progress and re-runs the next iteration with `# Prior partial work` section in the prompt. Speculative; biggest UX win.
+
+Lean: ship (b) + (c) together in v0.0.9. (a) is too crude. (d) is v0.1.0+ territory.
+
+**Touches:** `packages/core/src/schema.ts` (add optional `agent-timeout-ms` field), `packages/core/src/lint.ts` (file-blast-radius warning), `packages/runtime/src/runtime.ts` (consume `spec.frontmatter['agent-timeout-ms']` when resolving `maxAgentTimeoutMs`), tests + READMEs.
+
+**Phasing suggestion:** v0.0.9 lead candidate. Pairs with the discoverability work that v0.0.8 already shipped — together they make the per-spec authoring loop predictable end-to-end.
+
+---
+
+## `factory-runtime run-sequence` should skip `status: drafting` specs by default *(NEW, surfaced by v0.0.8 self-build)*
+
+**What:** `runSequence`'s `loadSpecs()` reads every `*.md` file under `<dir>` regardless of `frontmatter.status`. The v0.0.7 spec (factory-runtime-v0-0-7) documented "specs at status: drafting are a no-op until flipped" but never enforced it. v0.0.8's self-build ran all three specs (1 ready + 2 drafting) because of this gap — accidentally fine for that run, but the documented behavior is wrong.
+
+**Why:** Status-aware iteration is the prescribed maintainer workflow: ship one spec, review, flip the next from drafting → ready, ship that, repeat. Without enforcement, run-sequence runs everything and the maintainer can't stage review checkpoints across the DAG.
+
+**Shape options:**
+- (a) Default behavior change: skip `status: drafting` specs; emit a log line noting the skip. Add `--include-drafting` flag for runs that intentionally walk everything.
+- (b) Skip drafting specs AND warn at lint time when a `depends-on` declares a spec that's still drafting (catch staleness before run).
+- Both options preserve backward-compat for the v0.0.8 self-build pattern via `--include-drafting`.
+
+**Touches:** `packages/runtime/src/sequence.ts` (filter in loadSpecs unless flag set), `packages/runtime/src/cli.ts` (new `--include-drafting` flag), tests, README. Trivial — ~30 LOC.
+
+**Phasing suggestion:** v0.0.9 alongside the timeout-override work above. Both close gaps the v0.0.8 self-build surfaced.
+
+---
+
 ## `factory init`: drop `/scope-project` into scaffolded `.claude/commands/`
 
 **What:** Have `factory init` write `.claude/commands/scope-project.md` (and any other in-repo slash commands) into the scaffolded project, copying from the published `@wifo/factory-core/dist/commands/` (or similar). Today the user must `cp docs/commands/scope-project.md ~/.claude/commands/` manually after `factory init`; this fix makes `/scope-project` discoverable in any fresh project zero-config.
@@ -167,6 +206,18 @@ Two friction points surfaced in the v0.0.6 baseline (see `BASELINE.md` v0.0.6 en
 **Touches:** `packages/core/commands/scope-project.md` (move from `docs/commands/`), `packages/core/package.json` (add to `files` glob), `packages/core/src/init.ts` + `init-templates.ts` (planFiles for `.claude/commands/scope-project.md`), tests, README updates. Optional: a `factory commands install` subcommand for retrofitting existing projects.
 
 **Phasing suggestion:** v0.0.8 candidate. Pairs naturally with the PostToolUse hook recipe (also deferred to v0.0.8) — both are "make Claude Code aware of factory tooling" workflow polish.
+
+---
+
+## Shipped in v0.0.8 (kept here briefly for history)
+
+The discoverability + baseline reset cluster shipped in v0.0.8 (commit `c061321`). Three LIGHT specs scoped via `/scope-project` (the first dogfood of v0.0.7's slash command against the factory itself):
+
+- ✅ **Baseline prompt reset** — archived `url-shortener-prompt.md` as `url-shortener-prompt-v0.0.5-v0.0.7.md`; new canonical opens with `/scope-project` + `run-sequence`. `BASELINE.md` methodology section gains a "Baseline reset events" subsection.
+- ✅ **`factory init` bundles `/scope-project`** — canonical source moves to `packages/core/commands/`; ships in npm tarball; scaffold writes `.claude/commands/scope-project.md` zero-config.
+- ✅ **Scaffold README documents `/scope-project` + `run-sequence`** — `## Multi-spec products` section in `init-templates.ts`'s `README_TEMPLATE`. The scaffold is now the documentation.
+
+**Dogfood findings → v0.0.9 BACKLOG entries above:** spec 3 hit the 600s implement-phase timeout despite landing all the work (validate phase never ran; the runtime classified it `'error'` even though tests passed). Surfaces two follow-up entries — per-spec timeout override + status-drafting filter for run-sequence.
 
 ---
 
