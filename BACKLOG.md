@@ -151,6 +151,63 @@ Two friction points surfaced in the v0.0.6 baseline (see `BASELINE.md` v0.0.6 en
 
 ---
 
+## `run-sequence` skips already-converged specs *(NEW, surfaced by v0.0.9 BASELINE — friction #2)*
+
+**What:** v0.0.9's status-aware `run-sequence` skips `status: drafting` specs by default. But a spec that ALREADY converged (shipped) stays at `status: ready` — there's no "shipped" status, and the maintainer's natural workflow is to flip drafting → ready as each prior spec converges, leaving every shipped spec at `ready`. Each subsequent `run-sequence` invocation walks the full ready set, spawning a no-op implement phase per shipped spec. Cost grows N² across multi-pass workflows. The v0.0.9 BASELINE measured this empirically: 4 specs shipped one-at-a-time produced 1+2+3+4 = 10 implement spawns instead of 4 (6 wasted no-op re-runs).
+
+**Why:** This is the next layer of friction beyond v0.0.9's status-awareness. The runtime ALREADY persists `factory-run` records for every converged spec; the sequence-runner could query these to detect "spec X has a converged factory-run rooted at the current factory-sequence's specsDir hash" and skip re-execution. The data is on disk; the wiring isn't.
+
+**Shape options:**
+- (a) `runSequence` queries `contextStore` before running each spec: walk `factory-run` records, find one whose `specId === spec.id` AND parent chain matches the current `factorySequenceId`'s `specsDir`. If found AND status was `'converged'`, skip (treat as already-shipped). One-line log: `factory-runtime: <id> already converged in run <runId> — skipping`.
+- (b) Add an explicit `status: 'shipped'` enum value to `SpecStatus` schema. Maintainer (or `factory finish-task` slash command) flips `ready → shipped` post-convergence. `run-sequence` skips both `drafting` and `shipped`.
+- (c) `factory-runtime` writes a `.factory-shipped/<spec-id>.lock` file post-convergence; `run-sequence` skips specs with a matching lock file.
+
+Lean: (a). Reuses existing provenance data — no schema or filesystem additions. The maintainer's spec stays at `ready` (semantically: "it's ready to ship if needed"); the runtime makes the decision based on whether shipping already happened. Pure data-driven dedup.
+
+**Touches:** `packages/runtime/src/sequence.ts` (insert a `factory-run` lookup before each spec's `run()` call), tests, README. ~50 LOC. No new error codes; no new schema. Could pair with friction #1 below as a single v0.0.10 spec ("`run-sequence` workflow polish").
+
+**Phasing suggestion:** v0.0.10 lead candidate. Highest-leverage of the v0.0.9 BASELINE findings (closes the N² regression).
+
+---
+
+## `run-sequence` resolves `depends-on` against `<dir>/done/` *(NEW, surfaced by v0.0.9 BASELINE — friction #1)*
+
+**What:** When the maintainer ships a spec and `git mv`s it to `docs/specs/done/`, the next `run-sequence` invocation against `docs/specs/` fails with `runtime/sequence-dep-not-found` for any later spec that declares the moved spec in its `depends-on`. The runtime's locked decision (per v0.0.7's spec) is "`run-sequence` does NOT recurse into `<dir>/done/` for execution." That's correct for execution (we don't want to re-run shipped specs), but applies overly strictly to dep-resolution: `done/` specs should be available as DEP CONTEXT even if they're not run.
+
+**Why:** Two existing locked decisions collide: (a) shipped specs move to `done/` per the per-spec lifecycle convention (v0.0.4); (b) `run-sequence` only reads `<dir>/*.md` for execution AND dep validation (v0.0.7). The maintainer's natural workflow (ship → move to done → ship next) breaks under this collision. The v0.0.9 BASELINE agent hit this directly.
+
+**Shape options:**
+- (a) `runSequence`'s dep-resolution walks `<dir>/done/` IN ADDITION TO `<dir>` when validating that each `depends-on` entry points at a known spec. Specs in `done/` are valid dep targets (treated as "already-converged" — paired with the friction-#2 fix above). Specs in `done/` are NOT walked into the topological execution order; they're context-only.
+- (b) Defer the per-spec move-to-done in the canonical prompt — move all specs to `done/` AFTER the cluster ships, not per-spec. Workaround at the docs layer; doesn't fix the underlying constraint.
+- (c) Drop the `done/` convention entirely; specs stay at `<dir>/<id>.md` forever, with status flips encoding lifecycle. Bigger change; tied to friction #2's "shipped" status discussion.
+
+Lean: (a) + the canonical-prompt edit (b). (a) is the right runtime fix. (b) is a small docs polish that prevents the workflow break in the meantime — edit the v0.0.8-reset prompt to say "move all shipped specs to `done/` AFTER the cluster ships" instead of per-spec. Both small.
+
+**Touches:** `packages/runtime/src/sequence.ts` (`buildDag` consults `<dir>/done/` for dep-id existence), `packages/runtime/src/runtime.ts` (no change), tests. ~30 LOC. Plus a 2-line edit to `docs/baselines/url-shortener-prompt.md` (defer move-to-done) — but this is a baseline-prompt edit, NOT a baseline reset (the prompt's intent is preserved; only an over-prescribed step is removed).
+
+**Phasing suggestion:** v0.0.10 alongside friction #2 above. Pair as a single "`run-sequence` workflow polish" spec.
+
+---
+
+## Harmonize `--context-dir` flag across `factory-context` + `factory-runtime` *(NEW, surfaced by v0.0.9 BASELINE — friction #3)*
+
+**What:** `factory-runtime run` and `factory-runtime run-sequence` use `--context-dir <path>`. `factory-context tree` uses `--dir <path>`. Same concept, different flag names. The maintainer (or agent) reaching for both CLIs has to remember which is which.
+
+**Why:** Pre-existing technical debt — the two CLIs were authored in different versions and shipped without flag-name coordination. The v0.0.9 BASELINE agent reached for `factory-context list` more often than prior runs (because the multi-pass workflow produced more records to inspect) and the friction surfaced.
+
+**Shape options:**
+- (a) Add `--context-dir` as a synonym for `--dir` on `factory-context` (both work; `--dir` deprecated with a one-liner stderr warning). Three-version deprecation arc: v0.0.10 adds synonym, v0.0.11 emits deprecation warning, v0.1.0 removes `--dir`.
+- (b) Force-rename to `--context-dir` immediately. Breaking change for any tooling that parses `factory-context tree --dir`. Low risk (small user base) but breaks the deprecation discipline.
+- (c) Add `--dir` as a synonym for `--context-dir` on `factory-runtime`. Keeps `factory-context`'s historical name as canonical; reverses the migration direction. Less consistent with the existing `--context-dir` name in `factory.config.json`.
+
+Lean: (a). `--context-dir` is the more descriptive name; `factory.config.json`'s key is `runtime.contextDir`-shaped (when it lands). The deprecation arc protects existing scripts.
+
+**Touches:** `packages/context/src/cli.ts` (add `--context-dir` synonym), tests, README. ~15 LOC. Trivial.
+
+**Phasing suggestion:** v0.0.10 — small enough to bundle with the workflow-polish work above.
+
+---
+
 ## Refine `spec/wide-blast-radius` heuristic — threshold of 8 fires on 18 historical specs *(NEW, surfaced by v0.0.9 ship)*
 
 **What:** v0.0.9 added the `spec/wide-blast-radius` lint warning at >= 8 distinct file paths in `## Subtasks`. Running it against the v0.0.9 cluster + every shipped spec under `docs/specs/done/` produces **18 warnings on existing specs** — including small ones like `factory-core-v0-0-5-1` (9 paths) and `factory-runtime-v0-0-5-2` (8 paths) that converged in single-iteration runs without budget pressure. The heuristic catches the v0.0.8 self-build's failure mode (12-file spec) but also normal-shape specs that ship cleanly.

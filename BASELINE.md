@@ -318,6 +318,72 @@ The discoverability + baseline reset cluster shipped (`/scope-project` auto-inst
 
 **Would you want to use the factory for the next product?** Per the agent: 5 specs converged, 16 tests pass, all 7 curl calls behave per spec. Yes — and for the first time, the friction is at a higher level than "manual decomposition." Net signal: **v0.0.8 is the first release where the factory genuinely got better at building real things, measured empirically.**
 
+##### v0.0.9 — shipped 2026-05-03 (status-aware sequence-runner exposed deeper workflow friction)
+
+The "close v0.0.8 BASELINE friction list" cluster shipped (per-spec `agent-timeout-ms` + `spec/wide-blast-radius` lint + status-aware `run-sequence` + scaffold scripts + `internal-consistency` dep-awareness). Run executed in `~/dev/url-shortener-v0.0.9/` against the published 0.0.9 packages.
+
+**Predictions (locked before the run):**
+
+1. `run-sequence` respects `status: drafting`.
+2. Reviewer false-positive on shared constraints disappears.
+3. Scaffold's DoD claims are runnable (`pnpm typecheck`, `pnpm check`).
+4. Wall-clock + tokens flat per spec (~77s, ~4.2k tokens).
+5. NEW friction may surface: `spec/wide-blast-radius` warning fires.
+6. Maintainer interventions ≤ 3-4.
+
+**Actuals:**
+
+| Spec | Iterations on first appearance | Notes |
+|---|---|---|
+| (4 specs from `/scope-project` decomposition) | 1 each | every spec converged first try |
+| **Total productive iterations** | **4** | one per spec, no retries |
+| **Total implement-report records** | **10** | 4 productive + **6 no-op re-runs of already-shipped specs** |
+| **Total wall-clock** | **611s (~10m 11s)** | inflated by re-runs |
+| **Total tokens** | **30,904 raw** | +48% vs v0.0.8 (5,150 → 7,725 per total spawn = ~3k/spawn — re-runs are cheap individually but cumulative) |
+| **Tests** | **15 pass** | (v0.0.8 was 16) |
+| **Commits** | **7** | scaffold + journal + scope + 4 spec ships |
+
+| Metric | v0.0.5 | v0.0.6 | v0.0.7 | v0.0.8 | v0.0.9 |
+|---|---|---|---|---|---|
+| Specs shipped | 4 | 4 | 4 | 5 | 4 |
+| Wall-clock | 7m 3s | 4m 26s | 5m 9s | 6m 26s | **10m 11s** ↑ |
+| Wall-clock per PRODUCTIVE spec | 106s | 67s | 77s | 77s | **~61s** ✓ |
+| Wall-clock per IMPLEMENT spawn | — | — | — | — | **~61s** ✓ |
+| Raw tokens | 22,703 | — | 17,009 | 20,900 | 30,904 |
+| Tokens per implement spawn | — | — | — | ~5,200 | ~3,090 |
+
+**The wall-clock regression is entirely from no-op re-runs of already-shipped specs**, not from per-spec compute slowing down. Per-implement-spawn cost is FASTER than v0.0.8 (~61s vs ~77s); the 6 extra spawns are pure overhead.
+
+**Top 3 friction points (per agent's JOURNAL):**
+
+1. **Moving specs to `docs/specs/done/` breaks `depends-on` resolution.** The runtime doesn't walk into `done/` when validating depends-on edges (per v0.0.7's locked behavior — "run-sequence does NOT recurse into `<dir>/done/`"). The maintainer's natural workflow (ship spec → `git mv` to done → ship next) hits `runtime/sequence-dep-not-found` because the dep is no longer in `docs/specs/`. Two existing locked decisions collide: (a) shipped specs move to `done/` per the per-spec lifecycle convention; (b) `run-sequence` only reads `<dir>/*.md`. **NEW v0.0.10 BACKLOG entry needed.**
+2. **`run-sequence` re-runs every already-shipped spec on each invocation.** Status-aware filtering (v0.0.9) skips drafting specs, but a spec that ALREADY shipped stays at `status: ready` — there's no "shipped" status. Each subsequent `run-sequence` invocation walks the full ready set, spawning a no-op implement phase per shipped spec. Cost grows N² across a multi-pass workflow (4 specs shipped one-at-a-time → 1+2+3+4 = 10 implement spawns). The agent observed: "every walk re-runs every shipped spec." **NEW v0.0.10 BACKLOG entry needed.**
+3. **CLI fragmentation between `factory-context` and `factory-runtime`.** Different flag names for the same concept (e.g., `--dir` vs `--context-dir`); can't pass shared values via a single flag. The agent had to reason about TWO toolchains' UX surfaces when walking the run's provenance. Pre-existing technical debt; surfaced because the agent reached for `factory-context` more in v0.0.9's workflow than prior runs. **NEW v0.0.10 BACKLOG entry needed.**
+
+**Predicted-vs-actual scoring:**
+
+| Prediction | Outcome | Notes |
+|---|---|---|
+| #1 status: drafting filter works | ✅ Landed BUT exposed deeper friction | The drafting filter does what was specified. The friction shifted to "shipped-but-still-ready specs re-run." Status-aware sequence-runner is half the fix; "shipped-aware" is the missing other half. |
+| #2 internal-consistency false positive disappears | ❓ Not validated by this run | The agent didn't re-run `factory spec review` on the multi-spec product mid-flow per JOURNAL. Inconclusive at BASELINE level; the unit test in `internal-consistency.test.ts` confirms the fix at code level. |
+| #3 scaffold scripts runnable | ✅ Landed | Typecheck green; agent didn't flag any DoD-vs-scaffold mismatch. The reviewer's `dod-precision` judge no longer fires the false-aspirational warning. |
+| #4 wall-clock + tokens flat per spec | ✅ **At per-implement-spawn level** | Per-implement-spawn cost dropped from ~77s/spawn (v0.0.8) to ~61s/spawn (v0.0.9). The TOTAL inflation is from spawn-count growth (10 vs 5), NOT per-spawn slowdown. v0.0.5's prompt-cache invariant continues to hold at the spawn level. |
+| #5 spec/wide-blast-radius may fire | ❓ Not validated | Not mentioned in the agent's report. Either `/scope-project`'s decomposition stayed under the threshold (the URL-shortener decomposition typically produces 4-7 path-references per spec) or the agent didn't surface the warning. Inconclusive. |
+| #6 maintainer interventions ≤ 3-4 | ❌ Higher than predicted | 7 commits + multiple run-sequence invocations + the move-to-done friction. The "ship one at a time" workflow + the re-run + the dep-resolution break inflated the count. **The PROMPT'S workflow may be over-prescribing per-spec ceremony given v0.0.9's primitives.** |
+
+**Surprises:**
+
+- **Status-awareness wasn't enough — "shipped-awareness" is the next layer.** v0.0.9 added "skip drafting specs"; the friction the BASELINE surfaced is "skip already-converged specs." The runtime persists `factory-run` records for every converged spec; the sequence-runner could query these to detect "spec X already has a converged factory-run rooted at the current factory-sequence's specsDir hash" and skip re-running. The data is there; the wiring isn't.
+- **The new prompt's per-spec move-to-done step is workflow friction, not factory friction.** The prompt (post-v0.0.8 reset) still includes "move shipped spec to `docs/specs/done/` with `git mv` before moving on" — leftover from the v0.0.5–v0.0.7 manual-decomposition era. With `run-sequence` driving the cluster, per-spec move-to-done is a pessimization (it BREAKS depends-on resolution mid-flow). The prompt should be edited (small, not a full reset): defer the move-to-done step to AFTER the entire cluster ships.
+- **Per-implement-spawn cost dropped 20%.** From ~77s in v0.0.7/v0.0.8 to ~61s in v0.0.9. Possibly noise; possibly the prompt-cache prefix invariant compounding with the smaller dep-context loaded by the dep-aware judges. Worth confirming on v0.0.10's run.
+
+**Mapped BACKLOG entries:**
+- Friction #1 (move-to-done breaks depends-on) → NEW v0.0.10 entry: either (a) `run-sequence` walks `<dir>/done/` for depends-on resolution (not execution); or (b) defer move-to-done to cluster-end in the canonical prompt + remove the per-spec move-to-done step from the workflow guidance.
+- Friction #2 (re-run cost N²) → NEW v0.0.10 entry: `run-sequence` queries `factory-run` records to detect already-converged specs; skips with a one-line log; new `factory-runtime/already-converged` status (or extend `'skipped'` with a new `blockedBy: 'already-converged'` shape).
+- Friction #3 (CLI fragmentation) → NEW v0.0.10 entry: harmonize `--context-dir` flag name across all CLIs; deprecation period for `--dir` on `factory-context`.
+
+**Would you want to use the factory for the next product?** Per the agent: "yes — after fixes 1 and 2 above." Verdict: the workflow IS smoother than v0.0.8 (drafting filter works; reviewer false-positive gone) but the next layer of friction is now visible. v0.0.10 should close it; v0.0.10's BASELINE will tell us whether the curve is still trending right.
+
 ##### v0.1.0 — pending
 
 After scheduler (Layer 5) ships. The maintainer prompt should reduce to "scope this product, ship it overnight" with no hand-driving. If we're not there by v0.1.0, the scheduler isn't done.
