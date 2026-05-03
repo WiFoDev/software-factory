@@ -10,7 +10,11 @@ export type RuntimeErrorCode =
   | 'runtime/agent-failed'
   | 'runtime/invalid-max-prompt-tokens'
   // v0.0.3 — closed autonomous loop
-  | 'runtime/total-cost-cap-exceeded';
+  | 'runtime/total-cost-cap-exceeded'
+  // v0.0.7 — sequence-runner
+  | 'runtime/sequence-cycle'
+  | 'runtime/sequence-dep-not-found'
+  | 'runtime/sequence-cost-cap-exceeded';
 
 export class RuntimeError extends Error {
   readonly code: RuntimeErrorCode;

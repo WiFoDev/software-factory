@@ -1,5 +1,7 @@
 // runtime
 export { run } from './runtime.js';
+export { runSequence } from './sequence.js';
+export type { SequenceReport } from './sequence.js';
 
 // graph
 export { definePhase, definePhaseGraph } from './graph.js';

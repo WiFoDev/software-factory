@@ -9,6 +9,20 @@ export const FactoryRunSchema = z.object({
   startedAt: z.string(),
 });
 
+// v0.0.7 — root record persisted by `runSequence` BEFORE any per-spec run.
+// Each per-spec `factory-run.parents` includes the `factorySequenceId` so
+// `factory-context tree --direction down <factorySequenceId>` walks the
+// entire product DAG.
+export const FactorySequenceSchema = z.object({
+  specsDir: z.string(),
+  topoOrder: z.array(z.string()),
+  startedAt: z.string(),
+  maxIterations: z.number().int().positive().optional(),
+  maxTotalTokens: z.number().int().positive().optional(),
+  maxSequenceTokens: z.number().int().positive().optional(),
+  continueOnFail: z.boolean(),
+});
+
 export const FactoryPhaseSchema = z.object({
   phaseName: z.string(),
   iteration: z.number().int().positive(),
@@ -75,6 +89,7 @@ export const FactoryImplementReportSchema = z.object({
 });
 
 export type FactoryRunPayload = z.infer<typeof FactoryRunSchema>;
+export type FactorySequencePayload = z.infer<typeof FactorySequenceSchema>;
 export type FactoryPhasePayload = z.infer<typeof FactoryPhaseSchema>;
 export type FactoryValidateReportPayload = z.infer<typeof FactoryValidateReportSchema>;
 export type FactoryImplementReportPayload = z.infer<typeof FactoryImplementReportSchema>;

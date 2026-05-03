@@ -11,22 +11,30 @@ import { definePhaseGraph } from './graph.js';
 import { type ImplementPhaseOptions, implementPhase } from './phases/implement.js';
 import { validatePhase } from './phases/validate.js';
 import { run } from './runtime.js';
+import { runSequence } from './sequence.js';
 
 const USAGE = `Usage:
   factory-runtime run <spec-path> [flags]
+  factory-runtime run-sequence <dir> [flags]
 
-Flags:
-  --max-iterations <n>             Max iterations (default: 5)
-  --max-total-tokens <n>           Whole-run cap on summed agent tokens (default: 500000)
-  --context-dir <path>              Context store directory (default: ./context)
-  --scenario <ids>                  Comma-separated scenario ids (e.g. S-1,S-2,H-1)
-  --no-judge                        Skip judge satisfactions in the harness
-  --no-implement                    Drop the implement phase (v0.0.1 [validate]-only graph)
-  --max-prompt-tokens <n>           Per-phase cap on agent input tokens (default: 100000)
-  --max-agent-timeout-ms <n>        Per-phase agent subprocess wall-clock timeout in ms (default: 600000)
-  --claude-bin <path>               Path to the claude executable (default: 'claude' on PATH)
-  --twin-mode <record|replay|off>   Twin recording mode (default: record)
-  --twin-recordings-dir <path>      Twin recordings dir (default: <cwd>/.factory/twin-recordings)
+Flags (run + run-sequence):
+  --max-iterations <n>             Per-spec cap on iterations (default: 5)
+  --max-total-tokens <n>           Per-spec cap on summed agent tokens (default: 500000)
+  --max-agent-timeout-ms <n>       Per-phase agent subprocess wall-clock timeout in ms (default: 600000)
+  --context-dir <path>             Context store directory (default: ./context)
+  --no-judge                       Skip judge satisfactions in the harness
+  --no-implement                   Drop the implement phase (v0.0.1 [validate]-only graph)
+  --max-prompt-tokens <n>          Per-phase cap on agent input tokens (default: 100000)
+  --claude-bin <path>              Path to the claude executable (default: 'claude' on PATH)
+  --twin-mode <record|replay|off>  Twin recording mode (default: record)
+  --twin-recordings-dir <path>     Twin recordings dir (default: <cwd>/.factory/twin-recordings)
+
+Flags (run only):
+  --scenario <ids>                 Comma-separated scenario ids (e.g. S-1,S-2,H-1)
+
+Flags (run-sequence only):
+  --max-sequence-tokens <n>        Whole-sequence cap on summed agent tokens (default: unbounded)
+  --continue-on-fail               Continue running independent specs after a failure (default: stop)
 `;
 
 export interface CliIo {
@@ -45,6 +53,9 @@ const FactoryConfigRuntimeSchema = z
     maxTotalTokens: z.number().int().positive().optional(),
     maxPromptTokens: z.number().int().positive().optional(),
     noJudge: z.boolean().optional(),
+    // v0.0.7 — sequence-runner
+    maxSequenceTokens: z.number().int().positive().optional(),
+    continueOnFail: z.boolean().optional(),
   })
   .partial();
 
@@ -92,6 +103,10 @@ export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<voi
   }
   if (command === 'run') {
     await runRun(rest, io);
+    return;
+  }
+  if (command === 'run-sequence') {
+    await runRunSequence(rest, io);
     return;
   }
   io.stderr(`Unknown subcommand: ${command}\n${USAGE}`);
@@ -402,6 +417,240 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
     if (detail !== undefined) io.stdout(`  detail: ${detail}\n`);
   }
   io.exit(3);
+}
+
+async function runRunSequence(args: string[], io: CliIo): Promise<void> {
+  let parsed: ReturnType<typeof parseArgs>;
+  try {
+    parsed = parseArgs({
+      args,
+      options: {
+        'max-iterations': { type: 'string' },
+        'max-total-tokens': { type: 'string' },
+        'max-sequence-tokens': { type: 'string' },
+        'max-agent-timeout-ms': { type: 'string' },
+        'continue-on-fail': { type: 'boolean' },
+        'context-dir': { type: 'string' },
+        'no-judge': { type: 'boolean' },
+        'no-implement': { type: 'boolean' },
+        'max-prompt-tokens': { type: 'string' },
+        'claude-bin': { type: 'string' },
+        'twin-mode': { type: 'string' },
+        'twin-recordings-dir': { type: 'string' },
+      },
+      allowPositionals: true,
+      strict: true,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    io.stderr(`${msg}\n${USAGE}`);
+    io.exit(2);
+    return;
+  }
+
+  const target = parsed.positionals[0];
+  if (target === undefined) {
+    io.stderr(`Missing <dir>\n${USAGE}`);
+    io.exit(2);
+    return;
+  }
+
+  const parsePositiveInt = (raw: unknown, flag: string, label: string): number | undefined => {
+    if (typeof raw !== 'string') return undefined;
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isFinite(n) || n <= 0 || String(n) !== raw.trim()) {
+      io.stderr(`${label}: ${flag} must be a positive integer (got '${raw}')\n${USAGE}`);
+      io.exit(2);
+      throw new Error('__handled_exit__');
+    }
+    return n;
+  };
+
+  let maxIterations: number | undefined;
+  let maxTotalTokens: number | undefined;
+  let maxSequenceTokens: number | undefined;
+  let maxAgentTimeoutMs: number | undefined;
+  let maxPromptTokens: number | undefined;
+  try {
+    maxIterations = parsePositiveInt(
+      parsed.values['max-iterations'],
+      '--max-iterations',
+      'runtime/invalid-max-iterations',
+    );
+    maxTotalTokens = parsePositiveInt(
+      parsed.values['max-total-tokens'],
+      '--max-total-tokens',
+      'runtime/invalid-max-total-tokens',
+    );
+    maxSequenceTokens = parsePositiveInt(
+      parsed.values['max-sequence-tokens'],
+      '--max-sequence-tokens',
+      'runtime/invalid-max-sequence-tokens',
+    );
+    maxAgentTimeoutMs = parsePositiveInt(
+      parsed.values['max-agent-timeout-ms'],
+      '--max-agent-timeout-ms',
+      'runtime/invalid-max-agent-timeout-ms',
+    );
+    maxPromptTokens = parsePositiveInt(
+      parsed.values['max-prompt-tokens'],
+      '--max-prompt-tokens',
+      'runtime/invalid-max-prompt-tokens',
+    );
+  } catch (e) {
+    if (e instanceof Error && e.message === '__handled_exit__') return;
+    throw e;
+  }
+
+  const contextDirRaw =
+    typeof parsed.values['context-dir'] === 'string' ? parsed.values['context-dir'] : './context';
+  const contextDir = resolve(process.cwd(), contextDirRaw);
+  try {
+    mkdirSync(contextDir, { recursive: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    io.stderr(`failed to create context dir: ${msg}\n`);
+    io.exit(3);
+    return;
+  }
+
+  const specsDir = resolve(process.cwd(), target);
+  if (!existsSync(specsDir)) {
+    io.stderr(`Specs dir not found: ${target}\n`);
+    io.exit(3);
+    return;
+  }
+
+  const noImplement = parsed.values['no-implement'] === true;
+
+  // v0.0.5.1 — read factory.config.json defaults; CLI flag > config > built-in.
+  const fileConfig = readFactoryConfig(process.cwd());
+  const fileRuntime = fileConfig?.runtime;
+  if (maxIterations === undefined && fileRuntime?.maxIterations !== undefined) {
+    maxIterations = fileRuntime.maxIterations;
+  }
+  if (maxTotalTokens === undefined && fileRuntime?.maxTotalTokens !== undefined) {
+    maxTotalTokens = fileRuntime.maxTotalTokens;
+  }
+  if (maxSequenceTokens === undefined && fileRuntime?.maxSequenceTokens !== undefined) {
+    maxSequenceTokens = fileRuntime.maxSequenceTokens;
+  }
+  if (maxPromptTokens === undefined && fileRuntime?.maxPromptTokens !== undefined) {
+    maxPromptTokens = fileRuntime.maxPromptTokens;
+  }
+  const noJudgeFromCli = parsed.values['no-judge'] === true;
+  const noJudge = noJudgeFromCli || fileRuntime?.noJudge === true;
+  const continueOnFailFromCli = parsed.values['continue-on-fail'] === true;
+  const continueOnFail = continueOnFailFromCli || fileRuntime?.continueOnFail === true;
+
+  const twinModeRaw = parsed.values['twin-mode'];
+  let twinOption: ImplementPhaseOptions['twin'];
+  if (typeof twinModeRaw === 'string') {
+    if (twinModeRaw === 'off') {
+      twinOption = 'off';
+    } else if (twinModeRaw === 'record' || twinModeRaw === 'replay') {
+      const recordingsDirRaw = parsed.values['twin-recordings-dir'];
+      twinOption = {
+        mode: twinModeRaw,
+        ...(typeof recordingsDirRaw === 'string'
+          ? { recordingsDir: resolve(process.cwd(), recordingsDirRaw) }
+          : {}),
+      };
+    } else {
+      io.stderr(
+        `runtime/invalid-twin-mode: --twin-mode must be one of 'record', 'replay', 'off' (got '${twinModeRaw}')\n${USAGE}`,
+      );
+      io.exit(2);
+      return;
+    }
+  } else if (typeof parsed.values['twin-recordings-dir'] === 'string') {
+    twinOption = {
+      recordingsDir: resolve(process.cwd(), parsed.values['twin-recordings-dir']),
+    };
+  }
+
+  const claudeBin =
+    typeof parsed.values['claude-bin'] === 'string' ? parsed.values['claude-bin'] : undefined;
+
+  const validate = validatePhase({
+    cwd: process.cwd(),
+    ...(noJudge ? { noJudge: true } : {}),
+  });
+  let graph: ReturnType<typeof definePhaseGraph>;
+  if (noImplement) {
+    graph = definePhaseGraph([validate], []);
+  } else {
+    let implement: ReturnType<typeof implementPhase>;
+    try {
+      implement = implementPhase({
+        cwd: process.cwd(),
+        ...(maxPromptTokens !== undefined ? { maxPromptTokens } : {}),
+        ...(claudeBin !== undefined ? { claudePath: claudeBin } : {}),
+        ...(twinOption !== undefined ? { twin: twinOption } : {}),
+      });
+    } catch (err) {
+      if (err instanceof RuntimeError) {
+        io.stderr(`${err.message}\n`);
+        io.exit(3);
+        return;
+      }
+      throw err;
+    }
+    graph = definePhaseGraph([implement, validate], [['implement', 'validate']]);
+  }
+
+  const store = createContextStore({ dir: contextDir });
+
+  let report: Awaited<ReturnType<typeof runSequence>>;
+  try {
+    report = await runSequence({
+      specsDir,
+      graph,
+      contextStore: store,
+      options: {
+        ...(maxIterations !== undefined ? { maxIterations } : {}),
+        ...(maxTotalTokens !== undefined ? { maxTotalTokens } : {}),
+        ...(maxSequenceTokens !== undefined ? { maxSequenceTokens } : {}),
+        ...(maxAgentTimeoutMs !== undefined ? { maxAgentTimeoutMs } : {}),
+        continueOnFail,
+      },
+    });
+  } catch (err) {
+    if (err instanceof RuntimeError) {
+      io.stderr(`${err.message}\n`);
+      io.exit(3);
+      return;
+    }
+    if (err instanceof Error && err.name === 'SpecParseError') {
+      io.stderr(`${err.message}\n`);
+      io.exit(3);
+      return;
+    }
+    throw err;
+  }
+
+  const total = report.specs.length;
+  const converged = report.specs.filter((s) => s.status === 'converged').length;
+  if (report.status === 'converged') {
+    io.stdout(
+      `factory-runtime: sequence converged (${converged}/${total} specs, factorySequenceId=${report.factorySequenceId}, ${report.durationMs}ms)\n`,
+    );
+    io.exit(0);
+    return;
+  }
+  // partial / no-converge / error → list per-spec status.
+  io.stdout(
+    `factory-runtime: sequence ${report.status} (${converged}/${total} specs, factorySequenceId=${report.factorySequenceId}, ${report.durationMs}ms)\n`,
+  );
+  for (const s of report.specs) {
+    const blocked = s.blockedBy !== undefined ? ` (blockedBy=${s.blockedBy})` : '';
+    io.stdout(`  ${s.specId}: ${s.status}${blocked}\n`);
+  }
+  if (report.status === 'error') {
+    io.exit(3);
+    return;
+  }
+  io.exit(1);
 }
 
 if (typeof process !== 'undefined' && Array.isArray(process.argv)) {

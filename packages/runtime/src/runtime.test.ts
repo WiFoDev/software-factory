@@ -601,4 +601,53 @@ describe('run() — multi-phase input dedup', () => {
     expect(cRec?.parents.length).toBe(3);
     expect(cRec?.parents[0]).toBe(report.runId);
   });
+
+  test('run() with optional runParents arg threads them into factory-run.parents', async () => {
+    const store = createContextStore({ dir });
+    // Write two real parent records first so the context store's parent
+    // existence check accepts them as runParents.
+    store.register('synthetic-parent', z.unknown());
+    const parentX = await store.put('synthetic-parent', { tag: 'x' }, { parents: [] });
+    const parentY = await store.put('synthetic-parent', { tag: 'y' }, { parents: [] });
+    const phase = makeSyntheticPhase({ name: 'p', type: 'p-out', status: 'pass' });
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      runParents: [parentX, parentY],
+    });
+    const runRec = await store.get(report.runId);
+    expect(runRec?.parents).toEqual([parentX, parentY]);
+  });
+
+  test('run() without runParents persists factory-run with parents=[]', async () => {
+    const store = createContextStore({ dir });
+    const phase = makeSyntheticPhase({ name: 'p', type: 'p-out', status: 'pass' });
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({ spec: makeSpec(), graph, contextStore: store });
+    const runRec = await store.get(report.runId);
+    expect(runRec?.parents).toEqual([]);
+  });
+
+  test('RunReport.totalTokens sums implement-report tokens across iterations', async () => {
+    const store = createContextStore({ dir });
+    const phase = definePhase('p', async (ctx) => {
+      try {
+        ctx.contextStore.register('factory-implement-report', z.unknown());
+      } catch {
+        // already registered
+      }
+      const recId = await ctx.contextStore.put(
+        'factory-implement-report',
+        { tokens: { input: 50, output: 50 } },
+        { parents: [] },
+      );
+      const rec = await ctx.contextStore.get(recId);
+      return { status: 'pass', records: rec === null ? [] : [rec] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({ spec: makeSpec(), graph, contextStore: store });
+    expect(report.totalTokens).toBe(100);
+  });
 });

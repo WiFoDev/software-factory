@@ -738,3 +738,121 @@ describe('factory-runtime CLI — v0.0.5.2 --max-agent-timeout-ms', () => {
     }
   }, 60_000);
 });
+
+describe('factory-runtime run-sequence CLI (v0.0.7)', () => {
+  function specSource(id: string, deps: string[] = []): string {
+    const depsLine =
+      deps.length === 0 ? '' : `depends-on:\n${deps.map((d) => `  - ${d}`).join('\n')}\n`;
+    return [
+      '---',
+      `id: ${id}`,
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      depsLine.replace(/\n$/, ''),
+      '---',
+      '',
+      `# ${id}`,
+      '',
+      '## Intent',
+      'Test fixture spec.',
+      '',
+      '## Scenarios',
+      '**S-1** — passes',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: trivial-pass.test.ts "trivial passes"',
+      '',
+      '## Definition of Done',
+      '- ok',
+      '',
+    ]
+      .filter((line, i, arr) => !(line === '' && arr[i - 1] === ''))
+      .join('\n');
+  }
+
+  test('run-sequence without dir positional → exit 2', async () => {
+    const cap = makeIo();
+    await invoke(['run-sequence'], cap.io);
+    expect(cap.exitCode()).toBe(2);
+    expect(cap.stderr()).toContain('Missing <dir>');
+  });
+
+  test('run-sequence with --max-sequence-tokens 0 → exit 2 with runtime/invalid-max-sequence-tokens', async () => {
+    const cap = makeIo();
+    const work = mkdtempSync(join(tmpdir(), 'runseq-cli-'));
+    try {
+      await invoke(
+        ['run-sequence', work, '--max-sequence-tokens', '0', '--context-dir', ctxDir],
+        cap.io,
+      );
+      expect(cap.exitCode()).toBe(2);
+      expect(cap.stderr()).toContain('runtime/invalid-max-sequence-tokens');
+    } finally {
+      await Bun.$`rm -rf ${work}`.quiet().nothrow();
+    }
+  });
+
+  test('run-sequence with bad --max-sequence-tokens flag → exit 2', async () => {
+    const cap = makeIo();
+    const work = mkdtempSync(join(tmpdir(), 'runseq-cli-'));
+    try {
+      await invoke(
+        ['run-sequence', work, '--max-sequence-tokens', 'abc', '--context-dir', ctxDir],
+        cap.io,
+      );
+      expect(cap.exitCode()).toBe(2);
+    } finally {
+      await Bun.$`rm -rf ${work}`.quiet().nothrow();
+    }
+  });
+
+  test('run-sequence on missing dir → exit 3', async () => {
+    const cap = makeIo();
+    await invoke(['run-sequence', '/no/such/dir/__nonexistent__', '--context-dir', ctxDir], cap.io);
+    expect(cap.exitCode()).toBe(3);
+    expect(cap.stderr()).toContain('Specs dir not found');
+  });
+
+  test('run-sequence with 2 pass-on-iter-1 specs → exit 0 with converged summary', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'runseq-work-'));
+    const prevCwd = process.cwd();
+    try {
+      process.chdir(realpathSync(work));
+      // Sibling test fixture (referenced by test:): a trivial passing test.
+      writeFileSync(
+        join(work, 'trivial-pass.test.ts'),
+        `import { test, expect } from 'bun:test';\ntest('trivial passes', () => { expect(1).toBe(1); });\n`,
+      );
+      const specs = mkdtempSync(join(tmpdir(), 'runseq-specs-'));
+      try {
+        writeFileSync(join(specs, 'first.md'), specSource('first'));
+        writeFileSync(join(specs, 'second.md'), specSource('second', ['first']));
+
+        const cap = makeIo();
+        await invoke(
+          [
+            'run-sequence',
+            specs,
+            '--no-implement',
+            '--no-judge',
+            '--max-iterations',
+            '1',
+            '--context-dir',
+            ctxDir,
+          ],
+          cap.io,
+        );
+        expect(cap.exitCode()).toBe(0);
+        expect(cap.stdout()).toContain('sequence converged (2/2 specs');
+      } finally {
+        await Bun.$`rm -rf ${specs}`.quiet().nothrow();
+      }
+    } finally {
+      process.chdir(prevCwd);
+      await Bun.$`rm -rf ${work}`.quiet().nothrow();
+    }
+  });
+});

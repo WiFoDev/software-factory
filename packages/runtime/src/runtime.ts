@@ -44,6 +44,12 @@ export interface RunArgs {
   graph: PhaseGraph;
   contextStore: ContextStore;
   options?: RunOptions;
+  /**
+   * v0.0.7 — when set, the persisted `factory-run` record uses these as its
+   * `parents[]`. The sequence-runner passes `[factorySequenceId]`; per-spec
+   * CLI callers pass nothing and get the root behavior.
+   */
+  runParents?: string[];
 }
 
 function defaultLog(line: string): void {
@@ -115,7 +121,7 @@ export async function run(args: RunArgs): Promise<RunReport> {
     startedAt: startedAt.toISOString(),
   };
 
-  const runId = await putOrWrap(contextStore, 'factory-run', runPayload, []);
+  const runId = await putOrWrap(contextStore, 'factory-run', runPayload, args.runParents ?? []);
 
   const phaseByName = new Map<string, Phase>();
   for (const phase of graph.phases) phaseByName.set(phase.name, phase);
@@ -282,5 +288,6 @@ export async function run(args: RunArgs): Promise<RunReport> {
     iterationCount: iterations.length,
     iterations,
     status: runStatus,
+    totalTokens: runningTotalTokens,
   };
 }

@@ -98,4 +98,12 @@ export interface RunReport {
   iterationCount: number;
   iterations: PhaseIterationResult[];
   status: RunStatus;
+  /**
+   * v0.0.7 — sum of `tokens.input + tokens.output` across every
+   * `factory-implement-report` produced during this run. Used by the
+   * sequence-runner to enforce a cross-spec budget without re-walking the
+   * context store. Optional for backward-compat: pre-v0.0.7 callers that
+   * construct RunReport themselves don't break.
+   */
+  totalTokens?: number;
 }

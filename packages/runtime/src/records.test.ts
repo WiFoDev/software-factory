@@ -8,6 +8,7 @@ import {
   FactoryImplementReportSchema,
   FactoryPhaseSchema,
   FactoryRunSchema,
+  FactorySequenceSchema,
   FactoryValidateReportSchema,
   tryRegister,
 } from './records.js';
@@ -267,5 +268,39 @@ describe('tryRegister', () => {
       },
     } as unknown as Parameters<typeof tryRegister>[0];
     expect(() => tryRegister(fakeStore, 'foo', z.object({}))).toThrow(ContextError);
+  });
+});
+
+describe('FactorySequenceSchema (v0.0.7)', () => {
+  test('accepts a well-formed payload', () => {
+    const parsed = FactorySequenceSchema.safeParse({
+      specsDir: '/tmp/specs',
+      topoOrder: ['a', 'b', 'c'],
+      startedAt: new Date().toISOString(),
+      maxIterations: 5,
+      maxTotalTokens: 500_000,
+      maxSequenceTokens: 5_000_000,
+      continueOnFail: false,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test('rejects payload missing topoOrder', () => {
+    const parsed = FactorySequenceSchema.safeParse({
+      specsDir: '/tmp/specs',
+      startedAt: new Date().toISOString(),
+      continueOnFail: false,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  test('accepts payload with optional cap fields omitted', () => {
+    const parsed = FactorySequenceSchema.safeParse({
+      specsDir: '/tmp/specs',
+      topoOrder: ['a'],
+      startedAt: new Date().toISOString(),
+      continueOnFail: false,
+    });
+    expect(parsed.success).toBe(true);
   });
 });
