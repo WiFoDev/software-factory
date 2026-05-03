@@ -161,13 +161,87 @@ The v0.0.5.x cluster. Shipped four BACKLOG-tracked v0.0.5 follow-ups (harness ba
 
 Per the agent: *"Yes — I'd use the factory again. Convergence quality is excellent (4/4 first-try, every constraint honored). The pain is entirely on the maintainer side — I would not drive a 10-spec project by hand on v0.0.6's surface."* **Net signal: v0.0.6 was leverage; the maintainer-side pain is exactly the v0.0.7 target. Sequence-runner promoted to v0.0.7 alongside /scope-project per the quantified "32 interventions" evidence.**
 
-##### v0.0.7 — pending
+##### v0.0.7 — shipped 2026-05-03 (FLAGGED: outdated prompt; baseline reset proposed for v0.0.8)
 
-After `/scope-project` + `depends-on` ship. Same prompt, fresh `~/dev/url-shortener-v0.0.7/`. Predicted improvements: friction #1 from v0.0.5 (manual decomposition + dependency invisibility) should largely disappear. Friction #4 (status flipping) should also shrink if `/scope-project` writes the first spec as `ready` and stages the rest. Sequence-runner gap (originally prediction #3) survives until v0.0.8.
+The v0.0.7 cluster shipped (`/scope-project` + `depends-on` + `factory-runtime run-sequence`). All six packages on npm at 0.0.7. Run executed in `~/dev/url-shortener-v0.0.7/` against the public registry.
+
+**Actuals:**
+
+| Spec | Iterations | Wall-clock | Notes |
+|---|---|---|---|
+| url-shortener-core | 1 | — | clean converge |
+| url-shortener-redirect | 1 | — | clean converge |
+| url-shortener-tracking | 1 | — | clean converge |
+| url-shortener-stats | 1 | — | clean converge |
+| **Total (all 4 runs)** | **4** | **5m 9s (309s)** | every spec converged first try |
+
+| Metric | v0.0.6 | v0.0.7 | Delta |
+|---|---|---|---|
+| Wall-clock | 4m 26s (266s) | 5m 9s (309s) | **+16% (likely noise)** |
+| Tokens (raw input + output) | — | 17,009 | — |
+| Tokens (cache-aware) | 2,202,884 | 2,343,546 | **+6%** (~94% cache reads, comparable) |
+| Tests shipped | 16 | 19 | +3 (more coverage on stats spec) |
+| Iterations / 4 specs | 4 (1 each) | 4 (1 each) | unchanged |
+| Commits | 6 | 6 | unchanged |
+
+**Top 3 friction points (per agent's JOURNAL):**
+
+1. **No run-sequence walking docs/specs/ with depends-on enforcement** — agent manually lint/review/run/move-to-done × 4.
+2. **No `/scope-project` to decompose** — decomposition discipline left to the agent.
+3. **Spec-quality review fires after authoring** — DoD-precision warnings predictable enough that `/scope-task` could prevent them by templating runnable bullets.
+
+**End-to-end smoke:** `curl POST /shorten` → `GET /:slug` → `GET /stats/:slug` returned `{"clicks":3,...}` with the correct ISO timestamp. Verdict: viable today.
+
+**Why the friction list is identical to v0.0.6 — root cause:**
+
+This is **not roadmap drift**. The canonical prompt (`docs/baselines/url-shortener-prompt.md`, byte-stable since v0.0.5) explicitly tells the agent v0.0.7's three deliverables don't exist yet:
+
+- Line 38-41: "**`/scope-project` is a v0.0.6 deliverable — it doesn't ship until later**. Until then, decomposition is the maintainer's job."
+- Line 43-50: hardcodes the four-spec decomposition INTO the prompt body, eliminating any reason for the agent to invoke `/scope-project`.
+- Line 56: "**`/scope-task` the feature.**" — instructs the agent to use the per-spec command, not the product-level one.
+- Line 113-114: warns about backtick-stripping that v0.0.6 fixed.
+- Line 127-128: pre-frames the friction list as "things `/scope-project` or sequence-runner would have eliminated."
+
+The agent dutifully followed these instructions and produced a friction list that mirrors what the prompt told it to expect. v0.0.7's tools were live on npm but invisible because the prompt instructed against using them.
+
+**Methodology trigger fired:** per BASELINE.md, "if the prompt needs an edit because the factory's API changed, that's a baseline reset." v0.0.7 is exactly that condition. **Proposed for v0.0.8: archive the current prompt as `url-shortener-prompt-v0.0.5-v0.0.7.md` and write a fresh canonical that uses `/scope-project` + `run-sequence` as the entry point.** The next minor's BASELINE will measure the v0.0.7+ flow honestly.
+
+**Secondary contributing factor:** even with a corrected prompt, `factory init`'s scaffold doesn't include `.claude/commands/scope-project.md` — a fresh-repo agent has no signal that the slash command exists. Captured in BACKLOG as the v0.0.8 lead candidate ("`factory init`: drop `/scope-project` into scaffolded `.claude/commands/`"). Pairs with the prompt reset.
+
+**Predicted-vs-actual scoring (predictions made before run, locked in v0.0.6's BASELINE entry):**
+
+| Prediction | Outcome | Notes |
+|---|---|---|
+| Friction #1 (manual decomp) → largely disappears | ❌ Did not land | Stale prompt told agent to decompose manually anyway. |
+| Friction #4 (status flipping) → shrinks | ❌ Did not land | Agent followed prompt's per-spec workflow; status flipping was prescribed. |
+| Sequence-runner gap → survives until v0.0.8 | ❌ Wrong direction | Sequence-runner shipped in v0.0.7 (promoted from v0.0.8). It exists; prompt didn't surface it. |
+
+All three predictions wrong, all in the same direction: **the prompt prevented the new tools from being exercised**. The miss exposes a methodology blind spot — "shipped to npm" ≠ "discoverable to a baseline-prompt-following agent."
+
+**Surprises:**
+
+- **The byte-stable prompt is actively misleading after a major API change.** The methodology section anticipated this case and prescribed "baseline reset"; this run is the first time the trigger has fired in practice. The reset is the correct response, not a methodology failure.
+- **Scaffold discoverability matters as much as the prompt.** Even with a corrected prompt, a fresh-repo agent needs `.claude/commands/scope-project.md` to be auto-installed by `factory init` for `/scope-project` to be reachable. Two-pronged v0.0.8 work: prompt reset + scaffold drop.
+- **Cache-aware token totals stayed flat (~99% cache hit).** The implementation guidelines prefix from v0.0.5 still earns its keep. Whatever v0.0.8 changes, that invariant should not break.
+
+**Mapped BACKLOG entries:**
+- Friction #1 + #2 → root cause is stale prompt + scaffold gap. Both addressed in v0.0.8: (a) baseline reset (NEW methodology task, see "v0.0.8 reset plan" below); (b) scaffold-drop BACKLOG entry already added.
+- Friction #3 (DoD-precision predictability) → minor; possible `/scope-task` template tightening in a future point release.
+
+**Would you want to use the factory for the next product?** Per the agent: "yes, viable today; the three missing pieces above would make it the obvious default." Verdict honest under the constraint that the prompt told the agent those pieces were missing.
+
+##### v0.0.8 reset plan (the meta-deliverable)
+
+Two-pronged:
+
+1. **Baseline reset.** Archive the current `url-shortener-prompt.md` as `url-shortener-prompt-v0.0.5-v0.0.7.md` (the era when manual decomposition was canonical). Write a fresh `url-shortener-prompt.md` whose entry point is `/scope-project A URL shortener with click tracking and JSON stats. JSON-over-HTTP, in-memory, no auth.` followed by `factory-runtime run-sequence docs/specs/`. The new prompt measures the v0.0.7+ flow.
+2. **`factory init` scaffold drop.** New v0.0.8 BACKLOG entry — `factory init` writes `.claude/commands/scope-project.md` so any fresh project gets the slash command zero-config. Without this, the new prompt fails on a fresh-repo agent (slash command not discoverable).
+
+Both ship before any v0.0.8 BASELINE re-run. The v0.0.8 BASELINE entry below depends on both landing first.
 
 ##### v0.0.8 — pending
 
-After spec-sequence runner ships. The context-dir reuse oddness becomes invisible — one CLI invocation walks all 4 specs and produces one DAG. Per-spec status flipping also goes away if the sequence-runner ships with status-aware iteration.
+After (1) baseline reset and (2) `factory init` scaffold drop ship. New canonical prompt opens with `/scope-project`; agent decomposes via the slash command; `factory-runtime run-sequence docs/specs/` walks the four shipped specs in topological order. Predicted improvements: friction #1 (manual decomposition) genuinely disappears for the first time; friction #2 (sequence orchestration, 32 manual interventions on v0.0.6) collapses to ~1 invocation; the v0.0.7 friction list stops repeating. Wall-clock + token totals expected flat (the bottleneck is agent compute, not orchestration). Maintainer interventions expected: ≤4 (one per spec review, vs 32 on v0.0.6).
 
 ##### v0.1.0 — pending
 

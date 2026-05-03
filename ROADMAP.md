@@ -143,25 +143,37 @@ What's in your hands today:
 
 ## v0.0.8 — next
 
-**Theme: TBD, after v0.0.7 has soaked.** Strong candidates from BACKLOG: PostToolUse hook for `factory spec lint`/`review`; CI publish workflow; DoD-verifier runtime phase (audit-trust gap surfaced by v0.0.6 BASELINE); worktree sandbox.
+**Theme: discoverability + baseline reset.** The v0.0.7 BASELINE run (2026-05-03) shipped a critical finding: v0.0.7's three deliverables (`/scope-project`, `depends-on`, `run-sequence`) live on npm but are invisible to a fresh-repo agent because (a) `factory init`'s scaffold doesn't auto-install `/scope-project` into `.claude/commands/`, and (b) the canonical baseline prompt explicitly tells the agent those tools don't exist (the prompt was authored when they were future work). v0.0.8 closes both gaps so v0.0.7's value is actually exercised.
 
-### Deferred from v0.0.7 to v0.0.8
+### Lead candidates (post-v0.0.7 BASELINE evidence)
 
-- **PostToolUse hook for `factory spec lint`/`review`** — opt-in config recipe lives in `~/.claude/settings.json`, not this repo.
-- **CI publish workflow** — promote `pnpm release` to a tag-driven GitHub Actions workflow. v0.0.6 + v0.0.7 manually publishing went smoothly; defer CI another release.
-- **DoD-verifier runtime phase** — `factory-runtime run` returns "converged" without running the DoD shell gates. Audit-trust gap, not just UX. ~300 LOC.
+| # | Piece | Notes |
+|---|---|---|
+| 1 | **Baseline prompt reset** *(methodology task, not a code change)* | Archive `docs/baselines/url-shortener-prompt.md` as `url-shortener-prompt-v0.0.5-v0.0.7.md`. Write a fresh canonical that opens with `/scope-project A URL shortener with click tracking…` and continues with `factory-runtime run-sequence docs/specs/`. The new prompt measures the v0.0.7+ flow honestly; the v0.0.8 BASELINE re-run depends on this landing first. |
+| 2 | **`factory init` scaffold drops `/scope-project`** *(factory-core)* | New `.claude/commands/scope-project.md` written by `factory init` so any fresh project picks up the slash command zero-config. Source-of-truth move: relocate the canonical from `docs/commands/scope-project.md` to `packages/core/commands/scope-project.md` so it ships in the npm tarball. Pairs with #1 — without this, the new prompt fails on a fresh-repo agent. |
+| 3 | **Scaffold README points at `run-sequence`** *(factory-core)* | The current `init-templates.ts` README_TEMPLATE doesn't mention `factory-runtime run-sequence` or `/scope-project`. Add a "Multi-spec products" section to the scaffold README so a maintainer reading the generated project knows which command to reach for. ~30 LOC. |
+
+### Deferred from v0.0.7 to v0.0.8 (kept but de-prioritized)
+
+- **PostToolUse hook for `factory spec lint`/`review`** — opt-in config recipe in `~/.claude/settings.json`. Pairs naturally with #2 above (both make Claude Code aware of factory tooling).
+- **CI publish workflow** — tag-driven GitHub Actions. v0.0.7 manual publishing went smoothly; defer one more release.
+- **DoD-verifier runtime phase** — audit-trust gap surfaced by v0.0.6 BASELINE. ~300 LOC. Now de-prioritized below the discoverability work because v0.0.7's BASELINE proved discoverability is the binding constraint, not DoD coverage.
+
+### Scope discipline
+
+The v0.0.7 BASELINE result re-ranked v0.0.8 entirely. Pre-v0.0.7 plan was DoD-verifier + worktree sandbox + PostToolUse hook + CI publish. Post-v0.0.7 evidence: discoverability is the actual ceiling. Ship the prompt reset + scaffold drop together as a coherent v0.0.8; everything else slips one slot. After v0.0.8 lands, re-run the URL-shortener BASELINE against the new prompt to validate that the friction list finally shrinks.
 
 ---
 
-## v0.0.8+ — future
+## v0.0.9+ — future
 
-The post-real-product work. Roughly ordered by leverage; not committed.
+The post-discoverability work. Roughly ordered by leverage; not committed.
 
 | Theme | Lead candidate from BACKLOG.md |
 |---|---|
-| **DoD-verifier runtime phase** *(NEW, surfaced by v0.0.6 BASELINE)* | Today `## Definition of Done` is documentation-only. `factory-runtime run` returns "converged" without verifying DoD shell gates ("typecheck clean", "biome clean"). New `dodPhase` parses shell-runnable DoD lines and executes them. Audit-trust gap, not just UX. ~300 LOC. |
-| **PostToolUse hook for `factory spec lint`/`review`** *(deferred from v0.0.7)* | Harness-enforced linting on every `Write` to `docs/specs/*.md`. Lives in `~/.claude/settings.json` — opt-in config recipe. |
-| **CI publish workflow** *(deferred from v0.0.7)* | Promote `pnpm release` to a tag-driven GitHub Actions workflow. |
+| **DoD-verifier runtime phase** *(surfaced by v0.0.6 BASELINE; deferred from v0.0.8 by v0.0.7 BASELINE re-rank)* | Today `## Definition of Done` is documentation-only. `factory-runtime run` returns "converged" without verifying DoD shell gates ("typecheck clean", "biome clean"). New `dodPhase` parses shell-runnable DoD lines and executes them. Audit-trust gap, not just UX. ~300 LOC. |
+| **PostToolUse hook for `factory spec lint`/`review`** *(deferred from v0.0.7+v0.0.8)* | Harness-enforced linting on every `Write` to `docs/specs/*.md`. Lives in `~/.claude/settings.json` — opt-in config recipe. |
+| **CI publish workflow** *(deferred from v0.0.7+v0.0.8)* | Promote `pnpm release` to a tag-driven GitHub Actions workflow. |
 | **Worktree sandbox** | Agent runs in an isolated `git worktree` per run. Strong undo by construction. Ship after `/scope-project` proves the product workflow. |
 | **Holdout-aware automated convergence** | Validate runs holdouts at the end of every iteration; convergence requires both visible AND holdout passes. Quality knob; ride alongside worktree. |
 | **Scheduler (Layer 5)** — autonomous task queue | Pull `status: ready` specs and run them overnight. With `depends-on` declared, the scheduler can walk a project's DAG without human intervention. The end-state. |
