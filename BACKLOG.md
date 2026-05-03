@@ -151,6 +151,25 @@ Two friction points surfaced in the v0.0.6 baseline (see `BASELINE.md` v0.0.6 en
 
 ---
 
+## `factory init`: drop `/scope-project` into scaffolded `.claude/commands/`
+
+**What:** Have `factory init` write `.claude/commands/scope-project.md` (and any other in-repo slash commands) into the scaffolded project, copying from the published `@wifo/factory-core/dist/commands/` (or similar). Today the user must `cp docs/commands/scope-project.md ~/.claude/commands/` manually after `factory init`; this fix makes `/scope-project` discoverable in any fresh project zero-config.
+
+**Why:** Surfaced when scoping v0.0.7 — the slash command source ships in this repo at `docs/commands/scope-project.md`, but Claude Code only auto-discovers from `~/.claude/commands/` (user-level) or `.claude/commands/` (project-level). A new project created via `factory init` doesn't get either, so `/scope-project` silently doesn't exist until the maintainer manually installs. First-contact UX gap, same shape as v0.0.5.x's "missing devDeps in scaffold" friction.
+
+**Shape options:**
+- (a) `factory init` copies `scope-project.md` (and future slash commands) into `<cwd>/.claude/commands/`. Project-level scope; recipient project gets the command in this repo only.
+- (b) `factory init` ALSO offers `--install-commands user` to drop into `~/.claude/commands/` (user-level, applies to every project). Opt-in flag.
+- (c) Both (a) and (b). Project-level by default; opt-in user-level.
+
+**Where the source lives at install time:** `@wifo/factory-core` would need to ship the slash-command markdown file in its `files` glob. Today only `dist/` ships; the canonical `docs/commands/scope-project.md` lives in the monorepo root, NOT in `packages/core/`. Either: (i) move it under `packages/core/commands/scope-project.md` (or `packages/core/src/commands/`); or (ii) keep the canonical at repo-root and copy into `packages/core/commands/` on `pnpm release`. Option (i) is cleaner — single source of truth in the package that ships it.
+
+**Touches:** `packages/core/commands/scope-project.md` (move from `docs/commands/`), `packages/core/package.json` (add to `files` glob), `packages/core/src/init.ts` + `init-templates.ts` (planFiles for `.claude/commands/scope-project.md`), tests, README updates. Optional: a `factory commands install` subcommand for retrofitting existing projects.
+
+**Phasing suggestion:** v0.0.8 candidate. Pairs naturally with the PostToolUse hook recipe (also deferred to v0.0.8) — both are "make Claude Code aware of factory tooling" workflow polish.
+
+---
+
 ## Shipped in v0.0.7 (kept here briefly for history)
 
 The "real-product workflow" cluster shipped in v0.0.7 (commits `4d48d81` factory-core, `a7c6b44` factory-runtime, `ae93b45` scope-project). Three primitives that together collapse the multi-spec-product friction quantified in the v0.0.6 BASELINE (32 manual interventions per 4-spec product → ~8):
