@@ -1,6 +1,6 @@
 {
   "name": "@wifo/factory-runtime",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Phase-graph runtime that composes core/harness/twin/context into an end-to-end agent pipeline — explore, plan, implement, validate, iterate until scenarios converge",
   "license": "MIT",
   "author": "Luis (WiFoDev)",

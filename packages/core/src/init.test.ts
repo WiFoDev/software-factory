@@ -83,7 +83,7 @@ describe('runInit — happy path', () => {
       .replace(/[^a-z0-9_-]+/g, '-')
       .replace(/^-+/, '');
     expect(pkg.name).toBe(expectedName);
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.6');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.7');
 
     // tsconfig.json is self-contained.
     const tsconfig = JSON.parse(readFileSync(join(dir, 'tsconfig.json'), 'utf8'));
@@ -155,7 +155,7 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     run(['--name', 'test'], io.io);
     expect(io.exitCode()).toBe(0);
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.6');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.7');
     // Existing devDep stays alongside.
     expect(pkg.devDependencies['@types/bun']).toBeDefined();
   });

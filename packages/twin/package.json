@@ -1,6 +1,6 @@
 {
   "name": "@wifo/factory-twin",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Digital twin contract — record/replay external dependencies so agents can iterate without burning real API quota or real money",
   "license": "MIT",
   "author": "Luis (WiFoDev)",

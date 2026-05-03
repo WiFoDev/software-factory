@@ -6,6 +6,59 @@ For the project's forward direction and shipped-release retrospectives, see [`RO
 
 ---
 
+## [0.0.7] — 2026-05-02
+
+**Theme: real-product workflow.** Three deliverables that together collapse the multi-spec-product friction quantified in the v0.0.6 BASELINE run (32 manual interventions per 4-spec product → ~8): a `/scope-project` slash command, a `depends-on` frontmatter field, and a `factory-runtime run-sequence` CLI subcommand. The maintainer now decomposes one product description with one slash command and ships the resulting spec set with one `run-sequence` invocation; provenance threads the entire product DAG under one `factory-sequence` record.
+
+### Added
+
+- **`/scope-project` slash command** *(docs/commands/)*. New canonical source at `docs/commands/scope-project.md` (in-repo). Takes a natural-language product description and writes 4-6 LIGHT specs in dependency order under `docs/specs/<id>.md`. First spec ships `status: ready`; rest ship `status: drafting`. Each spec populates the new `depends-on:` frontmatter field. Worked example: `docs/baselines/scope-project-fixtures/url-shortener/`. Install via `cp docs/commands/scope-project.md ~/.claude/commands/scope-project.md`.
+- **`depends-on: [<id>, ...]` frontmatter field** *(factory-core)*. Optional array on `SpecFrontmatter`. Defaults to `[]`. `factory spec lint` validates each entry against the new `KEBAB_ID_REGEX = /^[a-z][a-z0-9-]*$/` and (with `--cwd <dir>`) checks that each declared dep file exists under `docs/specs/` or `docs/specs/done/`. Two new lint codes: `spec/invalid-depends-on` (error), `spec/depends-on-missing` (warning).
+- **`lintSpecFile(filePath, opts?)` helper export** *(factory-core)*. Wraps `readFileSync` + `lintSpec` with a `cwd` defaulted to `<file>/../..`. CLI uses this; programmatic callers can keep using `lintSpec` directly.
+- **`KEBAB_ID_REGEX` constant export** *(factory-core)*. Canonical kebab-case spec id pattern.
+- **`cross-doc-consistency` judge reads declared deps** *(factory-spec-review)*. Judge `applies()` returns true when `hasTechnicalPlan || depsCount > 0`. New `JudgeApplicabilityCtx.depsCount`, `JudgePromptCtx.deps?: ReadonlyArray<{id, body}>`, `RunReviewOptions.deps?`. CLI auto-loads each declared dep from `docs/specs/<id>.md` or `docs/specs/done/<id>.md`; missing → `review/dep-not-found` warning.
+- **`factory-runtime run-sequence <dir>/` CLI subcommand** *(factory-runtime)*. Walks `<dir>/*.md`, builds the depends-on DAG, topologically sorts via Kahn's (alphabetic tie-break), runs each spec via existing per-spec `run()` in order. Exit 0 on full converge, 1 on partial / no-converge, 3 on error / cycle / missing dep / sequence-cost-cap.
+- **`runSequence` function + `SequenceReport` type exports** *(factory-runtime)*. Public API surface: 19 → 21 names.
+- **New context record type `factory-sequence`** *(factory-runtime)*. Persisted at sequence start (root, parents=[]); every per-spec `factory-run` parents at `[factorySequenceId]` via the new `RunArgs.runParents?: string[]` arg. `factory-context tree --direction down <factorySequenceId>` walks the entire product DAG.
+- **`--max-sequence-tokens <n>` CLI flag** *(factory-runtime)*. Whole-sequence cap on summed agent tokens. Pre-run check: `cumulative + nextSpec.maxTotalTokens > maxSequenceTokens` aborts before invoking the next spec. Default unbounded (per-spec cap from v0.0.3 still applies).
+- **`--continue-on-fail` CLI flag** *(factory-runtime)*. Continue running independent specs after a failure; transitive dependents are marked `'skipped'` with `blockedBy: <first-failed-id>`.
+- **`RunReport.totalTokens?: number`** *(factory-runtime)*. Field-level addition. Computed in-memory from the run's `factory-implement-report.tokens`. Used by `runSequence` to accumulate sequence totals.
+- **Three new `RuntimeErrorCode` values** *(factory-runtime)*: `'runtime/sequence-cycle'`, `'runtime/sequence-dep-not-found'`, `'runtime/sequence-cost-cap-exceeded'`. Enum count: 10 → 13.
+- **Two new `factory.config.json` keys** *(factory-runtime)*: `runtime.maxSequenceTokens`, `runtime.continueOnFail`. CLI flag > config > built-in default precedence preserved.
+- **URL-shortener fixture set** *(docs/baselines/scope-project-fixtures/)*. Four hand-authored LIGHT spec files demonstrating the canonical `/scope-project` output shape against the canonical URL-shortener prompt.
+
+### Changed
+
+- **All six `@wifo/factory-*` packages bumped to `0.0.7`** in lockstep. `init-templates` scaffold deps bumped from `^0.0.6` to `^0.0.7`.
+
+### Public API surface
+
+| Package | v0.0.6 | v0.0.7 | Δ |
+|---|---|---|---|
+| `@wifo/factory-core` | 27 | 29 | +`KEBAB_ID_REGEX`, +`lintSpecFile` |
+| `@wifo/factory-runtime` | 19 | 21 | +`runSequence`, +`SequenceReport` |
+| `@wifo/factory-spec-review` | 10 | 10 | (field-level on existing types) |
+| `@wifo/factory-context` | 18 | 18 | unchanged |
+| `@wifo/factory-harness` | ~16 | ~16 | unchanged |
+| `@wifo/factory-twin` | ~7 | ~7 | unchanged |
+
+### Test surface growth
+
+- `@wifo/factory-core`: 94 → 104 (+8 depends-on schema/lint scenarios + 2 fixture/source structural tests)
+- `@wifo/factory-runtime`: 138 → 161 (+13 sequence + 3 records + 4 runtime.runParents/totalTokens + 3 cli scenarios)
+- `@wifo/factory-spec-review`: 62 → 74 (+8 cross-doc-consistency deps scenarios + 1 review.deps thread + 2 cli dep-loading + 1 review/dep-not-found)
+- Workspace total: 446 → 455
+
+### Reconciliations worth knowing
+
+- **`SpecFrontmatter.id` is NOT retroactively tightened** to match `KEBAB_ID_REGEX`. The pattern is documented as canonical and enforced ONLY for `depends-on` entries. Existing specs (and existing third-party specs) may not match. A future v0.0.8+ may add an `id-format` lint warning for existing-spec ids.
+- **`run-sequence` does NOT recurse into `<dir>/done/`.** Specs in `done/` already shipped — they are external constraints, not part of the sequence DAG. The `cross-doc-consistency` reviewer judge handles cross-`done/` consistency at review time.
+- **Sequence-cost-cap is enforced PRE-RUN.** Before invoking `run()` for each spec in topological order, the runtime compares `cumulative + nextSpec.maxTotalTokens` against `maxSequenceTokens`. Stricter than post-hoc but prevents one spec from blowing the entire sequence budget on its own.
+- **Failure cascade is dep-chain-only.** A failed spec poisons its TRANSITIVE dependents (via the depends-on chain). Specs with `depends-on=[]` always run regardless of other failures. `--continue-on-fail` flips between "run independent roots" and the default "stop on first failure."
+- **Cascade-blocked status is `'skipped'`.** Maintains the CI-tooling convention; `blockedBy: string` field carries the cause.
+
+---
+
 ## [0.0.6] — 2026-05-02
 
 **Theme: v0.0.5.x cluster shipped together.** Four BACKLOG-tracked follow-ups to v0.0.5, bundled because they're all small fixes / quality-of-life improvements that make every subsequent v0.0.6+ workflow cleaner. Three of the four runs hit the very 600s agent timeout that the fourth fix is making configurable — concrete validation that the friction is real.

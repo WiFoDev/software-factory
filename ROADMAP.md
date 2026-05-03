@@ -4,7 +4,30 @@ This file is the **direction**. `BACKLOG.md` is the candidate pile. The roadmap 
 
 ---
 
-## Where we are: v0.0.6 — shipped
+## Where we are: v0.0.7 — shipped
+
+**Theme: real-product workflow.** Three deliverables that together collapse the multi-spec-product friction quantified in the v0.0.6 BASELINE run (32 manual interventions per 4-spec product → ~8): a `/scope-project` slash command, a `depends-on` frontmatter field, and a `factory-runtime run-sequence` CLI subcommand. The maintainer now decomposes one product description with one slash command and ships the resulting spec set with one `run-sequence` invocation.
+
+### What v0.0.7 added
+
+| # | Piece | Notes |
+|---|---|---|
+| 1 | **`/scope-project` slash command** *(docs/commands/)* | Canonical source at `docs/commands/scope-project.md` (in-repo). Takes a natural-language product description, writes 4-6 LIGHT specs in dependency order. First spec ships `status: ready`; rest ship `status: drafting`. Worked example: URL-shortener fixture under `docs/baselines/scope-project-fixtures/`. |
+| 2 | **`depends-on` frontmatter field** *(factory-core)* | Optional `string[]` on `SpecFrontmatter`. `factory spec lint` validates kebab-case id format + (with `--cwd`) file existence. Two new lint codes: `spec/invalid-depends-on` (error), `spec/depends-on-missing` (warning). Two new exports: `KEBAB_ID_REGEX` + `lintSpecFile`. |
+| 3 | **`cross-doc-consistency` reviewer reads deps** *(factory-spec-review)* | Judge applies via `hasTechnicalPlan \|\| depsCount > 0`. CLI auto-loads each declared dep from `docs/specs/` or `docs/specs/done/`; missing → `review/dep-not-found` warning. |
+| 4 | **`factory-runtime run-sequence <dir>/`** *(factory-runtime)* | Walks the depends-on DAG (Kahn's, alphabetic tie-break), runs each spec in topological order. New `factory-sequence` context record at the root; per-spec `factory-run` records parent at `[factorySequenceId]` via new `RunArgs.runParents?: string[]`. New flags: `--max-sequence-tokens` (pre-run cost cap), `--continue-on-fail` (skip transitive dependents only). Two new exports: `runSequence` + `SequenceReport`. Three new `RuntimeErrorCode` values: `runtime/sequence-{cycle,dep-not-found,cost-cap-exceeded}`. |
+
+### Reconciliations worth knowing
+
+- **All 6 packages bumped to 0.0.7 in lockstep.** Even packages that didn't change (context, twin, harness) bumped — matches v0.0.5 / v0.0.6 publish-coordination pattern; keeps the scaffold's `^0.0.7` deps uniformly resolvable.
+- **`SpecFrontmatter.id` is NOT retroactively tightened.** `KEBAB_ID_REGEX` is documented as canonical and enforced ONLY for `depends-on` entries.
+- **`run-sequence` does NOT recurse into `<dir>/done/`.** Sequence ships ACTIVE specs only; deps already in `done/` are external constraints.
+- **Sequence-cost-cap is enforced PRE-RUN** — `cumulative + nextSpec.maxTotalTokens > maxSequenceTokens` aborts before invoking the next spec. Stricter than post-hoc but prevents one spec from blowing the budget alone.
+- **Failure cascade is dep-chain-only.** `'skipped'` status with `blockedBy: string` field.
+
+---
+
+## Where we were: v0.0.6 — shipped
 
 **The v0.0.5.x cluster, bundled.** Four BACKLOG-tracked follow-ups to v0.0.5 — harness backtick stripping, `factory init` first-contact UX, `factory-implement-report.filesChanged` audit reliability, and configurable per-phase agent timeout — shipped together as one v0.0.6 release. The ROADMAP's prior v0.0.6 theme (`/scope-project` + real-product workflow) moves to v0.0.7.
 
@@ -118,28 +141,15 @@ What's in your hands today:
 
 ---
 
-## v0.0.7 — next
+## v0.0.8 — next
 
-**Theme: real-product workflow.** Inherits the theme that was originally v0.0.6, pushed one slot because v0.0.5.x cluster shipped first. v0.0.5 + v0.0.6 validated the per-feature spec sweet spot — `factory-runtime` shipped slugify, gh-stars, parse-size, the v0.0.5 self-build, and now the v0.0.6 self-build (4 specs in sequence). The next ceiling is **products**, not features. A "URL shortener with stats dashboard" is a sequence of 4-6 specs in dependency order (`core` → `redirect` → `tracking` → `stats` → `dashboard`); manually decomposing and sequencing them is the friction that v0.0.7 removes.
-
-### Lead candidates (post-v0.0.6 BASELINE evidence)
-
-| # | Piece | Notes |
-|---|---|---|
-| 1 | **`/scope-project` slash command** | Natural-language project description → N specs in dependency order under `docs/specs/`. First spec ships `status: ready`; the rest `status: drafting` until the prior spec converges. ~30 LOC of slash-command markdown in `~/.claude/commands/`. **Centerpiece of v0.0.7 — biggest UX win in the BACKLOG, validated as friction #1 in the v0.0.6 BASELINE run.** |
-| 2 | **`depends-on` frontmatter field** | Optional `depends-on: [<id>, ...]` on `SpecFrontmatter`. `factory spec lint` validates id format; `cross-doc-consistency` reviewer judge reads dep specs when scoring. Pairs with `/scope-project`. Field-level addition; zero new public exports. |
-| 3 | **`factory-runtime run-sequence`** *(promoted from v0.0.8 by BASELINE evidence)* | One CLI command walks the `depends-on` DAG and runs specs in topological order. The v0.0.6 BASELINE quantified the friction: 8 maintainer steps × 4 specs = 32 manual interventions; agent compute was ~4½ minutes; orchestration time was multiples of that. `run-sequence` collapses 32 → ~8. Ships in v0.0.7 alongside #1 and #2 as the third leg of the real-product workflow. |
+**Theme: TBD, after v0.0.7 has soaked.** Strong candidates from BACKLOG: PostToolUse hook for `factory spec lint`/`review`; CI publish workflow; DoD-verifier runtime phase (audit-trust gap surfaced by v0.0.6 BASELINE); worktree sandbox.
 
 ### Deferred from v0.0.7 to v0.0.8
 
-- **PostToolUse hook for `factory spec lint`/`review`** — opt-in config recipe lives in `~/.claude/settings.json`, not this repo. Carry to v0.0.8.
-- **CI publish workflow** — promote `pnpm release` to a tag-driven GitHub Actions workflow. v0.0.6 manually publishing went smoothly; defer CI another release.
-
-### Scope discipline
-
-The original v0.0.7 plan was `/scope-project` + `depends-on` + (hook + CI publish). The v0.0.6 BASELINE run quantified the sequence-runner friction precisely (32 interventions per 4-spec product), so the runner gets promoted into the v0.0.7 cluster. Together, the three deliverables = the full "build a real product without manual orchestration" flow. Hook + CI publish are infrastructure polish; defer.
-
-Ship `/scope-project` + `depends-on` + `run-sequence` together. They're three legs of the same stool — `/scope-project` writes the spec set, `depends-on` declares the order, `run-sequence` ships them. Each is independent enough to land as its own per-deliverable spec.
+- **PostToolUse hook for `factory spec lint`/`review`** — opt-in config recipe lives in `~/.claude/settings.json`, not this repo.
+- **CI publish workflow** — promote `pnpm release` to a tag-driven GitHub Actions workflow. v0.0.6 + v0.0.7 manually publishing went smoothly; defer CI another release.
+- **DoD-verifier runtime phase** — `factory-runtime run` returns "converged" without running the DoD shell gates. Audit-trust gap, not just UX. ~300 LOC.
 
 ---
 

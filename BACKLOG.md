@@ -151,68 +151,13 @@ Two friction points surfaced in the v0.0.6 baseline (see `BASELINE.md` v0.0.6 en
 
 ---
 
-## Real-product workflow — close the project-scale gap
+## Shipped in v0.0.7 (kept here briefly for history)
 
-The factory's sweet spot today (verified by slugify, gh-stars-{v1,v2}, parse-size, and the v0.0.5 self-build moneyball) is **one feature per spec**. The natural next step is a real product — "build a URL shortener with stats dashboard." That's not one spec, it's a sequence of 4-6 specs in dependency order: `core` → `redirect` → `tracking` → `stats` → `dashboard`.
+The "real-product workflow" cluster shipped in v0.0.7 (commits `4d48d81` factory-core, `a7c6b44` factory-runtime, `ae93b45` scope-project). Three primitives that together collapse the multi-spec-product friction quantified in the v0.0.6 BASELINE (32 manual interventions per 4-spec product → ~8):
 
-Today the maintainer drives the sequence by hand (write 4 specs, ship one at a time, manually thread "spec 2 depends on spec 1's exports"). It works for 1-2 specs, gets friction-y at 4+. Three primitives close the gap, ordered cheapest-first:
-
-### `/scope-project` slash command
-
-**What:** A new `~/.claude/commands/scope-project.md` slash command that takes a natural-language project description ("A URL shortener with a stats dashboard, JSON-over-HTTP, SQLite for storage") and writes N specs in dependency order under `docs/specs/`. The first spec is `status: ready`; the rest are `status: drafting` until the first ships and the maintainer flips the next one. Mirrors `/scope-task`'s skeleton + DEEP/LIGHT classification but operates a level up.
-
-**Why:** The single biggest UX win for "open Claude Code, build a real product." Without it, the maintainer is the decomposition step — they read the product description and write 4-6 spec files manually. With it, that's one slash command. The factory's value comes from the maintainer staying in the **review** seat (catching bad specs, tweaking each before running); decomposition is mechanical and Claude is good at it.
-
-**The shape of a `/scope-project` invocation:**
-
-```
-/scope-project A URL shortener with a stats dashboard. JSON-over-HTTP, SQLite storage.
-  Optional auth via API key.
-```
-
-Output: 4-6 spec files under `docs/specs/`, plus a printed "ship order" with explicit dependency markers. Each spec uses the standard skeleton; the only addition is a `depends-on: [<id>, ...]` frontmatter field (see next entry).
-
-**Constraints worth pinning when scoping the slash command:**
-
-- Each generated spec must be small enough that `factory-runtime run` converges in 1-2 iterations under default budgets (the moneyball lesson — broad specs hit the agent timeout).
-- The decomposition picks dependency boundaries that match real package/module boundaries. "Core helper" specs ship before "HTTP endpoint" specs ship before "frontend dashboard" specs.
-- Stay within the existing spec format — no new top-level sections beyond the skeleton. `depends-on` is the only new frontmatter field.
-
-**Where it lives:** `~/.claude/commands/scope-project.md` (the user's dotfiles, parallel to `scope-task.md`). NOT in this repo — it's a Claude Code user-level command. Documenting the command in `packages/core/README.md` is fine.
-
-**Touches:** `~/.claude/commands/scope-project.md` (new ~30 LOC of slash-command markdown), `packages/core/src/schema.ts` (add `depends-on` frontmatter field — see below), `packages/core/README.md` (document the workflow). Optionally `examples/url-shortener/` as a worked example, parallel to `examples/parse-size`.
-
-**Phasing suggestion:** v0.0.6 centerpiece. Highest UX leverage of any candidate currently in the BACKLOG. Pairs with the `depends-on` field below.
-
-### `depends-on` frontmatter field
-
-**What:** Optional spec-level metadata: `depends-on: [<spec-id>, ...]` in the YAML frontmatter. Declares that this spec assumes the named prior specs have shipped (their tests pass + their public exports exist). `factory spec lint` validates each id format; `factory-runtime run` doesn't enforce ordering by default in v0.0.6 (manual sequencing stays the workflow); the `factory spec review` reviewer's `cross-doc-consistency` judge is taught to read the dependency target's spec when scoring.
-
-**Why:** Without this, the dependency relationship is implicit (the agent reads existing code and infers what's available). That works but loses cheap signal — the spec doesn't tell `factory spec review` "this should reference `shortenUrl` from `url-shortener-core`," so the reviewer can't catch dependency drift. With the field declared, the reviewer can validate that the spec's scenarios actually use the dependency's exports correctly.
-
-**Why it's separate from `/scope-project`:** Two reasons. (a) It's useful even when the maintainer writes specs by hand for a multi-spec product. (b) It's the prerequisite for `factory-runtime`'s sequence-runner (next entry) — without explicit dependency declarations, the runner has nothing to walk.
-
-**Touches:** `packages/core/src/schema.ts` (Zod schema extension on `SpecFrontmatter`), `packages/core/src/lint.ts` (validate id format), `packages/spec-review/src/judges/cross-doc-consistency.ts` (read declared deps and score against their content), tests. Public surface gains zero new exports — field-level addition to an already-exported schema.
-
-**Phasing suggestion:** v0.0.6 alongside `/scope-project`. The slash command and the frontmatter field are the two halves of the same UX.
-
-### `factory-runtime`: spec-sequence runner (`run-sequence`)
-
-**What:** A new CLI subcommand `factory-runtime run-sequence <dir>/` (or `factory-runtime run --sequence`) that reads every spec under the given directory, builds the dependency DAG from `depends-on` fields, and runs each spec via `factory-runtime run` in topological order. Stops on the first non-converging spec (default), or continues with `--continue-on-fail`. Threads each run's `runId` into the next as a parent edge so `factory-context tree` walks the multi-spec ancestry.
-
-**Why:** Closes the manual handoff between specs. Today: maintainer runs spec-1, eyeballs result, runs spec-2, etc. With sequence-runner: one command, one provenance trail across the whole product. **End-state UX moves significantly closer.**
-
-**Why it's gated on evidence:** Premature now. The maintainer has shipped one product-class workflow (the v0.0.5 self-build, which was 3 specs in sequence — manageable by hand). They need to ship 1-2 more multi-spec products manually before the friction is calibrated enough to design the right interface. **Trigger when the manual sequence-driving has become annoying enough to be specific about.**
-
-**Constraints worth thinking about when it's time to scope:**
-
-- Failure handling: a non-converging mid-sequence spec is the interesting case. Skip the dependents? Continue and let them fail naturally? Configurable?
-- Cost capping: per-spec cap and whole-sequence cap, both configurable (mirrors v0.0.3's per-phase + whole-run cap pattern).
-- `factory-context tree --direction down <sequence-id>` should walk the whole product's DAG — every spec's run + every iteration's reports under one root.
-
-**Touches:** `packages/runtime/src/cli.ts` (new subcommand), `packages/runtime/src/runtime.ts` (sequence orchestration), `packages/runtime/src/types.ts` (sequence-level options + RunReport extensions), tests. Probably ~400 LOC including tests. Public surface: 1-2 new exports (a `runSequence` function + a `SequenceReport` type), parallel to v0.0.3's `RunOptions`/`RunReport`.
-
-**Phasing suggestion:** v0.0.7 — gated on **evidence from real multi-spec products**. If the URL-shortener and 1-2 other products ship cleanly via manual sequencing, the value-add is small. If those products surface real friction (specs running out of order, parent-edge gaps in provenance, cost-cap blow-ups across specs), the runner earns its slot.
+- ✅ **`/scope-project` slash command** — canonical source at `docs/commands/scope-project.md` (in-repo); install via `cp` to `~/.claude/commands/`. Worked example: `docs/baselines/scope-project-fixtures/url-shortener/`.
+- ✅ **`depends-on` frontmatter field** — optional `string[]` on `SpecFrontmatter`. Two new lint codes (`spec/invalid-depends-on`, `spec/depends-on-missing`); two new public exports (`KEBAB_ID_REGEX`, `lintSpecFile`). `cross-doc-consistency` reviewer reads declared deps from disk via the CLI; missing → `review/dep-not-found` warning.
+- ✅ **`factory-runtime run-sequence <dir>/`** — Kahn's algorithm with alphabetic tie-break; new `factory-sequence` context record at the root; `RunArgs.runParents?: string[]`; `--max-sequence-tokens` (PRE-RUN check); `--continue-on-fail` skips transitive dependents only. Three new RuntimeErrorCode values; two new public exports (`runSequence`, `SequenceReport`).
 
 ---
 
