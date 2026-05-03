@@ -6,6 +6,48 @@ For the project's forward direction and shipped-release retrospectives, see [`RO
 
 ---
 
+## [0.0.8] — 2026-05-03
+
+**Theme: discoverability + baseline reset.** The v0.0.7 BASELINE run shipped a critical finding: v0.0.7's three deliverables (`/scope-project`, `depends-on`, `run-sequence`) were on npm but invisible to a fresh-repo agent — `factory init` didn't auto-install the slash command into `.claude/commands/`, the scaffold README didn't mention `run-sequence`, and the canonical baseline prompt explicitly told the agent those tools didn't exist (the prompt was authored when they were future work). v0.0.8 closes all three gaps so v0.0.7's value is actually exercised by a fresh-repo agent.
+
+### Added
+
+- **Bundled `/scope-project` slash command** *(factory-core)*. Canonical source moves from `docs/commands/scope-project.md` to `packages/core/commands/scope-project.md` so it ships in the npm tarball. `packages/core/package.json`'s `files` glob extends with `commands`. New internal helper `readScopeProjectCommandTemplate()` in `init-templates.ts` resolves the bundled markdown via `import.meta.url` + relative path (works in both source and built contexts). NOT exported from `core/src/index.ts`.
+- **`factory init` writes `.claude/commands/scope-project.md`** *(factory-core)*. The scaffold's `planFiles` now drops the bundled slash-command source into the fresh project's `.claude/commands/` so any Claude Code session opened in the project picks it up zero-config. The file is a regular file (not a symlink — symlinks don't survive `npm pack` reliably across platforms).
+- **Scaffold README `## Multi-spec products` section** *(factory-core)*. New section in `init-templates.ts`'s `README_TEMPLATE` documents the canonical v0.0.7+ flow: `/scope-project <description>` → `factory spec lint docs/specs/` → `factory-runtime run-sequence docs/specs/`. Section explicitly notes that `factory init` writes `.claude/commands/scope-project.md` automatically. ~25 lines, scannable not tutorial. The scaffold is the documentation.
+- **Baseline prompt reset** *(docs/baselines)*. Archived `docs/baselines/url-shortener-prompt.md` as `url-shortener-prompt-v0.0.5-v0.0.7.md` (preserves the historic v0.0.5–v0.0.7 baseline against which prior friction lists were measured). Wrote a fresh canonical prompt opening with `/scope-project` + `factory-runtime run-sequence` so v0.0.8+ baselines measure the v0.0.7+ flow honestly. `BASELINE.md` documents the methodology reset event.
+
+### Changed
+
+- **All six `@wifo/factory-*` packages bumped to `0.0.8`** in lockstep. `init-templates.ts` `PACKAGE_JSON_TEMPLATE.dependencies` bumped from `^0.0.7` to `^0.0.8` for every `@wifo/factory-*` dep.
+
+### Public API surface
+
+Unchanged across every package. Strictly equal to v0.0.7's surface (29 / 21 / 10 / 18 / ~16 / ~7). All v0.0.8 changes are field-level on existing constants/templates + version metadata + new internal-only helpers.
+
+| Package | Exports |
+|---|---|
+| `@wifo/factory-core` | 29 |
+| `@wifo/factory-context` | 18 |
+| `@wifo/factory-harness` | ~16 |
+| `@wifo/factory-runtime` | 21 |
+| `@wifo/factory-spec-review` | 10 |
+| `@wifo/factory-twin` | ~7 |
+
+### Test surface growth
+
+- `@wifo/factory-core`: 104 → 124 (+scope-project source/init bundling tests + Multi-spec README tests + baseline-reset evidence test + version-pin tests)
+
+### Reconciliations worth knowing
+
+- **The discoverability gap was the binding constraint, not DoD coverage.** Pre-v0.0.7 BASELINE the v0.0.8 plan was DoD-verifier + worktree sandbox + PostToolUse hook + CI publish. The v0.0.7 BASELINE evidence re-ranked entirely: discoverability is the actual ceiling, so DoD-verifier slips to v0.0.9+.
+- **Slash command is a regular file, not a symlink.** Cross-platform reliability: symlinks don't survive `npm pack`/`npm install` consistently across macOS/Linux/Windows. The in-repo `.claude/commands/scope-project.md` IS a symlink for dogfooding (single source of truth), but the scaffolded copy is a plain-file write.
+- **No retroactive backports.** Projects scaffolded before v0.0.8 don't auto-pick-up the new section or slash command — users either re-run `factory init` or copy the new section by hand. A `factory init --upgrade` flag is a v0.0.9+ candidate.
+- **Lockstep bump even for unchanged packages.** harness/spec-review/context/twin didn't change in v0.0.8 but bumped to 0.0.8 anyway. Matches the v0.0.5 / v0.0.6 / v0.0.7 publish-coordination pattern; keeps the scaffold's `^0.0.8` deps uniformly resolvable.
+- **Section content is locked, prose is flexible.** The spec locked the section heading (`## Multi-spec products`) and the structural elements (named commands, code block, auto-install note); the exact wording is implementation-flexible so future doc edits don't trip the structural tests.
+
+---
+
 ## [0.0.7] — 2026-05-02
 
 **Theme: real-product workflow.** Three deliverables that together collapse the multi-spec-product friction quantified in the v0.0.6 BASELINE run (32 manual interventions per 4-spec product → ~8): a `/scope-project` slash command, a `depends-on` frontmatter field, and a `factory-runtime run-sequence` CLI subcommand. The maintainer now decomposes one product description with one slash command and ships the resulting spec set with one `run-sequence` invocation; provenance threads the entire product DAG under one `factory-sequence` record.

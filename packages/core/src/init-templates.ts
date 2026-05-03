@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 // Embedded templates for `factory init`. Kept separate from init.ts so the
 // raw strings are easy to review and unit-test against the slugify scaffold.
 
@@ -9,13 +11,13 @@ export const PACKAGE_JSON_TEMPLATE = {
   type: 'module',
   scripts: {},
   dependencies: {
-    '@wifo/factory-context': '^0.0.7',
-    '@wifo/factory-core': '^0.0.7',
-    '@wifo/factory-runtime': '^0.0.7',
+    '@wifo/factory-context': '^0.0.8',
+    '@wifo/factory-core': '^0.0.8',
+    '@wifo/factory-runtime': '^0.0.8',
   },
   devDependencies: {
     '@types/bun': '^1.1.14',
-    '@wifo/factory-spec-review': '^0.0.7',
+    '@wifo/factory-spec-review': '^0.0.8',
   },
 } as const;
 
@@ -53,6 +55,17 @@ export const GITIGNORE_TEMPLATE = `node_modules
 .DS_Store
 .factory-spec-review-cache
 `;
+
+// Reads the bundled `/scope-project` slash-command markdown shipped in the
+// npm tarball at `<package-root>/commands/scope-project.md`. Resolves relative
+// to this module's location so it works in source-tree (src/init-templates.ts
+// → ../commands/scope-project.md) and post-build (dist/init-templates.js →
+// ../commands/scope-project.md) contexts identically. Internal-only — NOT
+// exported from `core/src/index.ts`.
+export function readScopeProjectCommandTemplate(): string {
+  const url = new URL('../commands/scope-project.md', import.meta.url);
+  return readFileSync(url, 'utf8');
+}
 
 // Canonical defaults documented for the v0.0.5 URL-shortener workflow. Users
 // edit to taste; CLI flags always override. Internal-only — NOT exported from
@@ -100,6 +113,26 @@ pnpm exec factory-context tree <runId> --dir ./.factory --direction down
 # 6. Archive the shipped spec
 /finish-task <id>
 \`\`\`
+
+## Multi-spec products
+
+Real products are sequences of 4-6 specs in dependency order — \`/scope-project\` decomposes a product description into that DAG, and \`factory-runtime run-sequence\` walks it.
+
+\`\`\`sh
+# Decompose a product description into 4-6 ordered specs:
+/scope-project A URL shortener with click tracking. JSON-over-HTTP, in-memory.
+
+# Lint + review the first spec:
+pnpm exec factory spec lint docs/specs/
+pnpm exec factory spec review docs/specs/<first-id>.md
+
+# Walk the dependency DAG:
+pnpm exec factory-runtime run-sequence docs/specs/ --no-judge
+\`\`\`
+
+\`factory init\` writes \`.claude/commands/scope-project.md\` automatically — the slash command is available in any Claude Code session opened in this project, with no user-level install required.
+
+For a single feature (one spec, not a product), use \`/scope-task\` — it lives in your user-level \`~/.claude/commands/\` and applies to every project.
 
 ## Layout
 

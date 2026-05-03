@@ -29,6 +29,20 @@ Longitudinal evidence that the factory is actually getting better, version by ve
 | Top friction points | 3-5 ranked, mapped to BACKLOG entries |
 | Predictions vs actuals | Did the predicted friction land? What surprised? |
 
+### Baseline reset events
+
+A baseline reset is what happens when the factory's API changes enough that the canonical prompt no longer measures the current toolchain honestly — the prompt instructs the agent against using tools that now exist, or relies on workflow steps the runtime now collapses. When this trigger fires, the existing prompt is archived under a versioned filename and a fresh canonical is written.
+
+**Forward-compat invariant for every reset:** the prior prompt MUST be archived under `docs/baselines/<product>-prompt-vX.Y.Z-vA.B.C.md` (where the version range names the era the archived prompt was canonical for) and the reset MUST be linked from this section. The archived file is byte-identical to the pre-reset prompt EXCEPT for a one-line dated marker prepended at the top so a reader landing on the archived file knows it is not the live canonical. The rename uses `git mv` (not delete + add) so `git log --follow` traces the file's history through every prior commit on the original path. Every reset event entry below names the date, the trigger, the archived path, and the new canonical's entry point.
+
+#### v0.0.8 reset — 2026-05-03
+
+- **Date:** 2026-05-03.
+- **Trigger:** v0.0.7 shipped `/scope-project` + `depends-on:` frontmatter + `factory-runtime run-sequence`. The pre-v0.0.7 prompt explicitly told the agent those tools didn't exist yet ("`/scope-project` is a v0.0.6 deliverable — it doesn't ship until later", hardcoded four-spec decomposition body, per-spec workflow listing manual lint/review/run/move-to-done steps). The v0.0.7 BASELINE entry confirmed the agent dutifully followed those instructions and produced a friction list mirroring what the prompt told it to expect — the new tools were live on npm but invisible because the prompt instructed against using them.
+- **Archived path:** [`docs/baselines/url-shortener-prompt-v0.0.5-v0.0.7.md`](./docs/baselines/url-shortener-prompt-v0.0.5-v0.0.7.md). The archived file's first line is a dated marker (`# URL shortener — canonical baseline prompt (v0.0.5–v0.0.7 era; archived 2026-05-03)`); the rest is byte-identical to the prompt that was canonical from v0.0.5 ship through v0.0.7 ship.
+- **New canonical entry point:** `/scope-project A URL shortener with click tracking and JSON stats. JSON-over-HTTP, in-memory, no auth.` followed by `pnpm exec factory-runtime run-sequence docs/specs/`. The product under test is unchanged (URL shortener with click tracking and JSON stats endpoint; in-memory; no auth) — only the workflow framing changes.
+- **Methodology invariant preserved:** the new canonical is byte-stable from v0.0.8 onward until the next API-change-driven reset.
+
 ---
 
 ## Canonical products

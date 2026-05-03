@@ -25,7 +25,9 @@ Drops a minimal scaffold: `package.json` (semver deps), self-contained `tsconfig
 
 Idempotent and safe by default: if any target file or directory already exists, exits `2` with a list of conflicts and does NOT write anything (no `--force` flag).
 
-The scaffold's `package.json` pins `@wifo/factory-*` deps to `^0.0.5` — `pnpm install` resolves them from the public npm registry.
+The scaffold's `package.json` pins `@wifo/factory-*` deps to `^0.0.8` — `pnpm install` resolves them from the public npm registry.
+
+The scaffolded `README.md` includes a `## Multi-spec products` section documenting the canonical v0.0.7+ flow (`/scope-project` → `factory spec lint` → `factory-runtime run-sequence`) so a maintainer reading the generated project knows which command to reach for. The slash command source at `<cwd>/.claude/commands/scope-project.md` is dropped automatically — no manual `cp` step needed.
 
 ### factory.config.json (v0.0.5.1+)
 
@@ -59,9 +61,13 @@ A Claude Code slash command that takes a natural-language product description an
 
 **Install:**
 
+`factory init` (v0.0.8+) drops the canonical `/scope-project` source at the project's `.claude/commands/scope-project.md` automatically — every fresh `factory init` picks up the slash command zero-config. The bundled source ships with `@wifo/factory-core` at `node_modules/@wifo/factory-core/commands/scope-project.md`.
+
+For users who want the command available across all projects (user-level), copy it into your dotfiles:
+
 ```sh
-# Copy the canonical source into your dotfiles. Symlink works too.
-cp docs/commands/scope-project.md ~/.claude/commands/scope-project.md
+# Copy the bundled source into your dotfiles. Symlink works too.
+cp node_modules/@wifo/factory-core/commands/scope-project.md ~/.claude/commands/scope-project.md
 ```
 
 **Invoke (inside a project repo, after `factory init`):**

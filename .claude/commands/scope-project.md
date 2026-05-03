@@ -1,1 +1,1 @@
-../../docs/commands/scope-project.md
+../../packages/core/commands/scope-project.md

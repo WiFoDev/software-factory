@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import type { CliIo } from './cli.js';
 import { GITIGNORE_TEMPLATE } from './init-templates.js';
 import { runInit } from './init.js';
@@ -83,7 +91,7 @@ describe('runInit — happy path', () => {
       .replace(/[^a-z0-9_-]+/g, '-')
       .replace(/^-+/, '');
     expect(pkg.name).toBe(expectedName);
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.7');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.8');
 
     // tsconfig.json is self-contained.
     const tsconfig = JSON.parse(readFileSync(join(dir, 'tsconfig.json'), 'utf8'));
@@ -155,7 +163,7 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     run(['--name', 'test'], io.io);
     expect(io.exitCode()).toBe(0);
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.7');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.8');
     // Existing devDep stays alongside.
     expect(pkg.devDependencies['@types/bun']).toBeDefined();
   });
@@ -188,6 +196,73 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
         noJudge: false,
       },
     });
+  });
+
+  test('scaffold writes .claude/commands/scope-project.md byte-identical to bundled source', () => {
+    const io = makeIo();
+    run(['--name', 'test'], io.io);
+    expect(io.exitCode()).toBe(0);
+    const scaffolded = join(dir, '.claude/commands/scope-project.md');
+    expect(existsSync(scaffolded)).toBe(true);
+    const canonical = resolve(import.meta.dir, '..', 'commands', 'scope-project.md');
+    expect(readFileSync(scaffolded, 'utf8')).toBe(readFileSync(canonical, 'utf8'));
+  });
+
+  test('scaffold .claude/commands/scope-project.md is a regular file, not a symlink', () => {
+    const io = makeIo();
+    run(['--name', 'test'], io.io);
+    expect(io.exitCode()).toBe(0);
+    const scaffolded = join(dir, '.claude/commands/scope-project.md');
+    const stat = lstatSync(scaffolded);
+    expect(stat.isSymbolicLink()).toBe(false);
+    expect(stat.isFile()).toBe(true);
+  });
+
+  test('scaffold dependencies pin @wifo/factory-* at ^0.0.8', () => {
+    const io = makeIo();
+    run(['--name', 'test'], io.io);
+    expect(io.exitCode()).toBe(0);
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.8');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.8');
+    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.8');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.8');
+  });
+
+  test('scaffold README contains Multi-spec products section', () => {
+    const io = makeIo();
+    run(['--name', 'test'], io.io);
+    expect(io.exitCode()).toBe(0);
+    const readme = readFileSync(join(dir, 'README.md'), 'utf8');
+    expect(readme).toContain('## Multi-spec products');
+    expect(readme).toContain('/scope-project');
+    expect(readme).toContain('factory-runtime run-sequence');
+    expect(readme).toContain('.claude/commands/scope-project.md');
+  });
+
+  test('scaffold is self-contained: README + slash command + config + deps all at v0.0.8', () => {
+    const io = makeIo();
+    run(['--name', 'test'], io.io);
+    expect(io.exitCode()).toBe(0);
+
+    // README documents the multi-spec flow.
+    const readme = readFileSync(join(dir, 'README.md'), 'utf8');
+    expect(readme).toContain('## Multi-spec products');
+    expect(readme).toContain('/scope-project');
+    expect(readme).toContain('factory-runtime run-sequence');
+
+    // Slash command is auto-installed.
+    expect(existsSync(join(dir, '.claude/commands/scope-project.md'))).toBe(true);
+
+    // factory.config.json provides defaults (v0.0.5.1+).
+    expect(existsSync(join(dir, 'factory.config.json'))).toBe(true);
+
+    // package.json deps at ^0.0.8.
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.8');
+    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.8');
+    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.8');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.8');
   });
 });
 

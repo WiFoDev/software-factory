@@ -1,6 +1,6 @@
 {
   "name": "@wifo/factory-harness",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "Scenario runner for software-factory specs — runs `test:` satisfaction lines and scores `judge:` lines via LLM",
   "license": "MIT",
   "author": "Luis (WiFoDev)",

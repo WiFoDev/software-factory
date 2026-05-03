@@ -4,7 +4,29 @@ This file is the **direction**. `BACKLOG.md` is the candidate pile. The roadmap 
 
 ---
 
-## Where we are: v0.0.7 — shipped
+## Where we are: v0.0.8 — shipped
+
+**Theme: discoverability + baseline reset.** The v0.0.7 BASELINE run (2026-05-03) shipped a critical finding: v0.0.7's three deliverables (`/scope-project`, `depends-on`, `run-sequence`) were on npm but invisible to a fresh-repo agent — `factory init` didn't auto-install the slash command, the scaffold README didn't mention `run-sequence`, and the canonical baseline prompt explicitly told the agent those tools didn't exist. v0.0.8 closes all three gaps so v0.0.7's value is actually exercised.
+
+### What v0.0.8 added
+
+| # | Piece | Notes |
+|---|---|---|
+| 1 | **Baseline prompt reset** *(docs/baselines)* | Archived `docs/baselines/url-shortener-prompt.md` as `url-shortener-prompt-v0.0.5-v0.0.7.md`. Wrote a fresh canonical opening with `/scope-project A URL shortener with click tracking…` + `factory-runtime run-sequence docs/specs/`. The new prompt measures the v0.0.7+ flow honestly. `BASELINE.md` documents the methodology reset event. |
+| 2 | **`factory init` bundles `/scope-project`** *(factory-core)* | Canonical source moves from `docs/commands/` to `packages/core/commands/scope-project.md` (ships in npm tarball via `files` glob extension). `factory init` writes the bundled source to `<cwd>/.claude/commands/scope-project.md` zero-config. Internal helper `readScopeProjectCommandTemplate()` resolves via `import.meta.url`. |
+| 3 | **Scaffold README `## Multi-spec products` section** *(factory-core)* | New section in `init-templates.ts`'s `README_TEMPLATE` documents the canonical v0.0.7+ flow: `/scope-project` → `factory spec lint` → `factory-runtime run-sequence`. Notes that `factory init` writes the slash command automatically. Scannable not tutorial. |
+
+### Reconciliations worth knowing
+
+- **All 6 packages bumped to 0.0.8 in lockstep.** Even packages that didn't change (context, twin, harness, spec-review, runtime) bumped — matches v0.0.5 / v0.0.6 / v0.0.7 publish-coordination pattern; keeps the scaffold's `^0.0.8` deps uniformly resolvable.
+- **The discoverability gap was the binding constraint.** Pre-v0.0.7 BASELINE the v0.0.8 plan was DoD-verifier + worktree sandbox + PostToolUse hook + CI publish. The v0.0.7 BASELINE evidence re-ranked entirely. DoD-verifier and friends slip to v0.0.9+.
+- **Slash command is a regular file, not a symlink.** Cross-platform reliability — symlinks don't survive `npm pack`/`npm install` consistently. The in-repo `.claude/commands/scope-project.md` IS a symlink (dogfooding); the scaffolded copy is a plain-file write.
+- **No retroactive backports.** Projects scaffolded before v0.0.8 don't auto-pick-up the new section or slash command — users either re-run `factory init` or copy by hand. `factory init --upgrade` is a v0.0.9+ candidate.
+- **Public API surface unchanged across every package.** All changes are field-level on already-exported types or internal-only helpers. Strict-equality DoD per package still holds (29 / 21 / 10 / 18 / ~16 / ~7).
+
+---
+
+## Where we were: v0.0.7 — shipped
 
 **Theme: real-product workflow.** Three deliverables that together collapse the multi-spec-product friction quantified in the v0.0.6 BASELINE run (32 manual interventions per 4-spec product → ~8): a `/scope-project` slash command, a `depends-on` frontmatter field, and a `factory-runtime run-sequence` CLI subcommand. The maintainer now decomposes one product description with one slash command and ships the resulting spec set with one `run-sequence` invocation.
 
@@ -141,31 +163,23 @@ What's in your hands today:
 
 ---
 
-## v0.0.8 — next
+## v0.0.9 — next
 
-**Theme: discoverability + baseline reset.** The v0.0.7 BASELINE run (2026-05-03) shipped a critical finding: v0.0.7's three deliverables (`/scope-project`, `depends-on`, `run-sequence`) live on npm but are invisible to a fresh-repo agent because (a) `factory init`'s scaffold doesn't auto-install `/scope-project` into `.claude/commands/`, and (b) the canonical baseline prompt explicitly tells the agent those tools don't exist (the prompt was authored when they were future work). v0.0.8 closes both gaps so v0.0.7's value is actually exercised.
+**Theme: TBD — pending v0.0.8 BASELINE re-run.** With discoverability closed (v0.0.8), re-run the URL-shortener BASELINE against the new prompt and let the friction list pick the next theme. Lead candidates from the v0.0.7→v0.0.8 deferral pile below.
 
-### Lead candidates (post-v0.0.7 BASELINE evidence)
+### Lead candidates (carried from v0.0.8)
 
-| # | Piece | Notes |
-|---|---|---|
-| 1 | **Baseline prompt reset** *(methodology task, not a code change)* | Archive `docs/baselines/url-shortener-prompt.md` as `url-shortener-prompt-v0.0.5-v0.0.7.md`. Write a fresh canonical that opens with `/scope-project A URL shortener with click tracking…` and continues with `factory-runtime run-sequence docs/specs/`. The new prompt measures the v0.0.7+ flow honestly; the v0.0.8 BASELINE re-run depends on this landing first. |
-| 2 | **`factory init` scaffold drops `/scope-project`** *(factory-core)* | New `.claude/commands/scope-project.md` written by `factory init` so any fresh project picks up the slash command zero-config. Source-of-truth move: relocate the canonical from `docs/commands/scope-project.md` to `packages/core/commands/scope-project.md` so it ships in the npm tarball. Pairs with #1 — without this, the new prompt fails on a fresh-repo agent. |
-| 3 | **Scaffold README points at `run-sequence`** *(factory-core)* | The current `init-templates.ts` README_TEMPLATE doesn't mention `factory-runtime run-sequence` or `/scope-project`. Add a "Multi-spec products" section to the scaffold README so a maintainer reading the generated project knows which command to reach for. ~30 LOC. |
-
-### Deferred from v0.0.7 to v0.0.8 (kept but de-prioritized)
-
-- **PostToolUse hook for `factory spec lint`/`review`** — opt-in config recipe in `~/.claude/settings.json`. Pairs naturally with #2 above (both make Claude Code aware of factory tooling).
-- **CI publish workflow** — tag-driven GitHub Actions. v0.0.7 manual publishing went smoothly; defer one more release.
-- **DoD-verifier runtime phase** — audit-trust gap surfaced by v0.0.6 BASELINE. ~300 LOC. Now de-prioritized below the discoverability work because v0.0.7's BASELINE proved discoverability is the binding constraint, not DoD coverage.
+- **PostToolUse hook for `factory spec lint`/`review`** — opt-in config recipe in `~/.claude/settings.json`. Pairs naturally with v0.0.8's `factory init` slash-command drop (both make Claude Code aware of factory tooling).
+- **CI publish workflow** — tag-driven GitHub Actions. v0.0.7+v0.0.8 manual publishing went smoothly; defer one more release if friction is still elsewhere.
+- **DoD-verifier runtime phase** — audit-trust gap surfaced by v0.0.6 BASELINE. ~300 LOC. Promote when discoverability stops being the bottleneck — i.e., once the v0.0.8 BASELINE confirms `/scope-project` + `run-sequence` are reachable zero-config.
 
 ### Scope discipline
 
-The v0.0.7 BASELINE result re-ranked v0.0.8 entirely. Pre-v0.0.7 plan was DoD-verifier + worktree sandbox + PostToolUse hook + CI publish. Post-v0.0.7 evidence: discoverability is the actual ceiling. Ship the prompt reset + scaffold drop together as a coherent v0.0.8; everything else slips one slot. After v0.0.8 lands, re-run the URL-shortener BASELINE against the new prompt to validate that the friction list finally shrinks.
+v0.0.7 → v0.0.8 was a discoverability close-out. v0.0.9 picks up wherever the v0.0.8 BASELINE evidence points; don't pre-commit. The roadmap's anchor — `BASELINE.md`'s friction list shrinking version-over-version — is the binding constraint.
 
 ---
 
-## v0.0.9+ — future
+## v0.0.10+ — future
 
 The post-discoverability work. Roughly ordered by leverage; not committed.
 

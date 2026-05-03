@@ -35,14 +35,15 @@ function readPackageJson(rel: string): PackageJson {
 }
 
 describe('publish-meta — workspace package metadata (S-1)', () => {
-  test('every workspace package has v0.0.7 + publishConfig + npm metadata fields', () => {
+  test('every workspace package has v0.0.8 + publishConfig + npm metadata fields', () => {
     for (const name of WORKSPACE_PACKAGES) {
       const pkgPath = `packages/${name}/package.json`;
       const pkg = readPackageJson(pkgPath);
 
-      // v0.0.7 — the real-product workflow cluster (/scope-project,
-      // depends-on, run-sequence) — coordinated bump across all six packages.
-      expect(pkg.version).toMatch(/^0\.0\.7$/);
+      // v0.0.8 — discoverability + baseline reset cluster (factory init drops
+      // /scope-project, scaffold README documents the multi-spec flow,
+      // baseline prompt reset) — coordinated bump across all six packages.
+      expect(pkg.version).toMatch(/^0\.0\.8$/);
       expect(pkg.license).toBe('MIT');
       expect(pkg.author).toBe('Luis (WiFoDev)');
 
@@ -77,6 +78,36 @@ describe('publish-meta — pnpm pack --dry-run (S-2)', () => {
     /^node_modules\//,
   ];
 
+  test('pnpm pack --dry-run for factory-core includes commands/scope-project.md', () => {
+    const pkgDir = join(REPO_ROOT, 'packages', 'core');
+    const distDir = join(pkgDir, 'dist');
+
+    if (!existsSync(distDir)) {
+      // Build hasn't run; skip the tarball assertion. CI runs `pnpm -r build`
+      // before this suite, so the skip path is only for ad-hoc bun runs.
+      return;
+    }
+
+    const stdout = execSync('npm pack --dry-run --json', {
+      cwd: pkgDir,
+      encoding: 'utf8',
+    });
+    const parsed = JSON.parse(stdout) as Array<{
+      name: string;
+      version: string;
+      files: Array<{ path: string }>;
+    }>;
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.length).toBeGreaterThan(0);
+    const tarball = parsed[0];
+    expect(tarball).toBeDefined();
+    if (!tarball) return;
+
+    expect(tarball.name).toBe('@wifo/factory-core');
+    const paths = tarball.files.map((f) => f.path);
+    expect(paths).toContain('commands/scope-project.md');
+  });
+
   test('pnpm pack --dry-run produces clean tarballs across all packages', () => {
     for (const name of WORKSPACE_PACKAGES) {
       const pkgDir = join(REPO_ROOT, 'packages', name);
@@ -105,12 +136,19 @@ describe('publish-meta — pnpm pack --dry-run (S-2)', () => {
       if (!tarball) continue;
 
       expect(tarball.name).toBe(`@wifo/factory-${name}`);
-      expect(tarball.version).toMatch(/^0\.0\.7$/);
+      expect(tarball.version).toMatch(/^0\.0\.8$/);
 
       const paths = tarball.files.map((f) => f.path);
       expect(paths).toContain('README.md');
       expect(paths).toContain('LICENSE');
       expect(paths.some((p) => p.startsWith('dist/'))).toBe(true);
+
+      // factory-core ships the bundled `/scope-project` slash-command source
+      // at `commands/scope-project.md` so `factory init` can read it at
+      // install time and write it into a fresh project's `.claude/commands/`.
+      if (name === 'core') {
+        expect(paths).toContain('commands/scope-project.md');
+      }
 
       for (const p of paths) {
         for (const forbidden of FORBIDDEN_PATH_PATTERNS) {

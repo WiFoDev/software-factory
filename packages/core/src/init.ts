@@ -8,6 +8,7 @@ import {
   PACKAGE_JSON_TEMPLATE,
   README_TEMPLATE,
   TSCONFIG_TEMPLATE,
+  readScopeProjectCommandTemplate,
 } from './init-templates.js';
 
 // npm package-name basics — lowercase alphanumerics, dashes, underscores.
@@ -31,6 +32,10 @@ function planFiles(name: string): PlannedFile[] {
     {
       relPath: 'factory.config.json',
       contents: `${JSON.stringify(FACTORY_CONFIG_TEMPLATE, null, 2)}\n`,
+    },
+    {
+      relPath: '.claude/commands/scope-project.md',
+      contents: readScopeProjectCommandTemplate(),
     },
     { relPath: 'README.md', contents: README_TEMPLATE.replaceAll('{{name}}', name) },
     { relPath: 'src/.gitkeep', contents: '' },
