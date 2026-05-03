@@ -151,6 +151,26 @@ Two friction points surfaced in the v0.0.6 baseline (see `BASELINE.md` v0.0.6 en
 
 ---
 
+## Refine `spec/wide-blast-radius` heuristic — threshold of 8 fires on 18 historical specs *(NEW, surfaced by v0.0.9 ship)*
+
+**What:** v0.0.9 added the `spec/wide-blast-radius` lint warning at >= 8 distinct file paths in `## Subtasks`. Running it against the v0.0.9 cluster + every shipped spec under `docs/specs/done/` produces **18 warnings on existing specs** — including small ones like `factory-core-v0-0-5-1` (9 paths) and `factory-runtime-v0-0-5-2` (8 paths) that converged in single-iteration runs without budget pressure. The heuristic catches the v0.0.8 self-build's failure mode (12-file spec) but also normal-shape specs that ship cleanly.
+
+**Why:** The threshold + path-detection regex were locked at design time on n=1 evidence (one v0.0.8 self-build timeout). Empirically, ≥ 8 distinct paths is the modal shape for shipped specs, not the failure-mode shape. The lint as-shipped emits noise; future scoping runs will see the warning fire on every spec the agent writes, and the maintainer/agent will start ignoring it. Better to refine before that habit forms.
+
+**Shape options:**
+- (a) Raise threshold to 12 (matches the v0.0.8 self-build failure case more tightly; the v0.0.6 BASELINE noted ~50-200 LOC sweet spot, which empirically translates to <12 file paths).
+- (b) Refine the path-detection regex to count only paths that look like NEW files (e.g., paths inside subtasks with `[NEW FILE]` or `[feature]` markers vs `[chore]` / version-bump references). Distinguishes "creates 12 new files" (high blast radius) from "edits version field in 12 package.json files" (mechanical, low risk).
+- (c) Per-subtask path counting — the regex counts paths PER SUBTASK; warning fires when any single subtask references >= 4 distinct paths. Catches "fat subtask" specifically.
+- (d) Add a `# NOQA: spec/wide-blast-radius` directive recognized by the lint (e.g., as an HTML comment in the spec body) so authors can opt out per-spec when the count is intentional and budget is appropriate.
+
+Lean: (a) + (d) together. Raising the threshold to 12 catches the actual failure-mode shape; the noqa directive lets chore-coordinator specs explicitly opt out. (b) and (c) are more sophisticated but harder to calibrate without more baseline runs.
+
+**Touches:** `packages/core/src/lint.ts` (threshold constant change + optional noqa parser), tests in `lint.test.ts` (rewrite the threshold tests), updates to existing v0.0.5+ specs in `done/` to add `# NOQA` if the warning shouldn't fire on them. ~50 LOC.
+
+**Phasing suggestion:** v0.0.10 lead candidate. Pairs with whatever v0.0.10 ships (probably a small cluster — DoD-verifier work has been deferred long enough; or worktree sandbox).
+
+---
+
 ## Scaffold ships `scripts: { typecheck, test, check }` matching its DoD claims *(NEW, surfaced by v0.0.8 BASELINE)*
 
 **What:** `factory init` produces a scaffold whose `package.json` has `scripts: {}` (empty), but every spec template's default DoD says "typecheck + lint + tests green" and the `internal-consistency` reviewer judge flags the gap as a finding. Only `bun test src` works in a fresh scaffold; `pnpm typecheck`, `pnpm lint`/`pnpm check`, and `pnpm test` are all aspirational until the maintainer adds them by hand.
@@ -244,6 +264,19 @@ Lean: ship (b) + (c) together in v0.0.9. (a) is too crude. (d) is v0.1.0+ territ
 **Touches:** `packages/core/commands/scope-project.md` (move from `docs/commands/`), `packages/core/package.json` (add to `files` glob), `packages/core/src/init.ts` + `init-templates.ts` (planFiles for `.claude/commands/scope-project.md`), tests, README updates. Optional: a `factory commands install` subcommand for retrofitting existing projects.
 
 **Phasing suggestion:** v0.0.8 candidate. Pairs naturally with the PostToolUse hook recipe (also deferred to v0.0.8) — both are "make Claude Code aware of factory tooling" workflow polish.
+
+---
+
+## Shipped in v0.0.9 (kept here briefly for history)
+
+The "close v0.0.8 BASELINE friction list" cluster shipped in v0.0.9 (commit `ded0863`). Four LIGHT specs, scoped via `/scope-project` (second clean dogfood) + run via `factory-runtime run-sequence` with `--max-agent-timeout-ms 1200000` (20min escape hatch — the v0.0.9 per-spec field lands in this very cluster):
+
+- ✅ **`agent-timeout-ms` frontmatter field + `spec/wide-blast-radius` lint** — wide-blast specs declare their own budget; lint catches scope-creep at scoping time. Threshold of 8 fires too aggressively on historical specs → v0.0.10 calibration entry above.
+- ✅ **Scaffold `scripts: { typecheck, test, check, build }` + `biome.json` + biome devDep** — fresh `factory init` projects' DoD claims are now runnable.
+- ✅ **`run-sequence` skips `status: drafting` by default + `--include-drafting` flag** — closes the gap documented in v0.0.7 spec but never enforced. Two prior baselines (self-build + URL-shortener) flagged it.
+- ✅ **`internal-consistency` judge gains `depends-on`-awareness** — closes the false-positive on shared constraints in multi-spec products. Reuses v0.0.7's existing dep-loading machinery.
+
+**v0.0.9 dogfood summary:** scope-project produced 4 specs cleanly; run-sequence converged 4/4 in one invocation (32 min wall-clock). No agent timeout (the explicit 20min CLI flag worked). Test surface: 544 → 581. Public API surface unchanged across all six packages. The v0.0.9 BASELINE re-run (against the URL-shortener canonical) is the next maintainer-driven step.
 
 ---
 
