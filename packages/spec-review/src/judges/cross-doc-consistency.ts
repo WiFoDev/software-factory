@@ -1,14 +1,15 @@
 import type { Spec } from '@wifo/factory-core';
 import type { SlicedSections } from '../slice-sections.js';
-import type { JudgeDef } from './index.js';
+import type { JudgeApplicabilityCtx, JudgeDef, JudgePromptCtx } from './index.js';
 
 const CRITERION =
-  'The spec and its paired technical-plan agree on every load-bearing ' +
-  'detail: the names of error codes mentioned, the public API names ' +
-  'enumerated, default values, the deferral / anti-goals list. Any ' +
-  'disagreement should be flagged. The principle: a tech-plan that ' +
-  "drifts from the spec it claims to implement isn't a tech-plan; it's " +
-  'a different proposal.';
+  'The spec and its paired technical-plan (and any depends-on specs) agree ' +
+  'on every load-bearing detail: the names of error codes mentioned, the ' +
+  'public API names enumerated, default values, the deferral / anti-goals ' +
+  'list. Any disagreement should be flagged. The principle: a tech-plan ' +
+  "that drifts from the spec it claims to implement isn't a tech-plan; " +
+  "it's a different proposal. A spec that names a depends-on dep should " +
+  "use the dep's exported names accurately.";
 
 const ARTIFACT_CAP_BYTES = 100_000;
 
@@ -27,12 +28,19 @@ function capBytes(text: string): string {
 export const CROSS_DOC_CONSISTENCY_JUDGE: JudgeDef = {
   code: 'review/cross-doc-consistency',
   defaultSeverity: 'warning',
-  applies(_spec: Spec, ctx: { hasTechnicalPlan: boolean }): boolean {
-    return ctx.hasTechnicalPlan;
+  applies(_spec: Spec, ctx: JudgeApplicabilityCtx): boolean {
+    return ctx.hasTechnicalPlan || ctx.depsCount > 0;
   },
-  buildPrompt(spec: Spec, _sliced: SlicedSections, ctx: { technicalPlan?: string }) {
-    const plan = ctx.technicalPlan ?? '';
-    const artifact = capBytes(`## Spec\n${spec.body}\n\n## Technical Plan\n${plan}`);
+  buildPrompt(spec: Spec, _sliced: SlicedSections, ctx: JudgePromptCtx) {
+    const sections: string[] = [`## Spec\n${spec.body}`];
+    if (typeof ctx.technicalPlan === 'string' && ctx.technicalPlan.length > 0) {
+      sections.push(`## Technical Plan\n${ctx.technicalPlan}`);
+    }
+    if (ctx.deps !== undefined && ctx.deps.length > 0) {
+      const depsBody = ctx.deps.map((d) => `### ${d.id}\n${d.body}`).join('\n\n');
+      sections.push(`## Deps\n${depsBody}`);
+    }
+    const artifact = capBytes(sections.join('\n\n'));
     return {
       criterion: CRITERION,
       artifact,

@@ -187,6 +187,44 @@ describe('factory spec review CLI', () => {
     expect(r.stderr).toContain('review/invalid-timeout-ms');
   });
 
+  test('CLI loads depends-on dep from docs/specs/ and threads it to cross-doc-consistency', async () => {
+    const specsDir = join(dir, 'docs', 'specs');
+    mkdirSync(specsDir, { recursive: true });
+    const counterFile = join(dir, 'counter');
+    writeFileSync(join(specsDir, 'helper.md'), VALID_SPEC);
+    const dependentSpec = VALID_SPEC.replace(
+      'status: ready\n',
+      'status: ready\ndepends-on:\n  - helper\n',
+    );
+    writeFileSync(join(specsDir, 'dependent.md'), dependentSpec);
+    const r = await runCliProc(
+      ['--claude-bin', FAKE_JUDGE, '--cache-dir', cacheDir, join(specsDir, 'dependent.md')],
+      { FAKE_JUDGE_MODE: 'pass', FAKE_JUDGE_COUNTER_FILE: counterFile },
+    );
+    expect(r.exitCode).toBe(0);
+    const counter = Number((await Bun.file(counterFile).text()).trim());
+    // VALID_SPEC has 1 scenario; with deps loaded, cross-doc-consistency
+    // applies via depsCount > 0 (no plan):
+    //   internal-consistency + dod-precision + cross-doc-consistency = 3.
+    expect(counter).toBe(3);
+  });
+
+  test('CLI emits review/dep-not-found warning when declared dep is missing', async () => {
+    const specsDir = join(dir, 'docs', 'specs');
+    mkdirSync(specsDir, { recursive: true });
+    const dependentSpec = VALID_SPEC.replace(
+      'status: ready\n',
+      'status: ready\ndepends-on:\n  - ghost\n',
+    );
+    writeFileSync(join(specsDir, 'dependent.md'), dependentSpec);
+    const r = await runCliProc(
+      ['--claude-bin', FAKE_JUDGE, '--cache-dir', cacheDir, join(specsDir, 'dependent.md')],
+      { FAKE_JUDGE_MODE: 'pass' },
+    );
+    expect(r.stderr).toContain('review/dep-not-found');
+    expect(r.stderr).toContain("'ghost'");
+  });
+
   test('auto-resolves paired technical-plan: docs/specs/<id>.md ↔ docs/technical-plans/<id>.md', async () => {
     const specsDir = join(dir, 'docs', 'specs');
     const planDir = join(dir, 'docs', 'technical-plans');

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { SpecFrontmatterSchema } from './schema';
+import { KEBAB_ID_REGEX, SpecFrontmatterSchema } from './schema';
 
 describe('SpecFrontmatterSchema', () => {
   test('parses a valid frontmatter object', () => {
@@ -75,5 +75,55 @@ describe('SpecFrontmatterSchema', () => {
       exemplars: [{ path: 'src/foo.ts' }],
     });
     expect(parsed.success).toBe(false);
+  });
+
+  test('SpecFrontmatterSchema accepts depends-on with kebab-case ids', () => {
+    const result = SpecFrontmatterSchema.parse({
+      id: 'demo-6',
+      classification: 'light',
+      type: 'feat',
+      status: 'ready',
+      'depends-on': ['foo-bar', 'baz-qux'],
+    });
+    expect(result['depends-on']).toEqual(['foo-bar', 'baz-qux']);
+  });
+
+  test('SpecFrontmatterSchema defaults depends-on to empty array when absent', () => {
+    const result = SpecFrontmatterSchema.parse({
+      id: 'demo-7',
+      classification: 'light',
+      type: 'feat',
+      status: 'ready',
+    });
+    expect(result['depends-on']).toEqual([]);
+  });
+
+  test('SpecFrontmatterSchema accepts empty depends-on array', () => {
+    const result = SpecFrontmatterSchema.parse({
+      id: 'demo-8',
+      classification: 'light',
+      type: 'feat',
+      status: 'ready',
+      'depends-on': [],
+    });
+    expect(result['depends-on']).toEqual([]);
+  });
+});
+
+describe('KEBAB_ID_REGEX', () => {
+  test('matches valid kebab-case ids', () => {
+    expect(KEBAB_ID_REGEX.test('foo')).toBe(true);
+    expect(KEBAB_ID_REGEX.test('foo-bar')).toBe(true);
+    expect(KEBAB_ID_REGEX.test('factory-runtime-v0-0-7')).toBe(true);
+    expect(KEBAB_ID_REGEX.test('a1-b2-c3')).toBe(true);
+  });
+
+  test('rejects invalid ids', () => {
+    expect(KEBAB_ID_REGEX.test('Foo')).toBe(false);
+    expect(KEBAB_ID_REGEX.test('1foo')).toBe(false);
+    expect(KEBAB_ID_REGEX.test('-foo')).toBe(false);
+    expect(KEBAB_ID_REGEX.test('foo_bar')).toBe(false);
+    expect(KEBAB_ID_REGEX.test('foo bar')).toBe(false);
+    expect(KEBAB_ID_REGEX.test('')).toBe(false);
   });
 });

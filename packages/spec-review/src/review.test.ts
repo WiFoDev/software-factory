@@ -270,6 +270,40 @@ describe('runReview — applicability + section-missing', () => {
     expect(findings.find((f) => f.code === 'review/judge-parity')).toBeUndefined();
   });
 
+  test('runReview threads deps through to cross-doc-consistency judge', async () => {
+    const cacheDir2 = mkdtempSync(join(tmpdir(), 'spec-review-deps-'));
+    try {
+      const m = makeMockClient();
+      await runReview({
+        specPath: 'demo.md',
+        spec: fullSpec(),
+        judgeClient: m.client,
+        cacheDir: cacheDir2,
+        deps: [{ id: 'helper', body: '## Helper\nbody' }],
+      });
+      // cross-doc-consistency now applies via depsCount > 0 even without a plan.
+      // Total = 4 default-enabled judges that apply to a clean spec WITH deps.
+      // Compare against a no-deps run on the same spec.
+      const cacheDirNoDeps = mkdtempSync(join(tmpdir(), 'spec-review-no-deps-'));
+      try {
+        const m2 = makeMockClient();
+        await runReview({
+          specPath: 'demo.md',
+          spec: fullSpec(),
+          judgeClient: m2.client,
+          cacheDir: cacheDirNoDeps,
+        });
+        // The deps run must have invoked cross-doc-consistency; the no-deps
+        // run must have skipped it (no technical-plan, no deps).
+        expect(m.invocations()).toBeGreaterThan(m2.invocations());
+      } finally {
+        await Bun.$`rm -rf ${cacheDirNoDeps}`.quiet().nothrow();
+      }
+    } finally {
+      await Bun.$`rm -rf ${cacheDir2}`.quiet().nothrow();
+    }
+  });
+
   test('dod-precision: missing DoD section → review/section-missing info finding', async () => {
     const noDodBody = [
       '## Intent',

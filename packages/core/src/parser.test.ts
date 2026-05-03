@@ -65,6 +65,20 @@ describe('parseSpec', () => {
     expect(spec.raw.filename).toBe('demo.md');
   });
 
+  test('parseSpec exposes depends-on on frontmatter (defaults to empty array)', () => {
+    const spec = parseSpec(VALID_SPEC, { filename: 'demo.md' });
+    expect(spec.frontmatter['depends-on']).toEqual([]);
+  });
+
+  test('parseSpec exposes depends-on on frontmatter (populated)', () => {
+    const withDeps = VALID_SPEC.replace(
+      'status: ready\n',
+      'status: ready\ndepends-on:\n  - foo-bar\n  - baz-qux\n',
+    );
+    const spec = parseSpec(withDeps, { filename: 'demo.md' });
+    expect(spec.frontmatter['depends-on']).toEqual(['foo-bar', 'baz-qux']);
+  });
+
   test('throws SpecParseError on schema failure with line pointing into YAML block', () => {
     const broken = VALID_SPEC.replace('id: demo-1\n', '');
     let caught: SpecParseError | null = null;

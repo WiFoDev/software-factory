@@ -11,10 +11,23 @@ import { JUDGE_PARITY_JUDGE } from './judge-parity.js';
 export interface JudgeApplicabilityCtx {
   hasTechnicalPlan: boolean;
   hasDod: boolean;
+  /**
+   * v0.0.7 — number of declared depends-on specs the caller successfully
+   * loaded. Defaults to 0 for backward-compat with pre-v0.0.7 callers that
+   * only pass hasTechnicalPlan + hasDod.
+   */
+  depsCount: number;
 }
 
 export interface JudgePromptCtx {
   technicalPlan?: string;
+  /**
+   * v0.0.7 — depends-on specs loaded from disk (caller's responsibility).
+   * Each entry is `{ id, body }` where body is the spec's source minus
+   * frontmatter. The cross-doc-consistency judge factors these into its
+   * artifact.
+   */
+  deps?: ReadonlyArray<{ id: string; body: string }>;
 }
 
 export interface JudgePromptOutput {
@@ -73,6 +86,7 @@ export function ruleSetHash(): string {
         type: 'feat',
         status: 'ready',
         exemplars: [],
+        'depends-on': [],
       },
       body: '',
       scenarios: [],

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { SpecParseError, parseSpec } from '@wifo/factory-core';
+import { KEBAB_ID_REGEX, SpecParseError, parseSpec, splitFrontmatter } from '@wifo/factory-core';
 import { claudeCliJudgeClient } from './claude-cli-judge-client.js';
 import { type ReviewFinding, formatFindings } from './findings.js';
 import { defaultEnabledJudges, type loadJudgeRegistry } from './judges/index.js';
@@ -188,6 +188,37 @@ export async function runReviewCli(args: string[], io: CliIo = defaultIo): Promi
     const techPath = technicalPlanOverride ?? autoResolveTechnicalPlan(file);
     const technicalPlan = techPath !== undefined ? readTextOr(techPath) : undefined;
 
+    // v0.0.7 — load depends-on specs for cross-doc-consistency. Walk
+    // <projectRoot>/docs/specs/<id>.md then docs/specs/done/<id>.md.
+    // projectRoot is inferred from the spec file's location: docs/specs/...
+    // → trim two levels. Best-effort; missing deps emit
+    // `review/dep-not-found` warnings but do not block the review.
+    const declaredDeps = spec.frontmatter['depends-on'] ?? [];
+    const deps: { id: string; body: string }[] = [];
+    const depWarnings: ReviewFinding[] = [];
+    if (declaredDeps.length > 0) {
+      const projectRoot = inferProjectRoot(file);
+      for (const depId of declaredDeps) {
+        if (!KEBAB_ID_REGEX.test(depId)) continue;
+        const candidates = [
+          resolve(projectRoot, 'docs', 'specs', `${depId}.md`),
+          resolve(projectRoot, 'docs', 'specs', 'done', `${depId}.md`),
+        ];
+        const found = candidates.find((p) => existsSync(p));
+        if (found === undefined) {
+          depWarnings.push({
+            file: rel,
+            severity: 'warning',
+            code: 'review/dep-not-found',
+            message: `depends-on: '${depId}' not found under docs/specs/ or docs/specs/done/`,
+          });
+          continue;
+        }
+        const depSource = readFileSync(found, 'utf8');
+        deps.push({ id: depId, body: bodyOnly(depSource) });
+      }
+    }
+
     let findings: ReviewFinding[];
     try {
       findings = await runReview({
@@ -197,8 +228,10 @@ export async function runReviewCli(args: string[], io: CliIo = defaultIo): Promi
         cacheDir,
         ...(judges !== undefined ? { judges } : {}),
         ...(technicalPlan !== undefined ? { technicalPlan } : {}),
+        ...(deps.length > 0 ? { deps } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       });
+      findings = [...depWarnings, ...findings];
     } catch (err) {
       // runReview itself doesn't throw — but a bug here would hit this path.
       const msg = err instanceof Error ? err.message : String(err);
@@ -270,6 +303,34 @@ function readTextOr(path: string): string | undefined {
     return readFileSync(path, 'utf8');
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Infer the project root from a spec's path. Specs that live under
+ * `docs/specs/` (or `docs/specs/done/`) are at depth 2 or 3 below the
+ * project root; trim accordingly. Falls back to the cwd if the path
+ * doesn't follow the convention.
+ */
+function inferProjectRoot(specFile: string): string {
+  if (specFile.includes('/docs/specs/done/')) {
+    return specFile.split('/docs/specs/done/')[0] ?? process.cwd();
+  }
+  if (specFile.includes('/docs/specs/')) {
+    return specFile.split('/docs/specs/')[0] ?? process.cwd();
+  }
+  return process.cwd();
+}
+
+/**
+ * Strip frontmatter from a spec source, returning only the body. Used
+ * when packing dep specs into the cross-doc-consistency artifact.
+ */
+function bodyOnly(source: string): string {
+  try {
+    return splitFrontmatter(source).body;
+  } catch {
+    return source;
   }
 }
 

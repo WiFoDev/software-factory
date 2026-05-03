@@ -12,7 +12,8 @@ export type ReviewCode =
   | 'review/holdout-distinctness'
   | 'review/cross-doc-consistency'
   | 'review/judge-failed'
-  | 'review/section-missing';
+  | 'review/section-missing'
+  | 'review/dep-not-found';
 
 export interface ReviewFinding {
   file?: string;

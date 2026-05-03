@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+/**
+ * Canonical spec id pattern. Lowercase alphanumeric kebab-case, must start
+ * with a letter. Used to validate `depends-on` entries in `lintSpec`; not
+ * retroactively enforced on `SpecFrontmatter.id` itself.
+ */
+export const KEBAB_ID_REGEX = /^[a-z][a-z0-9-]*$/;
+
 export const SpecClassificationSchema = z.enum(['light', 'deep']);
 export type SpecClassification = z.infer<typeof SpecClassificationSchema>;
 
@@ -24,6 +31,7 @@ export const SpecFrontmatterSchema = z
     type: SpecTypeSchema,
     status: SpecStatusSchema,
     exemplars: z.array(SpecExemplarSchema).default([]),
+    'depends-on': z.array(z.string()).default([]),
   })
   .strict();
 export type SpecFrontmatter = z.infer<typeof SpecFrontmatterSchema>;

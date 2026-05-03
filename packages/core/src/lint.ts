@@ -1,7 +1,9 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { YAMLParseError, parse as parseYaml } from 'yaml';
 import { FrontmatterError, splitFrontmatter } from './frontmatter.js';
 import { findSection, parseScenarios } from './scenarios.js';
-import { type Scenario, SpecFrontmatterSchema } from './schema.js';
+import { KEBAB_ID_REGEX, type Scenario, SpecFrontmatterSchema } from './schema.js';
 
 export type LintSeverity = 'error' | 'warning';
 
@@ -15,6 +17,13 @@ export interface LintError {
 
 export interface LintOptions {
   filename?: string;
+  /**
+   * v0.0.7 — when set, `lintSpec` validates each `depends-on` entry resolves
+   * to a file under `<cwd>/docs/specs/<id>.md` or `<cwd>/docs/specs/done/<id>.md`,
+   * emitting a `spec/depends-on-missing` warning when missing. Absent → only
+   * id-format checks run. CLI sets this; programmatic callers may opt out.
+   */
+  cwd?: string;
 }
 
 export function lintSpec(source: string, opts: LintOptions = {}): LintError[] {
@@ -59,8 +68,10 @@ export function lintSpec(source: string, opts: LintOptions = {}): LintError[] {
     }
   }
 
+  let parsedFrontmatter: ReturnType<typeof SpecFrontmatterSchema.safeParse> | undefined;
   if (yamlValue !== null && yamlValue !== undefined) {
     const parsed = SpecFrontmatterSchema.safeParse(yamlValue);
+    parsedFrontmatter = parsed;
     if (!parsed.success) {
       for (const issue of parsed.error.issues) {
         const path = issue.path.join('.') || '<root>';
@@ -92,6 +103,39 @@ export function lintSpec(source: string, opts: LintOptions = {}): LintError[] {
             severity: 'warning',
             code: 'frontmatter/unknown-field',
             message: `Unknown frontmatter field: ${key}`,
+          });
+        }
+      }
+    }
+  }
+
+  // v0.0.7 — depends-on validation. Runs only when frontmatter parsed cleanly.
+  if (parsedFrontmatter?.success === true) {
+    const deps = parsedFrontmatter.data['depends-on'];
+    for (let i = 0; i < deps.length; i++) {
+      const entry = deps[i];
+      if (entry === undefined) continue;
+      if (!KEBAB_ID_REGEX.test(entry)) {
+        push({
+          line: split.yamlStartLine,
+          severity: 'error',
+          code: 'spec/invalid-depends-on',
+          message: `depends-on[${i}]: '${entry}' does not match kebab-case id pattern (^[a-z][a-z0-9-]*$)`,
+        });
+      }
+    }
+    if (opts.cwd !== undefined) {
+      const cwd = opts.cwd;
+      for (const entry of deps) {
+        if (!KEBAB_ID_REGEX.test(entry)) continue;
+        const activePath = resolve(cwd, 'docs', 'specs', `${entry}.md`);
+        const donePath = resolve(cwd, 'docs', 'specs', 'done', `${entry}.md`);
+        if (!existsSync(activePath) && !existsSync(donePath)) {
+          push({
+            line: split.yamlStartLine,
+            severity: 'warning',
+            code: 'spec/depends-on-missing',
+            message: `depends-on: '${entry}' not found under docs/specs/ or docs/specs/done/`,
           });
         }
       }
@@ -130,6 +174,21 @@ export function lintSpec(source: string, opts: LintOptions = {}): LintError[] {
   }
 
   return errors;
+}
+
+/**
+ * Read a spec file from disk and lint it. The default `cwd` is the spec's
+ * `<file>/../..` (i.e., the project root if the spec lives under `docs/specs/`).
+ * Pass `opts.cwd` explicitly to override.
+ */
+export function lintSpecFile(filePath: string, opts: LintOptions = {}): LintError[] {
+  const source = readFileSync(filePath, 'utf8');
+  const cwd = opts.cwd ?? resolve(filePath, '..', '..', '..');
+  return lintSpec(source, {
+    ...opts,
+    filename: opts.filename ?? filePath,
+    cwd,
+  });
 }
 
 function lintScenario(scenario: Scenario): Omit<LintError, 'file'>[] {

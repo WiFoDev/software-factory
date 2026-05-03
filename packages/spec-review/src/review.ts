@@ -21,6 +21,11 @@ export interface RunReviewOptions {
   cacheDir?: string;
   technicalPlanPath?: string;
   technicalPlan?: string;
+  /**
+   * v0.0.7 — depends-on specs the caller loaded from disk. Threaded through
+   * to judges (notably cross-doc-consistency) via JudgePromptCtx.
+   */
+  deps?: ReadonlyArray<{ id: string; body: string }>;
   log?: (line: string) => void;
   // Forwarded to JudgeClient.judge — defaults preserve subscription-auth
   // semantics (model is locked by `claude -p`'s active session anyway).
@@ -54,6 +59,7 @@ export async function runReview(opts: RunReviewOptions): Promise<ReviewFinding[]
   const ctx: JudgeApplicabilityCtx = {
     hasTechnicalPlan: typeof opts.technicalPlan === 'string' && opts.technicalPlan.length > 0,
     hasDod: sliced.dod !== undefined,
+    depsCount: opts.deps?.length ?? 0,
   };
   const findings: ReviewFinding[] = [];
 
@@ -94,6 +100,7 @@ export async function runReview(opts: RunReviewOptions): Promise<ReviewFinding[]
     try {
       prompt = judge.buildPrompt(opts.spec, sliced, {
         ...(opts.technicalPlan !== undefined ? { technicalPlan: opts.technicalPlan } : {}),
+        ...(opts.deps !== undefined ? { deps: opts.deps } : {}),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

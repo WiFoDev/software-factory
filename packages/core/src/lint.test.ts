@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { lintSpec } from './lint';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { lintSpec, lintSpecFile } from './lint';
 
 const REPO_ROOT = resolve(import.meta.dir, '../../..');
 
@@ -141,6 +143,146 @@ describe('lintSpec', () => {
     expect(errs.some((e) => e.code === 'frontmatter/yaml')).toBe(true);
   });
 
+  test('lintSpec emits spec/invalid-depends-on for non-kebab-case entries', () => {
+    const broken = validSpec().replace(
+      'status: ready\n',
+      'status: ready\ndepends-on:\n  - GoodId\n  - 1starts-with-digit\n  - good-one\n',
+    );
+    const errs = lintSpec(broken);
+    const invalid = errs.filter((e) => e.code === 'spec/invalid-depends-on');
+    expect(invalid).toHaveLength(2);
+    expect(invalid[0]?.message).toContain("depends-on[0]: 'GoodId'");
+    expect(invalid[0]?.severity).toBe('error');
+    expect(invalid[1]?.message).toContain("depends-on[1]: '1starts-with-digit'");
+  });
+
+  test('lintSpec accepts kebab-case depends-on entries without error', () => {
+    const ok = validSpec().replace(
+      'status: ready\n',
+      'status: ready\ndepends-on:\n  - good-id\n  - also-good\n',
+    );
+    const errs = lintSpec(ok);
+    expect(errs.filter((e) => e.code === 'spec/invalid-depends-on')).toHaveLength(0);
+  });
+
+  test('lintSpec with empty depends-on emits no error', () => {
+    const ok = validSpec().replace('status: ready\n', 'status: ready\ndepends-on: []\n');
+    const errs = lintSpec(ok);
+    expect(errs).toEqual([]);
+  });
+
+  test('lintSpec with cwd option warns when depends-on entry has no matching file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lint-deps-'));
+    try {
+      mkdirSync(join(dir, 'docs', 'specs'), { recursive: true });
+      const parent = validSpec().replace(
+        'status: ready\n',
+        'status: ready\ndepends-on:\n  - missing-dep\n',
+      );
+      writeFileSync(join(dir, 'docs', 'specs', 'parent.md'), parent);
+      const errs = lintSpec(parent, { cwd: dir });
+      const warning = errs.find((e) => e.code === 'spec/depends-on-missing');
+      expect(warning).toBeDefined();
+      if (!warning) return;
+      expect(warning.severity).toBe('warning');
+      expect(warning.message).toContain("'missing-dep'");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('lintSpec with cwd option finds dep under docs/specs/done/ subdirectory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lint-deps-'));
+    try {
+      mkdirSync(join(dir, 'docs', 'specs', 'done'), { recursive: true });
+      writeFileSync(join(dir, 'docs', 'specs', 'done', 'child.md'), validSpec());
+      const parent = validSpec().replace(
+        'status: ready\n',
+        'status: ready\ndepends-on:\n  - child\n',
+      );
+      const errs = lintSpec(parent, { cwd: dir });
+      expect(errs.filter((e) => e.code === 'spec/depends-on-missing')).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('lintSpec with cwd option finds dep under active docs/specs/ directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lint-deps-'));
+    try {
+      mkdirSync(join(dir, 'docs', 'specs'), { recursive: true });
+      writeFileSync(join(dir, 'docs', 'specs', 'child.md'), validSpec());
+      const parent = validSpec().replace(
+        'status: ready\n',
+        'status: ready\ndepends-on:\n  - child\n',
+      );
+      const errs = lintSpec(parent, { cwd: dir });
+      expect(errs.filter((e) => e.code === 'spec/depends-on-missing')).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('lintSpec without cwd option does not check file existence', () => {
+    const parent = validSpec().replace(
+      'status: ready\n',
+      'status: ready\ndepends-on:\n  - any-name\n',
+    );
+    const errs = lintSpec(parent);
+    expect(errs.filter((e) => e.code === 'spec/depends-on-missing')).toHaveLength(0);
+  });
+
+  test('lintSpec skips file existence check for entries that fail id-format', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lint-deps-'));
+    try {
+      mkdirSync(join(dir, 'docs', 'specs'), { recursive: true });
+      const parent = validSpec().replace(
+        'status: ready\n',
+        'status: ready\ndepends-on:\n  - BadId\n',
+      );
+      const errs = lintSpec(parent, { cwd: dir });
+      // Only the id-format error fires; no missing-file warning for invalid ids.
+      expect(errs.some((e) => e.code === 'spec/invalid-depends-on')).toBe(true);
+      expect(errs.some((e) => e.code === 'spec/depends-on-missing')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('lintSpecFile', () => {
+  test('reads a file and lints it with default cwd inferred', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lint-file-'));
+    try {
+      mkdirSync(join(dir, 'docs', 'specs'), { recursive: true });
+      const filePath = join(dir, 'docs', 'specs', 'demo.md');
+      writeFileSync(filePath, validSpec());
+      expect(lintSpecFile(filePath)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('lintSpecFile resolves dep files relative to inferred cwd', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lint-file-'));
+    try {
+      mkdirSync(join(dir, 'docs', 'specs'), { recursive: true });
+      writeFileSync(join(dir, 'docs', 'specs', 'child.md'), validSpec());
+      const parent = validSpec().replace(
+        'status: ready\n',
+        'status: ready\ndepends-on:\n  - child\n',
+      );
+      const parentPath = join(dir, 'docs', 'specs', 'parent.md');
+      writeFileSync(parentPath, parent);
+      const errs = lintSpecFile(parentPath);
+      expect(errs.filter((e) => e.code === 'spec/depends-on-missing')).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('lintSpec — SPEC_TEMPLATE remains canonical', () => {
   test('SPEC_TEMPLATE.md is canonical (lints clean)', () => {
     // The SPEC_TEMPLATE.md file documents the format using fenced code blocks
     // — it is NOT itself a spec. Build a representative spec from the

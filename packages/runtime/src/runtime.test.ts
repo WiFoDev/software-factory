@@ -28,6 +28,7 @@ function makeSpec(id = 'spec-x'): Spec {
       type: 'feat',
       status: 'ready',
       exemplars: [],
+      'depends-on': [],
     },
     body: '',
     scenarios: [],
