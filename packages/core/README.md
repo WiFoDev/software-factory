@@ -25,7 +25,7 @@ Drops a minimal scaffold: `package.json` (semver deps), self-contained `tsconfig
 
 Idempotent and safe by default: if any target file or directory already exists, exits `2` with a list of conflicts and does NOT write anything (no `--force` flag).
 
-The scaffold's `package.json` pins `@wifo/factory-*` deps to `^0.0.8` — `pnpm install` resolves them from the public npm registry.
+The scaffold's `package.json` pins `@wifo/factory-*` deps to `^0.0.10` — `pnpm install` resolves them from the public npm registry.
 
 The scaffolded `README.md` includes a `## Multi-spec products` section documenting the canonical v0.0.7+ flow (`/scope-project` → `factory spec lint` → `factory-runtime run-sequence`) so a maintainer reading the generated project knows which command to reach for. The slash command source at `<cwd>/.claude/commands/scope-project.md` is dropped automatically — no manual `cp` step needed.
 
@@ -83,9 +83,13 @@ The slash command writes 4-6 spec files under `docs/specs/`. Run `factory spec l
 
 The single-task analog of `/scope-project`. Lives under `~/.claude/commands/scope-task.md` (predates v0.0.7's "ship in repo" pattern). Documents the canonical spec skeleton + tier classification (LIGHT vs DEEP).
 
-## Harness-enforced spec linting + review (Claude Code hook recipe)
+## Harness-enforced spec linting + review
 
-Both `factory spec lint` and `factory spec review` are most valuable when they run on every save — but agents forget to run them. The fix is harness-enforced: a [Claude Code `PostToolUse` hook](https://docs.claude.com/en/docs/claude-code/hooks) runs both checkers automatically whenever the agent writes a spec file. Harness-enforced means the hook fires regardless of whether the agent remembered to run the linter — drop this into your settings to make the agent literally unable to forget.
+Both `factory spec lint` and `factory spec review` are most valuable when they run on every save — but agents forget to run them, and so do humans. v0.0.10 ships **two complementary enforcement paths**: a Claude Code `PostToolUse` hook for the agent path, and `factory spec watch` for the terminal path. Use either; use both.
+
+### Path A — Claude Code `PostToolUse` hook (agent path)
+
+A [Claude Code `PostToolUse` hook](https://docs.claude.com/en/docs/claude-code/hooks) runs both checkers automatically whenever the agent writes a spec file. The hook fires regardless of whether the agent remembered to run the linter — drop this into your settings to make the agent literally unable to forget.
 
 Add to `~/.claude/settings.json`:
 
@@ -95,7 +99,7 @@ Add to `~/.claude/settings.json`:
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
-        "command": "if [ \"${CLAUDE_PROJECT_DIR}/${CLAUDE_FILE_PATH}\" = *docs/specs/*.md ]; then pnpm exec factory spec lint \"$CLAUDE_FILE_PATH\" && pnpm exec factory spec review \"$CLAUDE_FILE_PATH\" --no-cache; fi"
+        "command": "if [ \"${CLAUDE_PROJECT_DIR}/${CLAUDE_FILE_PATH}\" = *docs/specs/*.md ]; then pnpm exec factory spec lint \"$CLAUDE_FILE_PATH\" && pnpm exec factory spec review --no-cache \"$CLAUDE_FILE_PATH\"; fi"
       }
     ]
   }
@@ -107,6 +111,45 @@ The shell guard ensures the hook only fires for writes under `docs/specs/*.md` �
 **Failure mode.** `PostToolUse` fires AFTER the write completes, so a failing review surfaces as a notification the agent sees on its next turn — it is not a blocked write. If the agent shipped a bad spec, the hook tells the user (and the agent), and the user can revert or trigger a fix on the next turn. The window between a bad write and the next agent turn is the only exposure.
 
 This recipe is intentionally **opt-in** — `factory init` does not touch `~/.claude/`, and there is no `factory hook install` command. Drop the block in by hand if you want it; leave it out if you don't.
+
+### Path B — `factory spec watch <path>` (terminal path)
+
+For users who don't run Claude Code, or who want the same enforcement when editing specs by hand in their editor: run `factory spec watch <path>` in another terminal. It watches the directory tree for `*.md` changes and re-runs `factory spec lint` (and optionally `factory spec review --no-cache`) on every save.
+
+```sh
+# Lint on every save:
+pnpm exec factory spec watch docs/specs/
+
+# Lint + review on every save (review is cache-bypassed in watch mode):
+pnpm exec factory spec watch docs/specs/ --review
+
+# Override the claude binary path (test/CI injection):
+pnpm exec factory spec watch docs/specs/ --review --claude-bin /path/to/claude
+
+# Tune the per-file debounce window (default 200ms):
+pnpm exec factory spec watch docs/specs/ --debounce-ms 500
+```
+
+Per-file debouncing collapses editor batch-saves into a single lint invocation per save burst (default 200ms window). Non-`*.md` files are ignored. SIGINT (Ctrl-C) exits cleanly with code 0.
+
+The hook (Path A) and the watcher (Path B) are independent — pick whichever matches your workflow, or run both. Both are opt-in; neither is installed by `factory init`.
+
+### Lint codes — threshold + NOQA suppression (v0.0.10)
+
+`spec/wide-blast-radius` fires when `## Subtasks` references `>= 12` distinct file paths (raised from `8` in v0.0.10 — the v0.0.8 self-build's actual implement-phase timeout case touched 12 files). Specs touching 8-11 paths no longer warn.
+
+Intentionally-wide chore-coordinator specs can suppress the warning per-spec with an HTML-comment NOQA directive placed anywhere in the spec body (NOT in the YAML frontmatter — frontmatter rejects unknown keys):
+
+```markdown
+<!-- NOQA: spec/wide-blast-radius -->
+```
+
+Forms recognized:
+- `<!-- NOQA: spec/wide-blast-radius -->` — suppress one specific code.
+- `<!-- NOQA: spec/wide-blast-radius, spec/depends-on-missing -->` — comma-separated list.
+- `<!-- NOQA -->` or `<!-- NOQA: -->` — blanket suppression for every `spec/*` warning on this spec.
+
+Scope is per-spec (whole-document), NOT per-line. Severity-`error` codes (e.g., `spec/invalid-depends-on`) are NEVER suppressed by NOQA — only warnings.
 
 ## Status
 

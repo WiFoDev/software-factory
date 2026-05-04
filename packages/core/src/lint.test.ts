@@ -232,10 +232,12 @@ describe('lintSpec', () => {
     expect(errs.filter((e) => e.code === 'spec/depends-on-missing')).toHaveLength(0);
   });
 
-  test('lintSpec emits spec/wide-blast-radius when Subtasks names >= 8 distinct file paths', () => {
-    const sample = [
+  test('lintSpec wide-blast-radius threshold is 12 not 8', () => {
+    // 11 distinct paths — below the v0.0.10 threshold of 12, so NO warning
+    // (under the v0.0.9 threshold of 8 this would have fired).
+    const elevenPaths = [
       '---',
-      'id: demo-wbr',
+      'id: demo-11',
       'classification: light',
       'type: feat',
       'status: ready',
@@ -250,38 +252,76 @@ describe('lintSpec', () => {
       '    - test: src/foo.test.ts',
       '',
       '## Subtasks',
-      '- T1 — touches `packages/core/src/a.ts`',
-      '- T2 — touches `packages/core/src/b.ts`',
-      '- T3 — touches `packages/core/src/c.ts`',
-      '- T4 — touches `packages/runtime/src/d.ts`',
-      '- T5 — touches `packages/runtime/src/e.ts`',
-      '- T6 — touches `packages/runtime/src/f.ts`',
-      '- T7 — touches `docs/specs/g.md`',
-      '- T8 — touches `docs/specs/h.md`',
-      '- T9 — touches `docs/specs/i.md`',
+      '- T1 — `packages/core/src/a.ts`',
+      '- T2 — `packages/core/src/b.ts`',
+      '- T3 — `packages/core/src/c.ts`',
+      '- T4 — `packages/core/src/d.ts`',
+      '- T5 — `packages/core/src/e.ts`',
+      '- T6 — `packages/core/src/f.ts`',
+      '- T7 — `packages/core/src/g.ts`',
+      '- T8 — `packages/core/src/h.ts`',
+      '- T9 — `packages/core/src/i.ts`',
+      '- T10 — `packages/core/src/j.ts`',
+      '- T11 — `packages/core/src/k.ts`',
       '',
     ].join('\n');
-    const errs = lintSpec(sample);
+    const errs = lintSpec(elevenPaths);
+    expect(errs.filter((e) => e.code === 'spec/wide-blast-radius')).toHaveLength(0);
+  });
+
+  test('lintSpec emits warning at exactly 12 paths', () => {
+    const twelvePaths = [
+      '---',
+      'id: demo-12',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+      '## Subtasks',
+      '- T1 — `packages/core/src/a.ts`',
+      '- T2 — `packages/core/src/b.ts`',
+      '- T3 — `packages/core/src/c.ts`',
+      '- T4 — `packages/core/src/d.ts`',
+      '- T5 — `packages/core/src/e.ts`',
+      '- T6 — `packages/core/src/f.ts`',
+      '- T7 — `packages/core/src/g.ts`',
+      '- T8 — `packages/core/src/h.ts`',
+      '- T9 — `packages/core/src/i.ts`',
+      '- T10 — `packages/core/src/j.ts`',
+      '- T11 — `packages/core/src/k.ts`',
+      '- T12 — `packages/core/src/l.ts`',
+      '',
+    ].join('\n');
+    const errs = lintSpec(twelvePaths);
     const warnings = errs.filter((e) => e.code === 'spec/wide-blast-radius');
     expect(warnings).toHaveLength(1);
     const w = warnings[0];
     if (!w) return;
     expect(w.severity).toBe('warning');
     expect(w.message).toBe(
-      '## Subtasks references 9 distinct file paths; specs touching >= 8 files commonly exceed the 600s implement-phase budget. Consider splitting or setting agent-timeout-ms in frontmatter.',
+      '## Subtasks references 12 distinct file paths; specs touching >= 12 files commonly exceed the 600s implement-phase budget. Consider splitting or setting agent-timeout-ms in frontmatter.',
     );
-    // Heading line should point at `## Subtasks` (1-indexed line of the `## Subtasks` heading).
-    expect(w.line).toBe(16);
   });
 
-  test('lintSpec does not emit spec/wide-blast-radius for < 8 paths', () => {
+  test('NOQA directive suppresses wide-blast-radius warning', () => {
     const sample = [
       '---',
-      'id: demo-narrow',
+      'id: demo-noqa-wbr',
       'classification: light',
       'type: feat',
       'status: ready',
       '---',
+      '',
+      '<!-- NOQA: spec/wide-blast-radius -->',
       '',
       '## Scenarios',
       '**S-1** — happy',
@@ -292,17 +332,117 @@ describe('lintSpec', () => {
       '    - test: src/foo.test.ts',
       '',
       '## Subtasks',
-      '- T1 — touches `packages/core/src/a.ts`',
-      '- T2 — touches `packages/core/src/b.ts`',
-      '- T3 — touches `packages/core/src/c.ts`',
-      '- T4 — touches `packages/core/src/d.ts`',
-      '- T5 — touches `packages/core/src/e.ts`',
-      '- T6 — touches `packages/core/src/f.ts`',
-      '- T7 — touches `packages/core/src/g.ts`',
+      '- T1 — `packages/core/src/a.ts`',
+      '- T2 — `packages/core/src/b.ts`',
+      '- T3 — `packages/core/src/c.ts`',
+      '- T4 — `packages/core/src/d.ts`',
+      '- T5 — `packages/core/src/e.ts`',
+      '- T6 — `packages/core/src/f.ts`',
+      '- T7 — `packages/core/src/g.ts`',
+      '- T8 — `packages/core/src/h.ts`',
+      '- T9 — `packages/core/src/i.ts`',
+      '- T10 — `packages/core/src/j.ts`',
+      '- T11 — `packages/core/src/k.ts`',
+      '- T12 — `packages/core/src/l.ts`',
+      '- T13 — `packages/core/src/m.ts`',
+      '- T14 — `packages/core/src/n.ts`',
+      '- T15 — `packages/core/src/o.ts`',
+      '- T16 — `packages/core/src/p.ts`',
+      '- T17 — `packages/core/src/q.ts`',
+      '- T18 — `packages/core/src/r.ts`',
       '',
     ].join('\n');
     const errs = lintSpec(sample);
     expect(errs.filter((e) => e.code === 'spec/wide-blast-radius')).toHaveLength(0);
+  });
+
+  test('NOQA is per-code (different code does not suppress)', () => {
+    const sample = [
+      '---',
+      'id: demo-noqa-other',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '<!-- NOQA: spec/different-code -->',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+      '## Subtasks',
+      '- T1 — `packages/core/src/a.ts`',
+      '- T2 — `packages/core/src/b.ts`',
+      '- T3 — `packages/core/src/c.ts`',
+      '- T4 — `packages/core/src/d.ts`',
+      '- T5 — `packages/core/src/e.ts`',
+      '- T6 — `packages/core/src/f.ts`',
+      '- T7 — `packages/core/src/g.ts`',
+      '- T8 — `packages/core/src/h.ts`',
+      '- T9 — `packages/core/src/i.ts`',
+      '- T10 — `packages/core/src/j.ts`',
+      '- T11 — `packages/core/src/k.ts`',
+      '- T12 — `packages/core/src/l.ts`',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    // Different-code NOQA does NOT suppress wide-blast-radius — it still fires.
+    expect(errs.filter((e) => e.code === 'spec/wide-blast-radius')).toHaveLength(1);
+  });
+
+  test('blank NOQA suppresses all spec warnings', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lint-noqa-blanket-'));
+    try {
+      mkdirSync(join(dir, 'docs', 'specs'), { recursive: true });
+      // Spec with TWO spec/* warnings: wide-blast-radius (>=12 paths) AND
+      // depends-on-missing (entry that does not resolve under cwd).
+      const sample = [
+        '---',
+        'id: demo-noqa-blanket',
+        'classification: light',
+        'type: feat',
+        'status: ready',
+        'depends-on:',
+        '  - missing-dep-noqa',
+        '---',
+        '',
+        '<!-- NOQA -->',
+        '',
+        '## Scenarios',
+        '**S-1** — happy',
+        '  Given a',
+        '  When b',
+        '  Then c',
+        '  Satisfaction:',
+        '    - test: src/foo.test.ts',
+        '',
+        '## Subtasks',
+        '- T1 — `packages/core/src/a.ts`',
+        '- T2 — `packages/core/src/b.ts`',
+        '- T3 — `packages/core/src/c.ts`',
+        '- T4 — `packages/core/src/d.ts`',
+        '- T5 — `packages/core/src/e.ts`',
+        '- T6 — `packages/core/src/f.ts`',
+        '- T7 — `packages/core/src/g.ts`',
+        '- T8 — `packages/core/src/h.ts`',
+        '- T9 — `packages/core/src/i.ts`',
+        '- T10 — `packages/core/src/j.ts`',
+        '- T11 — `packages/core/src/k.ts`',
+        '- T12 — `packages/core/src/l.ts`',
+        '',
+      ].join('\n');
+      writeFileSync(join(dir, 'docs', 'specs', 'demo.md'), sample);
+      const errs = lintSpec(sample, { cwd: dir });
+      expect(errs.filter((e) => e.code === 'spec/wide-blast-radius')).toHaveLength(0);
+      expect(errs.filter((e) => e.code === 'spec/depends-on-missing')).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('lintSpec emits spec/wide-blast-radius regardless of agent-timeout-ms declaration', () => {
@@ -372,6 +512,10 @@ describe('lintSpec', () => {
       '- T6 — touches `packages/core/src/f.ts`',
       '- T7 — touches `packages/core/src/g.ts`',
       '- T8 — touches `packages/core/src/h.ts`',
+      '- T9 — touches `packages/core/src/i.ts`',
+      '- T10 — touches `packages/core/src/j.ts`',
+      '- T11 — touches `packages/core/src/k.ts`',
+      '- T12 — touches `packages/core/src/l.ts`',
       '',
     ].join('\n');
     const errs = lintSpec(sample);
@@ -379,7 +523,7 @@ describe('lintSpec', () => {
     expect(warnings).toHaveLength(1);
     const w = warnings[0];
     if (!w) return;
-    expect(w.message).toContain('8 distinct file paths');
+    expect(w.message).toContain('12 distinct file paths');
   });
 
   test('wide-blast-radius scanner detects plain-prose paths in Subtasks', () => {
@@ -405,9 +549,13 @@ describe('lintSpec', () => {
       '- T3 — touches packages/core/src/c.ts',
       '- T4 — touches packages/core/src/d.ts',
       '- T5 — touches packages/runtime/src/e.ts',
-      '- T6 — touches docs/specs/f.md',
-      '- T7 — touches README.md and CHANGELOG.md',
-      '- T8 — touches BACKLOG.md',
+      '- T6 — touches packages/runtime/src/f.ts',
+      '- T7 — touches packages/runtime/src/g.ts',
+      '- T8 — touches packages/runtime/src/h.ts',
+      '- T9 — touches packages/runtime/src/i.ts',
+      '- T10 — touches docs/specs/f.md',
+      '- T11 — touches README.md and CHANGELOG.md',
+      '- T12 — touches BACKLOG.md',
       '',
     ].join('\n');
     const errs = lintSpec(sample);
@@ -415,7 +563,7 @@ describe('lintSpec', () => {
     expect(warnings).toHaveLength(1);
     const w = warnings[0];
     if (!w) return;
-    expect(w.message).toContain('9 distinct file paths');
+    expect(w.message).toContain('13 distinct file paths');
   });
 
   test('wide-blast-radius scanner deduplicates repeated paths', () => {
@@ -444,6 +592,10 @@ describe('lintSpec', () => {
       '- T6 — touches `package.json`',
       '- T7 — touches `package.json`',
       '- T8 — touches `package.json`',
+      '- T9 — touches `package.json`',
+      '- T10 — touches `package.json`',
+      '- T11 — touches `package.json`',
+      '- T12 — touches `package.json`',
       '',
     ].join('\n');
     const errs = lintSpec(sample);

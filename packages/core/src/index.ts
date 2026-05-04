@@ -28,10 +28,13 @@ export type { SectionExtract } from './scenarios.js';
 export { FrontmatterError, splitFrontmatter } from './frontmatter.js';
 export type { FrontmatterSplit } from './frontmatter.js';
 
-export { SpecParseError, parseSpec } from './parser.js';
-export type { ParseIssue, ParseSpecOptions } from './parser.js';
+export { SpecParseError, parseDodBullets, parseSpec } from './parser.js';
+export type { DodBullet, ParseIssue, ParseSpecOptions } from './parser.js';
 
 export { lintSpec, lintSpecFile } from './lint.js';
 export type { LintError, LintOptions, LintSeverity } from './lint.js';
 
 export { SPEC_FRONTMATTER_SCHEMA_ID, getFrontmatterJsonSchema } from './json-schema.js';
+
+export { watchSpecs } from './watch.js';
+export type { WatchSpecsOptions } from './watch.js';

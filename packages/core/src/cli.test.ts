@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type CliIo, runCli } from './cli';
@@ -205,5 +205,24 @@ describe('runCli — top-level dispatch', () => {
     expect(io.exitCode()).toBe(2);
     expect(io.stderr()).toContain('factory init');
     expect(io.stderr()).toContain('spec review');
+  });
+});
+
+describe('factory spec watch documentation', () => {
+  const README = resolve(import.meta.dir, '..', 'README.md');
+
+  test('factory spec watch is documented in packages/core/README.md', () => {
+    const text = readFileSync(README, 'utf8');
+    expect(text).toContain('factory spec watch');
+    expect(text).toContain('--review');
+    expect(text).toContain('--debounce-ms');
+  });
+
+  test('Hook recipe is documented in packages/core/README.md', () => {
+    const text = readFileSync(README, 'utf8');
+    expect(text).toContain('PostToolUse');
+    expect(text).toContain('Harness-enforced spec linting');
+    expect(text).toContain('factory spec lint');
+    expect(text).toContain('factory spec review');
   });
 });

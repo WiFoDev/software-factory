@@ -4,7 +4,31 @@ This file is the **direction**. `BACKLOG.md` is the candidate pile. The roadmap 
 
 ---
 
-## Where we are: v0.0.9 — shipped
+## Where we are: v0.0.10 — shipped
+
+**Theme: trust contract — DoD-verifier + reviewer judges = trust on both sides.** The v0.0.9 BASELINE friction list closes via five sibling specs that turn each spec's Definition of Done into a checked contract, tighten the spec-quality teeth, and recalibrate the wide-blast-radius heuristic against empirical data.
+
+### What v0.0.10 added
+
+| # | Piece | Notes |
+|---|---|---|
+| 1 | **DoD-verifier phase** *(factory-runtime)* | New verifier consumes the spec's `## Definition of Done` checklist and surfaces unchecked items as a converge-blocking signal. Public surface: 21 → 23. |
+| 2 | **Three reviewer judges** *(factory-spec-review)* | `feasibility`, `api-surface-drift`, `scope-creep`. Three new `ReviewCode` union members; export count unchanged at 10. |
+| 3 | **`factory spec watch`** *(factory-core)* | Watches a directory tree for `*.md` changes and re-runs lint (and optionally `factory spec review --no-cache`) on every save. Public surface: 29 → 31. |
+| 4 | **`spec/wide-blast-radius` threshold raise (8 → 12) + NOQA suppression directive** *(factory-core)* | Threshold raised based on v0.0.8 self-build evidence + v0.0.9 BASELINE empirical data (18 historical specs warned at threshold 8). New HTML-comment NOQA directive (`<!-- NOQA: spec/wide-blast-radius -->` / blanket `<!-- NOQA -->`) suppresses warnings per-spec; per-code, per-spec scope; never suppresses severity-`error` codes. |
+| 5 | **`run-sequence` polish** *(factory-runtime)* | Workflow ergonomics improvements landed alongside the other v0.0.10 deliverables. |
+
+### Reconciliations worth knowing
+
+- **All 6 packages bumped to 0.0.10 in lockstep.** Even packages that didn't change bumped — matches every prior release's publish-coordination pattern; keeps the scaffold's `^0.0.10` deps uniformly resolvable.
+- **NOQA does NOT suppress errors.** Severity-`error` codes (e.g., `spec/invalid-depends-on`) always fire. Warnings-only by design.
+- **NOQA placement is body-only.** The directive lives in the spec body (HTML comment), NOT in the YAML frontmatter — the schema is `.strict()` and would reject the comment as an unknown key.
+- **No retroactive NOQA additions.** v0.0.10 raises the threshold but does NOT walk the 18 historical specs to add NOQA — most fall below 12 paths after the raise; the rest can opt in on demand.
+- **Public API surface deltas:** core 29 → 33, runtime 21 → 23, spec-review unchanged in count (+3 union members), context/harness/twin unchanged.
+
+---
+
+## Where we were: v0.0.9 — shipped
 
 **Theme: status-aware run-sequence + per-spec timeout + scaffold scripts + dep-aware internal-consistency.** Four small frictions surfaced in the v0.0.8 BASELINE: drafting specs got pulled into `run-sequence`; wide-blast-radius specs hit the 600s agent-timeout ceiling with no per-spec override; the scaffold's `package.json` shipped empty `scripts` even as every spec's DoD claimed they were runnable; `internal-consistency` flagged shared constraints in multi-spec products as unreferenced because it didn't follow `depends-on` edges. v0.0.9 closes all four.
 
@@ -203,22 +227,19 @@ v0.0.7 → v0.0.8 was a discoverability close-out. v0.0.9 picks up wherever the 
 
 ---
 
-## v0.0.10+ — future
+## v0.1.0+ — future
 
-The post-discoverability work. Roughly ordered by leverage; not committed.
+The post-trust-contract work. v0.0.10 closed DoD-verifier + reviewer's deferred judges; what remains is sandboxing, holdout-aware convergence, CI publish, and the autonomous scheduler. Roughly ordered by leverage; not committed.
 
 | Theme | Lead candidate from BACKLOG.md |
 |---|---|
-| **DoD-verifier runtime phase** *(surfaced by v0.0.6 BASELINE; deferred from v0.0.8 by v0.0.7 BASELINE re-rank)* | Today `## Definition of Done` is documentation-only. `factory-runtime run` returns "converged" without verifying DoD shell gates ("typecheck clean", "biome clean"). New `dodPhase` parses shell-runnable DoD lines and executes them. Audit-trust gap, not just UX. ~300 LOC. |
-| **PostToolUse hook for `factory spec lint`/`review`** *(deferred from v0.0.7+v0.0.8)* | Harness-enforced linting on every `Write` to `docs/specs/*.md`. Lives in `~/.claude/settings.json` — opt-in config recipe. |
-| **CI publish workflow** *(deferred from v0.0.7+v0.0.8)* | Promote `pnpm release` to a tag-driven GitHub Actions workflow. |
-| **Worktree sandbox** | Agent runs in an isolated `git worktree` per run. Strong undo by construction. Ship after `/scope-project` proves the product workflow. |
-| **Holdout-aware automated convergence** | Validate runs holdouts at the end of every iteration; convergence requires both visible AND holdout passes. Quality knob; ride alongside worktree. |
+| **Worktree sandbox** *(promoted from v0.0.10+)* | Agent runs in an isolated `git worktree` per run. Strong undo by construction. Most leveraged remaining unlock now that the trust contract has shipped. |
+| **Holdout-aware automated convergence** *(promoted from v0.0.10+)* | Validate runs holdouts at the end of every iteration; convergence requires both visible AND holdout passes. Quality knob; ride alongside worktree. |
+| **CI publish workflow** *(promoted from v0.0.10+)* | Promote `pnpm release` to a tag-driven GitHub Actions workflow. |
+| **PostToolUse hook for `factory spec lint`/`review`** | Harness-enforced linting on every `Write` to `docs/specs/*.md`. Lives in `~/.claude/settings.json` — opt-in config recipe. |
 | **Scheduler (Layer 5)** — autonomous task queue | Pull `status: ready` specs and run them overnight. With `depends-on` declared, the scheduler can walk a project's DAG without human intervention. The end-state. |
-| **Reviewer's deferred judges** | `review/api-surface-drift`, `review/feasibility`, `review/scope-creep`. Each ships per-judge with a "this real spec would have caught X" justification. |
 | **`explorePhase` / `planPhase`** | Separate "understand the codebase" and "plan the change" steps. Speculative — only if a real run shows `implement` is too low-context. |
 | **Domain packs** — schema + judges + twins per domain | `@wifo/factory-pack-web`, `-pack-api`; OLH-specific pack stays private. v1.0.0 territory. |
-| **Streaming cost monitoring** | Mid-stream abort instead of post-hoc. Worth pursuing once cost-cap-exceeded events become common enough. |
 | **Streaming cost monitoring** | Mid-stream abort instead of post-hoc. Worth pursuing once cost-cap-exceeded events become common enough. |
 | **Multi-agent coordination** | Beyond a single agent per phase. Out of scope until single-agent's ceiling is clearly hit. |
 

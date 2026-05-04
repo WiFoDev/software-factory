@@ -3,10 +3,12 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ContextRecord, createContextStore } from '@wifo/factory-context';
-import type { Spec } from '@wifo/factory-core';
+import { type Spec, parseSpec } from '@wifo/factory-core';
 import { z } from 'zod';
 import { RuntimeError } from './errors.js';
 import { definePhase, definePhaseGraph } from './graph.js';
+import { dodPhase } from './phases/dod.js';
+import { validatePhase } from './phases/validate.js';
 import { run } from './runtime.js';
 import type { Phase, PhaseContext, PhaseResult, PhaseStatus } from './types.js';
 
@@ -715,5 +717,76 @@ describe('run() — multi-phase input dedup', () => {
     const graph = definePhaseGraph([phase], []);
     const report = await run({ spec: makeSpec(), graph, contextStore: store });
     expect(report.totalTokens).toBe(100);
+  });
+});
+
+// ----- v0.0.10: H-3 — factory-dod-report walks via tree (descendant) -----
+
+describe('run() — v0.0.10 H-3 dod-report tree descent', () => {
+  test('factory-dod-report is a descendant of factory-run via factory-phase', async () => {
+    const store = createContextStore({ dir });
+    const specSource = [
+      '---',
+      'id: dod-tree-spec',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '# dod-tree-spec',
+      '',
+      '## Intent',
+      'Test fixture spec.',
+      '',
+      '## Scenarios',
+      '**S-1** — passes',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '',
+      '## Definition of Done',
+      '',
+      '- All scenarios pass.',
+      '',
+    ].join('\n');
+    const spec = parseSpec(specSource);
+
+    const validate = validatePhase({ noJudge: true });
+    const dod = dodPhase({ noJudge: true });
+    const graph = definePhaseGraph([validate, dod], [['validate', 'dod']]);
+    const report = await run({ spec, graph, contextStore: store });
+    expect(report.status).toBe('converged');
+
+    // Walk descendants: factory-run → factory-phase → factory-dod-report.
+    // We list all records and check parents linkage.
+    const allRecords = await store.list({});
+    const runRecords = allRecords.filter((r: ContextRecord) => r.type === 'factory-run');
+    expect(runRecords).toHaveLength(1);
+    const runRec = runRecords[0];
+    expect(runRec).toBeDefined();
+    if (runRec === undefined) return;
+
+    const phaseRecords = allRecords.filter(
+      (r: ContextRecord) => r.type === 'factory-phase' && r.parents.includes(runRec.id),
+    );
+    const phaseNames = phaseRecords
+      .map((r: ContextRecord) => (r.payload as { phaseName?: string }).phaseName)
+      .sort();
+    expect(phaseNames).toEqual(['dod', 'validate']);
+
+    const dodPhaseRec = phaseRecords.find(
+      (r: ContextRecord) => (r.payload as { phaseName?: string }).phaseName === 'dod',
+    );
+    expect(dodPhaseRec).toBeDefined();
+    if (dodPhaseRec === undefined) return;
+
+    // The dod-report is reachable from the dod phase record's outputRecordIds
+    // AND its parents include the run id (per dodPhase's persist contract).
+    const dodOutputIds = (dodPhaseRec.payload as { outputRecordIds: string[] }).outputRecordIds;
+    expect(dodOutputIds.length).toBe(1);
+    const dodReport = allRecords.find((r: ContextRecord) => r.id === dodOutputIds[0]);
+    expect(dodReport).toBeDefined();
+    expect(dodReport?.type).toBe('factory-dod-report');
+    expect(dodReport?.parents).toContain(runRec.id);
   });
 });

@@ -96,6 +96,8 @@ pnpm exec factory spec review docs/specs/<first-id>.md
 
 Expected: any findings emerge as `review/...` warnings; the maintainer reviews them before kicking off the runtime. The reviewer's `cross-doc-consistency` judge will read declared `depends-on:` deps automatically when scoring.
 
+Optionally run `factory spec watch docs/specs/ --review` in another terminal for continuous lint+review on every save.
+
 ## Step 4: Report
 
 Print a summary table to the maintainer:

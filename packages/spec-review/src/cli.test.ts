@@ -204,9 +204,11 @@ describe('factory spec review CLI', () => {
     expect(r.exitCode).toBe(0);
     const counter = Number((await Bun.file(counterFile).text()).trim());
     // VALID_SPEC has 1 scenario; with deps loaded, cross-doc-consistency
-    // applies via depsCount > 0 (no plan):
-    //   internal-consistency + dod-precision + cross-doc-consistency = 3.
-    expect(counter).toBe(3);
+    // applies via depsCount > 0 (no plan). v0.0.10 also runs scope-creep
+    // (always applies):
+    //   internal-consistency + dod-precision + cross-doc-consistency
+    //   + scope-creep = 4.
+    expect(counter).toBe(4);
   });
 
   test('CLI emits review/dep-not-found warning when declared dep is missing', async () => {
@@ -240,8 +242,11 @@ describe('factory spec review CLI', () => {
     expect(r.exitCode).toBe(0);
     const counter = Number((await Bun.file(counterFile).text()).trim());
     // VALID_SPEC has 1 scenario, no holdouts. With tech-plan present:
-    //   internal-consistency + dod-precision + cross-doc-consistency = 3.
-    //   judge-parity skips (needs > 1 scenario); holdout-distinctness skips.
-    expect(counter).toBe(3);
+    //   internal-consistency + dod-precision + cross-doc-consistency
+    //   + api-surface-drift (v0.0.10, requires plan) + scope-creep
+    //   (v0.0.10, always) = 5.
+    //   judge-parity skips (needs > 1 scenario); holdout-distinctness skips;
+    //   feasibility skips (no Subtasks LOC estimates).
+    expect(counter).toBe(5);
   });
 });

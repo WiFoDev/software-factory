@@ -8,6 +8,7 @@ import { SpecParseError, parseSpec } from '@wifo/factory-core';
 import { z } from 'zod';
 import { RuntimeError } from './errors.js';
 import { definePhaseGraph } from './graph.js';
+import { dodPhase } from './phases/dod.js';
 import { type ImplementPhaseOptions, implementPhase } from './phases/implement.js';
 import { validatePhase } from './phases/validate.js';
 import { run } from './runtime.js';
@@ -24,6 +25,7 @@ Flags (run + run-sequence):
   --context-dir <path>             Context store directory (default: ./context)
   --no-judge                       Skip judge satisfactions in the harness
   --no-implement                   Drop the implement phase (v0.0.1 [validate]-only graph)
+  --skip-dod-phase                 Drop the DoD-verifier phase (v0.0.10; restores v0.0.9 graph)
   --max-prompt-tokens <n>          Per-phase cap on agent input tokens (default: 100000)
   --claude-bin <path>              Path to the claude executable (default: 'claude' on PATH)
   --twin-mode <record|replay|off>  Twin recording mode (default: record)
@@ -59,6 +61,8 @@ const FactoryConfigRuntimeSchema = z
     continueOnFail: z.boolean().optional(),
     // v0.0.9 — sequence-runner drafting filter
     includeDrafting: z.boolean().optional(),
+    // v0.0.10 — DoD-verifier opt-out
+    skipDodPhase: z.boolean().optional(),
   })
   .partial();
 
@@ -128,6 +132,7 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
         scenario: { type: 'string' },
         'no-judge': { type: 'boolean' },
         'no-implement': { type: 'boolean' },
+        'skip-dod-phase': { type: 'boolean' },
         'max-prompt-tokens': { type: 'string' },
         'max-agent-timeout-ms': { type: 'string' },
         'claude-bin': { type: 'string' },
@@ -245,6 +250,10 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
   // implement-tuning flags (--max-prompt-tokens, --claude-bin, --twin-*) are
   // inert in this mode (no warning emitted).
   const noImplement = parsed.values['no-implement'] === true;
+  // v0.0.10 — --skip-dod-phase opts out of the dodPhase. CLI flag wins over
+  // factory.config.json's `runtime.skipDodPhase`. When omitted, the default
+  // graph is [implement, validate, dod].
+  const skipDodPhaseFromCli = parsed.values['skip-dod-phase'] === true;
 
   // v0.0.5.1: optional `<cwd>/factory.config.json` supplies defaults for the
   // matching options. Precedence: CLI flag > config file > built-in default.
@@ -302,6 +311,8 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
   // config can opt-in. CLI passing `--no-judge` always wins (already true).
   const noJudgeFromCli = parsed.values['no-judge'] === true;
   const noJudge = noJudgeFromCli || fileRuntime?.noJudge === true;
+  // v0.0.10 — CLI flag wins over config; built-in default is false.
+  const skipDodPhase = skipDodPhaseFromCli || fileRuntime?.skipDodPhase === true;
 
   // --twin-mode: validate set membership (record|replay|off). The 'off'
   // value drives `opts.twin = 'off'`; others drive `opts.twin = { mode, ... }`.
@@ -336,17 +347,28 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
   const claudeBin =
     typeof parsed.values['claude-bin'] === 'string' ? parsed.values['claude-bin'] : undefined;
 
-  // Build the graph. Both phases pin cwd: process.cwd() so the agent's edits
-  // and the harness's bun test invocation resolve against the same tree.
+  // Build the graph. All phases pin cwd: process.cwd() so the agent's edits,
+  // the harness's bun test invocation, and the DoD shell bullets resolve
+  // against the same tree.
   const validate = validatePhase({
     cwd: process.cwd(),
     ...(scenarioIds !== undefined ? { scenarioIds } : {}),
     ...(noJudge ? { noJudge: true } : {}),
   });
+  const dod = skipDodPhase
+    ? null
+    : dodPhase({
+        cwd: process.cwd(),
+        ...(noJudge ? { noJudge: true } : {}),
+      });
 
   let graph: ReturnType<typeof definePhaseGraph>;
   if (noImplement) {
-    graph = definePhaseGraph([validate], []);
+    if (dod === null) {
+      graph = definePhaseGraph([validate], []);
+    } else {
+      graph = definePhaseGraph([validate, dod], [['validate', 'dod']]);
+    }
   } else {
     let implement: ReturnType<typeof implementPhase>;
     try {
@@ -367,7 +389,17 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
       }
       throw err;
     }
-    graph = definePhaseGraph([implement, validate], [['implement', 'validate']]);
+    if (dod === null) {
+      graph = definePhaseGraph([implement, validate], [['implement', 'validate']]);
+    } else {
+      graph = definePhaseGraph(
+        [implement, validate, dod],
+        [
+          ['implement', 'validate'],
+          ['validate', 'dod'],
+        ],
+      );
+    }
   }
 
   const store = createContextStore({ dir: contextDir });
@@ -437,6 +469,7 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
         'context-dir': { type: 'string' },
         'no-judge': { type: 'boolean' },
         'no-implement': { type: 'boolean' },
+        'skip-dod-phase': { type: 'boolean' },
         'max-prompt-tokens': { type: 'string' },
         'claude-bin': { type: 'string' },
         'twin-mode': { type: 'string' },
@@ -526,6 +559,7 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
   }
 
   const noImplement = parsed.values['no-implement'] === true;
+  const skipDodPhaseFromCli = parsed.values['skip-dod-phase'] === true;
 
   // v0.0.5.1 — read factory.config.json defaults; CLI flag > config > built-in.
   const fileConfig = readFactoryConfig(process.cwd());
@@ -544,6 +578,7 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
   }
   const noJudgeFromCli = parsed.values['no-judge'] === true;
   const noJudge = noJudgeFromCli || fileRuntime?.noJudge === true;
+  const skipDodPhase = skipDodPhaseFromCli || fileRuntime?.skipDodPhase === true;
   const continueOnFailFromCli = parsed.values['continue-on-fail'] === true;
   const continueOnFail = continueOnFailFromCli || fileRuntime?.continueOnFail === true;
   // v0.0.9 — --include-drafting: CLI flag (when set) wins over config; config
@@ -585,9 +620,19 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
     cwd: process.cwd(),
     ...(noJudge ? { noJudge: true } : {}),
   });
+  const dod = skipDodPhase
+    ? null
+    : dodPhase({
+        cwd: process.cwd(),
+        ...(noJudge ? { noJudge: true } : {}),
+      });
   let graph: ReturnType<typeof definePhaseGraph>;
   if (noImplement) {
-    graph = definePhaseGraph([validate], []);
+    if (dod === null) {
+      graph = definePhaseGraph([validate], []);
+    } else {
+      graph = definePhaseGraph([validate, dod], [['validate', 'dod']]);
+    }
   } else {
     let implement: ReturnType<typeof implementPhase>;
     try {
@@ -605,7 +650,17 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
       }
       throw err;
     }
-    graph = definePhaseGraph([implement, validate], [['implement', 'validate']]);
+    if (dod === null) {
+      graph = definePhaseGraph([implement, validate], [['implement', 'validate']]);
+    } else {
+      graph = definePhaseGraph(
+        [implement, validate, dod],
+        [
+          ['implement', 'validate'],
+          ['validate', 'dod'],
+        ],
+      );
+    }
   }
 
   const store = createContextStore({ dir: contextDir });

@@ -11,6 +11,8 @@ export { validatePhase } from './phases/validate.js';
 export type { ValidatePhaseOptions } from './phases/validate.js';
 export { implementPhase } from './phases/implement.js';
 export type { ImplementPhaseOptions } from './phases/implement.js';
+export { dodPhase } from './phases/dod.js';
+export type { DodPhaseOptions } from './phases/dod.js';
 
 // errors
 export { RuntimeError } from './errors.js';

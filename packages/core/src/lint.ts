@@ -34,6 +34,8 @@ export function lintSpec(source: string, opts: LintOptions = {}): LintError[] {
     errors.push({ ...err, ...(filename !== undefined ? { file: filename } : {}) });
   };
 
+  const noqa = parseNoqaDirectives(source);
+
   let split: ReturnType<typeof splitFrontmatter>;
   try {
     split = splitFrontmatter(source);
@@ -152,12 +154,12 @@ export function lintSpec(source: string, opts: LintOptions = {}): LintError[] {
     for (const m of matches) {
       seen.add(m.toLowerCase());
     }
-    if (seen.size >= 8) {
+    if (seen.size >= 12) {
       push({
         line: subtasksSection.headingLine,
         severity: 'warning',
         code: 'spec/wide-blast-radius',
-        message: `## Subtasks references ${seen.size} distinct file paths; specs touching >= 8 files commonly exceed the 600s implement-phase budget. Consider splitting or setting agent-timeout-ms in frontmatter.`,
+        message: `## Subtasks references ${seen.size} distinct file paths; specs touching >= 12 files commonly exceed the 600s implement-phase budget. Consider splitting or setting agent-timeout-ms in frontmatter.`,
       });
     }
   }
@@ -193,7 +195,43 @@ export function lintSpec(source: string, opts: LintOptions = {}): LintError[] {
     }
   }
 
-  return errors;
+  return applyNoqa(errors, noqa);
+}
+
+interface NoqaState {
+  /** Specific spec/* codes to suppress (per-code form). */
+  codes: Set<string>;
+  /** Blanket form (`<!-- NOQA -->` / `<!-- NOQA: -->`) — suppresses every `spec/*` warning. */
+  blanket: boolean;
+}
+
+const NOQA_LINE_REGEX = /<!--[ \t]*NOQA(?::[ \t]*([^>]*?))?[ \t]*-->/gi;
+
+function parseNoqaDirectives(source: string): NoqaState {
+  const state: NoqaState = { codes: new Set(), blanket: false };
+  for (const match of source.matchAll(NOQA_LINE_REGEX)) {
+    const list = (match[1] ?? '').trim();
+    if (list === '') {
+      state.blanket = true;
+      continue;
+    }
+    for (const raw of list.split(',')) {
+      const code = raw.trim();
+      if (code !== '') state.codes.add(code);
+    }
+  }
+  return state;
+}
+
+function applyNoqa(errors: LintError[], noqa: NoqaState): LintError[] {
+  if (!noqa.blanket && noqa.codes.size === 0) return errors;
+  return errors.filter((err) => {
+    // NOQA only ever suppresses warnings — errors always fire.
+    if (err.severity !== 'warning') return true;
+    if (noqa.codes.has(err.code)) return false;
+    if (noqa.blanket && err.code.startsWith('spec/')) return false;
+    return true;
+  });
 }
 
 /**

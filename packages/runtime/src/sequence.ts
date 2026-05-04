@@ -1,9 +1,10 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
-import { ContextError, type ContextStore } from '@wifo/factory-context';
+import { join, resolve } from 'node:path';
+import { ContextError, type ContextRecord, type ContextStore } from '@wifo/factory-context';
 import { type Spec, parseSpec } from '@wifo/factory-core';
 import { RuntimeError } from './errors.js';
 import {
+  type FactoryRunPayload,
   FactoryRunSchema,
   type FactorySequencePayload,
   FactorySequenceSchema,
@@ -85,10 +86,16 @@ interface LoadedSpec {
 interface LoadSpecsResult {
   included: LoadedSpec[];
   skippedDrafting: LoadedSpec[];
+  donePool: LoadedSpec[];
 }
 
 /**
- * Walk `<specsDir>/*.md` (non-recursive — `done/` is intentionally skipped).
+ * Walk `<specsDir>/*.md` (non-recursive). v0.0.10 also walks the OPTIONAL
+ * `<specsDir>/done/*.md` (non-recursive) and returns it as `donePool` —
+ * specs already shipped + moved to done/ that are dep-context only and
+ * NOT executed. `buildDag` validates `depends-on` ids against the union
+ * `included ∪ donePool` so a spec may reference a dep that was moved out.
+ *
  * Parse each via `parseSpec`. Returns deterministic-ordered lists (by id
  * ASC). When `includeDrafting === false` (default), specs with
  * `frontmatter.status === 'drafting'` are routed to `skippedDrafting`
@@ -123,25 +130,56 @@ function loadSpecs(specsDir: string, includeDrafting: boolean): LoadSpecsResult 
   }
   included.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   skippedDrafting.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return { included, skippedDrafting };
+
+  const donePool: LoadedSpec[] = [];
+  const doneDir = join(specsDir, 'done');
+  if (existsSync(doneDir)) {
+    const doneStat = statSync(doneDir);
+    if (doneStat.isDirectory()) {
+      const doneEntries = readdirSync(doneDir, { withFileTypes: true });
+      for (const entry of doneEntries) {
+        if (!entry.isFile()) continue;
+        if (!entry.name.endsWith('.md')) continue;
+        const fullPath = join(doneDir, entry.name);
+        const source = readFileSync(fullPath, 'utf8');
+        const spec = parseSpec(source, { filename: fullPath });
+        donePool.push({
+          id: spec.frontmatter.id,
+          path: fullPath,
+          spec,
+          deps: [...spec.frontmatter['depends-on']],
+        });
+      }
+      donePool.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    }
+  }
+  return { included, skippedDrafting, donePool };
 }
 
 /**
  * Validate dep references + topologically sort via Kahn's algorithm.
  * Tie-break on alphabetic id ASC for deterministic ordering.
  *
+ * v0.0.10: dep-id existence is validated against the UNION of `included ∪
+ * donePool`. Cycle detection runs over the same union so a cycle that
+ * involves a done/ spec is still surfaced. Topological execution order
+ * contains ONLY `included` ids — donePool specs are dep-context, never
+ * executed.
+ *
  * Throws `RuntimeError` with codes:
  *   - `runtime/sequence-dep-not-found` — a depends-on entry references an id
- *     not present in `specs[]`.
+ *     not present in `included` OR `donePool`.
  *   - `runtime/sequence-cycle` — the depends-on graph contains a cycle. The
  *     reported message names the smallest cycle path found via DFS.
  */
-function buildDag(specs: LoadedSpec[], specsDir: string): string[] {
-  const ids = new Set(specs.map((s) => s.id));
-  const byId = new Map(specs.map((s) => [s.id, s]));
+function buildDag(included: LoadedSpec[], donePool: LoadedSpec[], specsDir: string): string[] {
+  const all = [...included, ...donePool];
+  const ids = new Set(all.map((s) => s.id));
+  const byId = new Map(all.map((s) => [s.id, s]));
+  const includedIds = new Set(included.map((s) => s.id));
 
-  // Validate all deps reference known ids.
-  for (const s of specs) {
+  // Validate all deps reference known ids (union of included + donePool).
+  for (const s of all) {
     for (const dep of s.deps) {
       if (!ids.has(dep)) {
         throw new RuntimeError(
@@ -158,7 +196,7 @@ function buildDag(specs: LoadedSpec[], specsDir: string): string[] {
   const WHITE = 0;
   const GRAY = 1;
   const BLACK = 2;
-  const color = new Map<string, number>(specs.map((s) => [s.id, WHITE]));
+  const color = new Map<string, number>(all.map((s) => [s.id, WHITE]));
   const detectCycleFrom = (start: string): string[] | null => {
     const path: string[] = [];
     const onPath = new Set<string>();
@@ -203,7 +241,7 @@ function buildDag(specs: LoadedSpec[], specsDir: string): string[] {
     return null;
   };
 
-  for (const s of specs) {
+  for (const s of all) {
     if (color.get(s.id) !== WHITE) continue;
     const cycle = detectCycleFrom(s.id);
     if (cycle !== null) {
@@ -211,14 +249,18 @@ function buildDag(specs: LoadedSpec[], specsDir: string): string[] {
     }
   }
 
-  // Kahn's topological sort; tie-break alphabetically.
+  // Kahn's topological sort over INCLUDED only (donePool is dep-context).
+  // For each included spec, count only deps that are themselves in `included`
+  // — done/ deps are pre-satisfied (already shipped) and don't gate execution.
   const indeg = new Map<string, number>();
   const children = new Map<string, string[]>();
-  for (const s of specs) {
-    indeg.set(s.id, s.deps.length);
+  for (const s of included) {
+    let realDepCount = 0;
+    for (const dep of s.deps) if (includedIds.has(dep)) realDepCount += 1;
+    indeg.set(s.id, realDepCount);
     children.set(s.id, []);
   }
-  for (const s of specs) {
+  for (const s of included) {
     for (const dep of s.deps) {
       const list = children.get(dep);
       if (list !== undefined) list.push(s.id);
@@ -243,7 +285,7 @@ function buildDag(specs: LoadedSpec[], specsDir: string): string[] {
       }
     }
   }
-  if (result.length !== specs.length) {
+  if (result.length !== included.length) {
     // Should be unreachable — cycle detection above catches this. Defensive.
     throw new RuntimeError(
       'runtime/sequence-cycle',
@@ -281,7 +323,7 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
   const startedAt = new Date();
   const t0 = performance.now();
 
-  const { included: loaded, skippedDrafting } = loadSpecs(specsDir, includeDrafting);
+  const { included: loaded, skippedDrafting, donePool } = loadSpecs(specsDir, includeDrafting);
   for (const s of skippedDrafting) {
     skipLog(`factory-runtime: skipping ${s.id} (status: drafting)`);
   }
@@ -291,8 +333,37 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
       `no specs with status: ready found in ${specsDir} (use --include-drafting to walk all specs regardless of status)`,
     );
   }
-  const topoOrder = buildDag(loaded, specsDir);
+  const topoOrder = buildDag(loaded, donePool, specsDir);
   const byId = new Map(loaded.map((s) => [s.id, s]));
+
+  // v0.0.10 — already-converged dedup. Build a Map<specId, ExistingRun> from
+  // every prior `factory-run` whose `parents[]` includes a `factory-sequence`
+  // record with a matching specsDir. The match is scoped to the CURRENT
+  // sequence's specsDir (resolved absolute path, case-sensitive) — re-running
+  // the same specs against a different `<dir>` runs them fresh.
+  const normalizedSpecsDir = resolve(specsDir);
+  const allRuns = await contextStore.list({ type: 'factory-run' });
+  const allSequences = await contextStore.list({ type: 'factory-sequence' });
+  const matchingSequenceIds = new Set<string>();
+  for (const seq of allSequences) {
+    const payload = seq.payload as { specsDir?: unknown } | null | undefined;
+    if (payload && typeof payload.specsDir === 'string') {
+      if (resolve(payload.specsDir) === normalizedSpecsDir) {
+        matchingSequenceIds.add(seq.id);
+      }
+    }
+  }
+  const convergedBySpecId = new Map<string, ContextRecord>();
+  for (const runRec of allRuns) {
+    const payload = runRec.payload as Partial<FactoryRunPayload> | null | undefined;
+    if (!payload || typeof payload.specId !== 'string') continue;
+    const specId = payload.specId;
+    if (!byId.has(specId)) continue;
+    if (!runRec.parents.some((p) => matchingSequenceIds.has(p))) continue;
+    if (!convergedBySpecId.has(specId)) {
+      convergedBySpecId.set(specId, runRec);
+    }
+  }
 
   const sequencePayload: FactorySequencePayload = {
     specsDir,
@@ -348,6 +419,35 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
       });
       failedSet.add(id);
       blockedByMap.set(id, upstreamCause);
+      continue;
+    }
+
+    // v0.0.10 — already-converged dedup. If a prior factory-run for this spec
+    // exists rooted under a factory-sequence with the SAME specsDir, skip
+    // re-invoking run() and reflect the pre-existing run's id in the report.
+    const existingRun = convergedBySpecId.get(id);
+    if (existingRun !== undefined) {
+      skipLog(`factory-runtime: ${id} already converged in run ${existingRun.id} — skipping`);
+      const existingPayload = existingRun.payload as Partial<FactoryRunPayload>;
+      const synthReport: RunReport = {
+        runId: existingRun.id,
+        specId: id,
+        startedAt:
+          typeof existingPayload.startedAt === 'string'
+            ? existingPayload.startedAt
+            : existingRun.recordedAt,
+        durationMs: 0,
+        iterationCount: 0,
+        iterations: [],
+        status: 'converged',
+        totalTokens: 0,
+      };
+      results.push({
+        specId: id,
+        specPath: loadedSpec.path,
+        status: 'converged',
+        runReport: synthReport,
+      });
       continue;
     }
 

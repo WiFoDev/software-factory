@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ContextRecord, createContextStore, listRecords } from '@wifo/factory-context';
@@ -456,5 +456,230 @@ describe('runSequence — v0.0.9 drafting filter', () => {
     expect(caught?.code).toBe('runtime/sequence-empty');
     expect(caught?.message).toContain('no specs with status: ready found in');
     expect(caught?.message).toContain('--include-drafting');
+  });
+});
+
+// ----- v0.0.10: already-converged dedup (S-1) ---------------------------
+
+describe('runSequence — v0.0.10 already-converged dedup', () => {
+  test('runSequence skips already-converged specs scoped to specsDir', async () => {
+    writeSpec('a');
+    writeSpec('b', ['a']);
+    const store = createContextStore({ dir: ctxDir });
+
+    // First invocation runs both specs fresh.
+    const first = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: store,
+      options: { maxIterations: 1 },
+    });
+    expect(first.status).toBe('converged');
+    expect(first.specs).toHaveLength(2);
+    const aRunIdFirst = first.specs.find((s) => s.specId === 'a')?.runReport?.runId;
+    expect(aRunIdFirst).toBeDefined();
+
+    // Snapshot factory-run count before re-invoking.
+    const allBefore: ContextRecord[] = (await listRecords(ctxDir)).records;
+    const runsBefore = allBefore.filter((r) => r.type === 'factory-run').length;
+    expect(runsBefore).toBe(2);
+
+    // Second invocation against the same specsDir + same context dir should
+    // detect 'a' as already-converged and skip it. 'b' has no prior run
+    // because we'll delete it... no wait — the spec says BOTH should be
+    // skipped if both have prior converged runs. Per S-1: "spec a is detected
+    // as already-converged ... spec b runs as normal" — that's because the
+    // S-1 setup only seeds a prior run for 'a', not 'b'.
+    //
+    // To exercise that, we need a context dir with a prior run for 'a' but
+    // not 'b'. That's exactly the state if we re-invoke immediately — both
+    // have prior runs. So we set up the test differently: seed a prior run
+    // for 'a' only via a separate sequence, then add b.md fresh.
+    // The test above already established both. Now make a fresh ctx + seed
+    // only 'a'.
+    const ctxDir2 = mkdtempSync(join(tmpdir(), 'seq-ctx2-'));
+    const specsDir2 = mkdtempSync(join(tmpdir(), 'seq-specs2-'));
+    writeFileSync(join(specsDir2, 'a.md'), specSource('a'));
+    const store2 = createContextStore({ dir: ctxDir2 });
+    // Seed: run 'a' alone first.
+    await runSequence({
+      specsDir: specsDir2,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: store2,
+      options: { maxIterations: 1 },
+    });
+    const seedAll: ContextRecord[] = (await listRecords(ctxDir2)).records;
+    const seedRunA = seedAll.find(
+      (r) => r.type === 'factory-run' && (r.payload as { specId?: string }).specId === 'a',
+    );
+    expect(seedRunA).toBeDefined();
+    const seedRunAId = seedRunA?.id;
+
+    // Now add b.md and re-invoke.
+    writeFileSync(join(specsDir2, 'b.md'), specSource('b', ['a']));
+    const skips: string[] = [];
+    const second = await runSequence({
+      specsDir: specsDir2,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: store2,
+      options: { maxIterations: 1, skipLog: (line) => skips.push(line) },
+    });
+    expect(second.status).toBe('converged');
+    expect(second.topoOrder).toEqual(['a', 'b']);
+    const byId = new Map(second.specs.map((s) => [s.specId, s]));
+    expect(byId.get('a')?.status).toBe('converged');
+    expect(byId.get('a')?.runReport?.runId).toBe(seedRunAId);
+    expect(byId.get('b')?.status).toBe('converged');
+    // Skip log includes the already-converged notice for 'a'.
+    expect(skips).toContain(`factory-runtime: a already converged in run ${seedRunAId} — skipping`);
+    // Only one new factory-run was created for 'b' (no fresh run for 'a').
+    const all2: ContextRecord[] = (await listRecords(ctxDir2)).records;
+    const runRecs = all2.filter((r) => r.type === 'factory-run');
+    // Two factory-run records total: the seed for 'a' + the new one for 'b'.
+    expect(runRecs).toHaveLength(2);
+
+    await Bun.$`rm -rf ${ctxDir2} ${specsDir2}`.quiet().nothrow();
+  });
+
+  test('runSequence does not skip when prior factory-run was for a different specsDir', async () => {
+    // Seed a context dir by running 'a' against a DIFFERENT specsDir.
+    const otherSpecsDir = mkdtempSync(join(tmpdir(), 'seq-other-specs-'));
+    writeFileSync(join(otherSpecsDir, 'a.md'), specSource('a'));
+    const store = createContextStore({ dir: ctxDir });
+    const seed = await runSequence({
+      specsDir: otherSpecsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: store,
+      options: { maxIterations: 1 },
+    });
+    expect(seed.status).toBe('converged');
+    const seedAll: ContextRecord[] = (await listRecords(ctxDir)).records;
+    const seedRunA = seedAll.find(
+      (r) => r.type === 'factory-run' && (r.payload as { specId?: string }).specId === 'a',
+    );
+    expect(seedRunA).toBeDefined();
+    const seedRunAId = seedRunA?.id;
+
+    // Now run 'a' against `specsDir` (a different directory) — share the
+    // same context dir but the prior factory-run was rooted under a sequence
+    // for `otherSpecsDir`, so it should NOT skip.
+    writeSpec('a');
+    const skips: string[] = [];
+    const report = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: store,
+      options: { maxIterations: 1, skipLog: (line) => skips.push(line) },
+    });
+    expect(report.status).toBe('converged');
+    expect(report.specs).toHaveLength(1);
+    const aResult = report.specs.find((s) => s.specId === 'a');
+    expect(aResult?.status).toBe('converged');
+    // The new run id is NOT the seed run id — fresh run was performed.
+    expect(aResult?.runReport?.runId).toBeDefined();
+    expect(aResult?.runReport?.runId).not.toBe(seedRunAId);
+    // No "already converged" skip log.
+    expect(skips.some((line) => line.includes('already converged'))).toBe(false);
+    // Two factory-run records exist for 'a': one in each specsDir's lineage.
+    const all: ContextRecord[] = (await listRecords(ctxDir)).records;
+    const runsForA = all.filter(
+      (r) => r.type === 'factory-run' && (r.payload as { specId?: string }).specId === 'a',
+    );
+    expect(runsForA).toHaveLength(2);
+
+    await Bun.$`rm -rf ${otherSpecsDir}`.quiet().nothrow();
+  });
+
+  test('runSequence runs all specs fresh on first invocation against an empty context dir', async () => {
+    writeSpec('a');
+    writeSpec('b', ['a']);
+    const skips: string[] = [];
+    const report = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: createContextStore({ dir: ctxDir }),
+      options: { maxIterations: 1, skipLog: (line) => skips.push(line) },
+    });
+    expect(report.status).toBe('converged');
+    expect(report.specs).toHaveLength(2);
+    for (const s of report.specs) {
+      expect(s.status).toBe('converged');
+    }
+    // No "already converged" skip notices on first invocation.
+    expect(skips.some((line) => line.includes('already converged'))).toBe(false);
+    const all: ContextRecord[] = (await listRecords(ctxDir)).records;
+    const runRecs = all.filter((r) => r.type === 'factory-run');
+    expect(runRecs).toHaveLength(2);
+  });
+});
+
+// ----- v0.0.10: done/ dep resolution (S-2) ------------------------------
+
+describe('runSequence — v0.0.10 done/ dep resolution', () => {
+  function writeDoneSpec(id: string, deps: string[] = []): void {
+    const doneDir = join(specsDir, 'done');
+    mkdirSync(doneDir, { recursive: true });
+    writeFileSync(join(doneDir, `${id}.md`), specSource(id, deps));
+  }
+
+  test('buildDag resolves depends-on against <dir>/done/ for already-shipped deps', async () => {
+    writeSpec('b', ['a']);
+    writeDoneSpec('a');
+    const report = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: createContextStore({ dir: ctxDir }),
+      options: { maxIterations: 1 },
+    });
+    expect(report.status).toBe('converged');
+    // Only b is in topoOrder; a is dep-context only.
+    expect(report.topoOrder).toEqual(['b']);
+    expect(report.specs).toHaveLength(1);
+    expect(report.specs[0]?.specId).toBe('b');
+    expect(report.specs[0]?.status).toBe('converged');
+    // No factory-run for 'a' because it wasn't executed.
+    const all: ContextRecord[] = (await listRecords(ctxDir)).records;
+    const runsForA = all.filter(
+      (r) => r.type === 'factory-run' && (r.payload as { specId?: string }).specId === 'a',
+    );
+    expect(runsForA).toHaveLength(0);
+  });
+
+  test('done/ specs are excluded from topological execution order', async () => {
+    writeSpec('current', ['shipped']);
+    writeSpec('another', ['shipped']);
+    writeDoneSpec('shipped');
+    const report = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: createContextStore({ dir: ctxDir }),
+      options: { maxIterations: 1 },
+    });
+    expect(report.status).toBe('converged');
+    expect(report.topoOrder).toEqual(['another', 'current']);
+    expect(report.specs).toHaveLength(2);
+    const ids = report.specs.map((s) => s.specId).sort();
+    expect(ids).toEqual(['another', 'current']);
+    // 'shipped' is not in the report.
+    expect(ids).not.toContain('shipped');
+  });
+
+  test('missing-dep error fires when dep is in neither <dir> nor <dir>/done/', async () => {
+    writeSpec('b', ['ghost']);
+    writeDoneSpec('a'); // exists but unrelated
+    let caught: RuntimeError | null = null;
+    try {
+      await runSequence({
+        specsDir,
+        graph: makeSyntheticGraph({ status: 'pass' }),
+        contextStore: createContextStore({ dir: ctxDir }),
+        options: { maxIterations: 1 },
+      });
+    } catch (e) {
+      caught = e as RuntimeError;
+    }
+    expect(caught).toBeInstanceOf(RuntimeError);
+    expect(caught?.code).toBe('runtime/sequence-dep-not-found');
+    expect(caught?.message).toContain("spec 'b' depends on 'ghost'");
   });
 });

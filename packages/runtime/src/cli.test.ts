@@ -89,7 +89,16 @@ describe('factory-runtime CLI — converged path (v0.0.1 [validate]-only via --n
   test('all-pass spec exits 0 with converged summary; persists run/phase/validate-report records', async () => {
     const cap = makeIo();
     await invoke(
-      ['run', ALL_PASS, '--no-judge', '--no-implement', '--context-dir', ctxDir],
+      // --skip-dod-phase pins v0.0.9 record set (no factory-dod-report).
+      [
+        'run',
+        ALL_PASS,
+        '--no-judge',
+        '--no-implement',
+        '--skip-dod-phase',
+        '--context-dir',
+        ctxDir,
+      ],
       cap.io,
     );
 
@@ -113,6 +122,7 @@ describe('factory-runtime CLI — no-converge path (--no-implement)', () => {
         WILL_FAIL,
         '--no-judge',
         '--no-implement',
+        '--skip-dod-phase',
         '--max-iterations',
         '2',
         '--context-dir',
@@ -229,6 +239,7 @@ describe('factory-runtime CLI — default graph [implement → validate] (S-6)',
           'run',
           'needs-impl.md',
           '--no-judge',
+          '--skip-dod-phase',
           '--claude-bin',
           FAKE_CLAUDE,
           '--twin-mode',
@@ -388,6 +399,8 @@ describe('factory-runtime CLI — --no-implement parity (H-2)', () => {
         ALL_PASS,
         '--no-judge',
         '--no-implement',
+        // v0.0.10 — --skip-dod-phase preserves v0.0.1 record-set parity in --no-implement mode.
+        '--skip-dod-phase',
         '--claude-bin',
         '/this/does/not/exist/claude',
         '--context-dir',
@@ -1041,5 +1054,111 @@ describe('factory-runtime run-sequence CLI — v0.0.9 drafting filter', () => {
       process.chdir(prevCwd);
       await Bun.$`rm -rf ${work} ${specs}`.quiet().nothrow();
     }
+  });
+});
+
+// ----- v0.0.10: default graph includes dodPhase + --skip-dod-phase --------
+
+describe('factory-runtime CLI — v0.0.10 default graph (S-3)', () => {
+  test('default graph includes dodPhase after validatePhase', async () => {
+    // Default invocation against all-pass: --no-implement keeps dodPhase by
+    // default (per S-3). The DoD bullet `- the scenario passes` is plain
+    // prose → judge → with --no-judge it's skipped (status='pass').
+    const cap = makeIo();
+    await invoke(
+      ['run', ALL_PASS, '--no-judge', '--no-implement', '--context-dir', ctxDir],
+      cap.io,
+    );
+    expect(cap.exitCode()).toBe(0);
+    let graphPhases: string[] | null = null;
+    let foundDodReport = false;
+    const fileList = (await Bun.$`ls ${ctxDir}`.quiet().text()).trim().split('\n');
+    for (const fname of fileList) {
+      const text = await Bun.file(join(ctxDir, fname)).text();
+      const rec = JSON.parse(text) as { type: string; payload: { graphPhases?: string[] } };
+      if (rec.type === 'factory-run') graphPhases = rec.payload.graphPhases ?? null;
+      if (rec.type === 'factory-dod-report') foundDodReport = true;
+    }
+    expect(graphPhases).toEqual(['validate', 'dod']);
+    expect(foundDodReport).toBe(true);
+  });
+
+  test('--skip-dod-phase removes dodPhase from the graph', async () => {
+    const cap = makeIo();
+    await invoke(
+      [
+        'run',
+        ALL_PASS,
+        '--no-judge',
+        '--no-implement',
+        '--skip-dod-phase',
+        '--context-dir',
+        ctxDir,
+      ],
+      cap.io,
+    );
+    expect(cap.exitCode()).toBe(0);
+    let graphPhases: string[] | null = null;
+    let foundDodReport = false;
+    const fileList = (await Bun.$`ls ${ctxDir}`.quiet().text()).trim().split('\n');
+    for (const fname of fileList) {
+      const text = await Bun.file(join(ctxDir, fname)).text();
+      const rec = JSON.parse(text) as { type: string; payload: { graphPhases?: string[] } };
+      if (rec.type === 'factory-run') graphPhases = rec.payload.graphPhases ?? null;
+      if (rec.type === 'factory-dod-report') foundDodReport = true;
+    }
+    expect(graphPhases).toEqual(['validate']);
+    expect(foundDodReport).toBe(false);
+  });
+
+  test('factory.config.json runtime.skipDodPhase: true disables dodPhase by default', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'runtime-cli-skipdod-config-'));
+    await Bun.write(join(work, 'all-pass.md'), await Bun.file(ALL_PASS).text());
+    await Bun.write(
+      join(work, 'trivial-pass.test.ts'),
+      await Bun.file(join(RUNTIME_ROOT, 'test-fixtures/trivial-pass.test.ts')).text(),
+    );
+    writeFileSync(
+      join(work, 'factory.config.json'),
+      JSON.stringify({ runtime: { skipDodPhase: true } }),
+    );
+    const prevCwd = process.cwd();
+    process.chdir(work);
+    try {
+      const cap = makeIo();
+      await invoke(
+        ['run', 'all-pass.md', '--no-judge', '--no-implement', '--context-dir', ctxDir],
+        cap.io,
+      );
+      expect(cap.exitCode()).toBe(0);
+      let graphPhases: string[] | null = null;
+      const fileList = (await Bun.$`ls ${ctxDir}`.quiet().text()).trim().split('\n');
+      for (const fname of fileList) {
+        const text = await Bun.file(join(ctxDir, fname)).text();
+        const rec = JSON.parse(text) as { type: string; payload: { graphPhases?: string[] } };
+        if (rec.type === 'factory-run') graphPhases = rec.payload.graphPhases ?? null;
+      }
+      expect(graphPhases).toEqual(['validate']);
+    } finally {
+      process.chdir(prevCwd);
+      await Bun.$`rm -rf ${work}`.quiet().nothrow();
+    }
+  });
+
+  test('--no-implement keeps dodPhase by default', async () => {
+    const cap = makeIo();
+    await invoke(
+      ['run', ALL_PASS, '--no-judge', '--no-implement', '--context-dir', ctxDir],
+      cap.io,
+    );
+    expect(cap.exitCode()).toBe(0);
+    let graphPhases: string[] | null = null;
+    const fileList = (await Bun.$`ls ${ctxDir}`.quiet().text()).trim().split('\n');
+    for (const fname of fileList) {
+      const text = await Bun.file(join(ctxDir, fname)).text();
+      const rec = JSON.parse(text) as { type: string; payload: { graphPhases?: string[] } };
+      if (rec.type === 'factory-run') graphPhases = rec.payload.graphPhases ?? null;
+    }
+    expect(graphPhases).toEqual(['validate', 'dod']);
   });
 });

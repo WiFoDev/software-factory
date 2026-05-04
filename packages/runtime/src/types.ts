@@ -72,6 +72,12 @@ export interface RunOptions {
    * `--max-agent-timeout-ms` does pre-validate for friendlier UX.
    */
   maxAgentTimeoutMs?: number;
+  /**
+   * v0.0.10 — Field-level addition. Consumed by the CLI default-graph
+   * composition; programmatic callers building their own graph aren't
+   * affected (they include or exclude `dodPhase` as they choose).
+   */
+  skipDodPhase?: boolean;
 }
 
 export interface PhaseInvocationResult {

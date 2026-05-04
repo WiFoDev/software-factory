@@ -8,6 +8,7 @@ import { createContextStore } from '@wifo/factory-context';
 import { parseSpec } from '@wifo/factory-core';
 import { RuntimeError } from '../errors.js';
 import {
+  FactoryDodReportSchema,
   FactoryImplementReportSchema,
   FactoryRunSchema,
   FactoryValidateReportSchema,
@@ -1463,5 +1464,145 @@ describe('implementPhase — configurable agent timeout (v0.0.5.2)', () => {
     // is set. Byte-equal to v0.0.5 behavior — moving this constant changes
     // the default agent wall-clock budget for every existing call site.
     expect(DEFAULT_TIMEOUT_MS).toBe(600_000);
+  });
+});
+
+// ----- v0.0.10: Prior DoD report threading (S-4) ------------------------
+
+async function makePriorDodRecord(
+  store: ReturnType<typeof createContextStore>,
+  runId: string,
+  bullets: ReadonlyArray<{
+    kind: 'shell' | 'judge';
+    bullet?: string;
+    status: 'pass' | 'fail' | 'error';
+    command?: string;
+    exitCode?: number | null;
+    stderrTail?: string;
+    judgeReasoning?: string;
+  }>,
+): Promise<{ id: string; record: NonNullable<Awaited<ReturnType<typeof store.get>>> }> {
+  tryRegister(store, 'factory-dod-report', FactoryDodReportSchema);
+  const summary = { pass: 0, fail: 0, error: 0, skipped: 0 };
+  for (const b of bullets) summary[b.status]++;
+  const reportStatus = summary.error > 0 ? 'error' : summary.fail > 0 ? 'fail' : 'pass';
+  const id = await store.put(
+    'factory-dod-report',
+    {
+      specId: 'runtime-smoke-needs-impl',
+      iteration: 1,
+      startedAt: new Date().toISOString(),
+      durationMs: 100,
+      bullets: bullets.map((b) => ({
+        kind: b.kind,
+        bullet: b.bullet ?? `- \`${b.command ?? '?'}\``,
+        status: b.status,
+        ...(b.command !== undefined ? { command: b.command } : {}),
+        ...(b.exitCode !== undefined ? { exitCode: b.exitCode } : {}),
+        ...(b.stderrTail !== undefined ? { stderrTail: b.stderrTail } : {}),
+        ...(b.judgeReasoning !== undefined ? { judgeReasoning: b.judgeReasoning } : {}),
+        durationMs: 50,
+      })),
+      summary,
+      status: reportStatus,
+    },
+    { parents: [runId] },
+  );
+  const record = await store.get(id);
+  if (record === null) throw new Error('vanished');
+  return { id, record };
+}
+
+describe('implementPhase — v0.0.10 Prior DoD report threading (S-4)', () => {
+  test('buildPrompt emits Prior DoD report section when prior dod-report is in inputs', async () => {
+    const { ctx, runId } = await setupCtx();
+    const { record: priorRec } = await makePriorDodRecord(ctx.contextStore, runId, [
+      {
+        kind: 'shell',
+        command: 'pnpm typecheck',
+        status: 'fail',
+        exitCode: 1,
+        stderrTail: 'src/foo.ts:5: error TS2322: Type "x" is not assignable to "y"',
+      },
+    ]);
+    const ctxWithPrior: PhaseContext = { ...ctx, iteration: 2, inputs: [priorRec] };
+    const phase = implementPhase({ cwd: workDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const result = await phase.run(ctxWithPrior);
+      const payload = result.records[0]?.payload as { prompt: string };
+      expect(payload.prompt).toContain('# Prior DoD report');
+      expect(payload.prompt).toContain('**`pnpm typecheck`** — exit 1:');
+      expect(payload.prompt).toContain('error TS2322');
+      // Section sits before # Working directory.
+      const dodIdx = payload.prompt.indexOf('# Prior DoD report');
+      const workingIdx = payload.prompt.indexOf('# Working directory');
+      expect(dodIdx).toBeGreaterThan(-1);
+      expect(workingIdx).toBeGreaterThan(dodIdx);
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('Prior DoD report section is byte-stable across iterations with the same failure', async () => {
+    const { ctx, runId } = await setupCtx();
+    const { record: priorRec } = await makePriorDodRecord(ctx.contextStore, runId, [
+      {
+        kind: 'shell',
+        command: 'pnpm typecheck',
+        status: 'fail',
+        exitCode: 1,
+        stderrTail: 'foo',
+      },
+    ]);
+    const phase = implementPhase({ cwd: workDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const ctx2: PhaseContext = { ...ctx, iteration: 2, inputs: [priorRec] };
+      const r1 = await phase.run(ctx2);
+      const ctx3: PhaseContext = { ...ctx, iteration: 3, inputs: [priorRec] };
+      const r2 = await phase.run(ctx3);
+      const p1 = (r1.records[0]?.payload as { prompt: string }).prompt;
+      const p2 = (r2.records[0]?.payload as { prompt: string }).prompt;
+      const sectionOf = (p: string): string => {
+        const start = p.indexOf('# Prior DoD report');
+        const end = p.indexOf('# Working directory');
+        return p.slice(start, end);
+      };
+      expect(sectionOf(p1)).toBe(sectionOf(p2));
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('buildPrompt does not emit Prior DoD report when no dod-report in inputs', async () => {
+    const { ctx } = await setupCtx();
+    const phase = implementPhase({ cwd: workDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const result = await phase.run(ctx);
+      const payload = result.records[0]?.payload as { prompt: string };
+      expect(payload.prompt).not.toContain('# Prior DoD report');
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
   });
 });

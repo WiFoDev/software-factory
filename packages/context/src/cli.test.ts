@@ -317,3 +317,86 @@ describe('cli tree', () => {
     expect(lines[2]).toContain(c1.id);
   });
 });
+
+// ----- v0.0.10: --context-dir synonym + --dir deprecation (S-3) ----------
+
+describe('cli — v0.0.10 --context-dir synonym for --dir', () => {
+  test('--context-dir is a synonym for --dir on factory-context tree', async () => {
+    const a = makeRecord({
+      id: 'aaaaaaaaaaaaaaaa',
+      type: 'note',
+      recordedAt: '2026-04-25T00:00:00.000Z',
+    });
+    const b = makeRecord({
+      id: 'bbbbbbbbbbbbbbbb',
+      type: 'brief',
+      recordedAt: '2026-04-26T00:00:00.000Z',
+      parents: [a.id],
+    });
+    await writeRecord(dir, a);
+    await writeRecord(dir, b);
+
+    const withDir = await runCliProc(['tree', b.id, '--dir', dir]);
+    const withContextDir = await runCliProc(['tree', b.id, '--context-dir', dir]);
+    expect(withContextDir.exitCode).toBe(withDir.exitCode);
+    expect(withContextDir.stdout).toBe(withDir.stdout);
+    // --context-dir alone emits NO deprecation notice.
+    expect(withContextDir.stderr).not.toContain('context/deprecated-flag');
+  });
+
+  test('--dir emits one-line deprecation notice', async () => {
+    const a = makeRecord({
+      id: 'aaaaaaaaaaaaaaaa',
+      type: 'note',
+      recordedAt: '2026-04-25T00:00:00.000Z',
+    });
+    await writeRecord(dir, a);
+
+    const r = await runCliProc(['tree', a.id, '--dir', dir]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toContain(
+      'context/deprecated-flag: --dir is deprecated; use --context-dir (will be removed in v0.1.0)',
+    );
+    // Deprecation notice fires exactly once.
+    const occurrences = (r.stderr.match(/context\/deprecated-flag/g) ?? []).length;
+    expect(occurrences).toBe(1);
+
+    // When BOTH flags are passed, --context-dir wins (canonical takes precedence)
+    // AND deprecation still fires for --dir.
+    const both = await runCliProc([
+      'tree',
+      a.id,
+      '--dir',
+      '/nonexistent/path',
+      '--context-dir',
+      dir,
+    ]);
+    expect(both.exitCode).toBe(0);
+    expect(both.stderr).toContain('context/deprecated-flag');
+    expect(both.stdout).toContain(a.id);
+  });
+
+  test('factory-context list also accepts --context-dir as a synonym', async () => {
+    const note = makeRecord({
+      id: '0000000000000001',
+      type: 'note',
+      recordedAt: '2026-04-28T10:00:00.000Z',
+    });
+    await writeRecord(dir, note);
+
+    const withDir = await runCliProc(['list', '--dir', dir]);
+    const withContextDir = await runCliProc(['list', '--context-dir', dir]);
+    expect(withContextDir.exitCode).toBe(0);
+    expect(withContextDir.stdout).toBe(withDir.stdout);
+    expect(withContextDir.stderr).not.toContain('context/deprecated-flag');
+    // --dir variant emits deprecation.
+    expect(withDir.stderr).toContain('context/deprecated-flag');
+
+    // get also accepts --context-dir.
+    const got = await runCliProc(['get', note.id, '--context-dir', dir]);
+    expect(got.exitCode).toBe(0);
+    expect(got.stderr).not.toContain('context/deprecated-flag');
+    const parsed = JSON.parse(got.stdout) as ContextRecord;
+    expect(parsed).toEqual(note);
+  });
+});

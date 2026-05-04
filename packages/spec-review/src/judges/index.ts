@@ -2,11 +2,14 @@ import { createHash } from 'node:crypto';
 import type { Spec } from '@wifo/factory-core';
 import type { ReviewCode, ReviewSeverity } from '../findings.js';
 import type { SlicedSections } from '../slice-sections.js';
+import { API_SURFACE_DRIFT_JUDGE } from './api-surface-drift.js';
 import { CROSS_DOC_CONSISTENCY_JUDGE } from './cross-doc-consistency.js';
 import { DOD_PRECISION_JUDGE } from './dod-precision.js';
+import { FEASIBILITY_JUDGE } from './feasibility.js';
 import { HOLDOUT_DISTINCTNESS_JUDGE } from './holdout-distinctness.js';
 import { INTERNAL_CONSISTENCY_JUDGE } from './internal-consistency.js';
 import { JUDGE_PARITY_JUDGE } from './judge-parity.js';
+import { SCOPE_CREEP_JUDGE } from './scope-creep.js';
 
 export interface JudgeApplicabilityCtx {
   hasTechnicalPlan: boolean;
@@ -50,6 +53,9 @@ const ALL_JUDGES: JudgeDef[] = [
   DOD_PRECISION_JUDGE,
   HOLDOUT_DISTINCTNESS_JUDGE,
   CROSS_DOC_CONSISTENCY_JUDGE,
+  API_SURFACE_DRIFT_JUDGE,
+  FEASIBILITY_JUDGE,
+  SCOPE_CREEP_JUDGE,
 ];
 
 export function loadJudgeRegistry(): Record<ReviewCode, JudgeDef> {

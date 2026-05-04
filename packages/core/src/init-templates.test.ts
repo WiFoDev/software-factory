@@ -12,18 +12,18 @@ import {
 
 describe('init-templates', () => {
   test('PACKAGE_JSON_TEMPLATE has the expected keys + workspace-stripped semver deps', () => {
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.9');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.9');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.9');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.10');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.10');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.10');
     expect(PACKAGE_JSON_TEMPLATE.type).toBe('module');
     expect(PACKAGE_JSON_TEMPLATE.private).toBe(true);
   });
 
-  test('PACKAGE_JSON_TEMPLATE pins @wifo/factory-* deps at ^0.0.9', () => {
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.9');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.9');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.9');
-    expect(PACKAGE_JSON_TEMPLATE.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.9');
+  test('PACKAGE_JSON_TEMPLATE pins @wifo/factory-* deps at ^0.0.10', () => {
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.10');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.10');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.10');
+    expect(PACKAGE_JSON_TEMPLATE.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.10');
   });
 
   test('TSCONFIG_TEMPLATE is self-contained — does NOT extend a relative path', () => {

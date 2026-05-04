@@ -2,6 +2,7 @@ import { ContextError, type ContextRecord, type ContextStore } from '@wifo/facto
 import type { Spec } from '@wifo/factory-core';
 import { RuntimeError } from './errors.js';
 import {
+  FactoryDodReportSchema,
   FactoryPhaseSchema,
   type FactoryRunPayload,
   FactoryRunSchema,
@@ -116,6 +117,7 @@ export async function run(args: RunArgs): Promise<RunReport> {
 
   tryRegister(contextStore, 'factory-run', FactoryRunSchema);
   tryRegister(contextStore, 'factory-phase', FactoryPhaseSchema);
+  tryRegister(contextStore, 'factory-dod-report', FactoryDodReportSchema);
 
   const startedAt = new Date();
   const t0 = performance.now();

@@ -11,6 +11,9 @@ export type ReviewCode =
   | 'review/dod-precision'
   | 'review/holdout-distinctness'
   | 'review/cross-doc-consistency'
+  | 'review/api-surface-drift'
+  | 'review/feasibility'
+  | 'review/scope-creep'
   | 'review/judge-failed'
   | 'review/section-missing'
   | 'review/dep-not-found';

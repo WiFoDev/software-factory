@@ -6,11 +6,13 @@ import { parseArgs } from 'node:util';
 import { runInit } from './init.js';
 import { getFrontmatterJsonSchema } from './json-schema.js';
 import { type LintError, lintSpec } from './lint.js';
+import { watchSpecs } from './watch.js';
 
 const USAGE = `Usage:
   factory init [--name <pkg-name>]   Bootstrap a new factory project in cwd
   factory spec lint <path>           Lint a spec file or directory of *.md
   factory spec review <path>         Review spec quality with LLM judges (subscription auth)
+  factory spec watch <path> [flags]  Re-run lint (and optionally review) on every *.md change
   factory spec schema [--out <file>] Print the frontmatter JSON Schema
 `;
 
@@ -59,6 +61,10 @@ export function runCli(argv: string[], io: CliIo = defaultIo): void {
     // Dispatched in async fashion: the reviewer package is dynamic-imported
     // so factory-core stays dep-free for callers that never run review.
     runReviewDispatch(rest, io);
+    return;
+  }
+  if (command === 'watch') {
+    runWatch(rest, io);
     return;
   }
 
@@ -182,6 +188,83 @@ function runLint(args: string[], io: CliIo): void {
   const warnCount = allErrors.filter((e) => e.severity === 'warning').length;
   io.stderr(formatSummary(errCount, warnCount));
   io.exit(errCount > 0 ? 1 : 0);
+}
+
+function runWatch(args: string[], io: CliIo): void {
+  let parsed: ReturnType<typeof parseArgs>;
+  try {
+    parsed = parseArgs({
+      args,
+      options: {
+        review: { type: 'boolean' },
+        'claude-bin': { type: 'string' },
+        'debounce-ms': { type: 'string' },
+      },
+      allowPositionals: true,
+      strict: true,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    io.stderr(`${msg}\n${USAGE}`);
+    io.exit(2);
+    return;
+  }
+
+  const target = parsed.positionals[0];
+  if (target === undefined) {
+    io.stderr(`Missing <path>\n${USAGE}`);
+    io.exit(2);
+    return;
+  }
+
+  const debounceRaw = parsed.values['debounce-ms'];
+  let debounceMs: number | undefined;
+  if (typeof debounceRaw === 'string') {
+    const n = Number.parseInt(debounceRaw, 10);
+    if (!Number.isFinite(n) || n <= 0 || String(n) !== debounceRaw.trim()) {
+      io.stderr(
+        `watch/invalid-debounce-ms: --debounce-ms must be a positive integer (got '${debounceRaw}')\n`,
+      );
+      io.exit(2);
+      return;
+    }
+    debounceMs = n;
+  }
+
+  const targetPath = resolve(process.cwd(), target);
+  try {
+    statSync(targetPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      io.stderr(`Path not found: ${target}\n`);
+      io.exit(1);
+      return;
+    }
+    throw err;
+  }
+
+  const review = parsed.values.review === true;
+  const claudeBin =
+    typeof parsed.values['claude-bin'] === 'string' ? parsed.values['claude-bin'] : undefined;
+
+  const handle = watchSpecs({
+    rootPath: targetPath,
+    ...(debounceMs !== undefined ? { debounceMs } : {}),
+    review,
+    ...(claudeBin !== undefined ? { claudeBin } : {}),
+    logLine: (line) => io.stdout(line),
+  });
+
+  const onSigint = (): void => {
+    process.off('SIGINT', onSigint);
+    void (async () => {
+      await handle.stop();
+      io.stdout('factory spec watch: stopping\n');
+      io.exit(0);
+    })();
+  };
+  process.on('SIGINT', onSigint);
 }
 
 function runSchema(args: string[], io: CliIo): void {

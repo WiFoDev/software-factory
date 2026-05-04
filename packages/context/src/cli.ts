@@ -8,15 +8,18 @@ import { listRecords, readRecord } from './store-fs.js';
 import { buildDescendantTree, buildTree, formatTree } from './tree.js';
 
 const USAGE = `Usage:
-  factory-context list          [--type <name>] [--dir <path>]
-  factory-context get  <id>     [--dir <path>]
-  factory-context tree <id>     [--dir <path>] [--direction <up|down>]
+  factory-context list          [--type <name>] [--context-dir <path>]
+  factory-context get  <id>     [--context-dir <path>]
+  factory-context tree <id>     [--context-dir <path>] [--direction <up|down>]
 
 Flags:
   --type <name>           For list: filter by record type
-  --dir <path>            Records directory (default: ./context)
+  --context-dir <path>    Records directory (default: ./context). Synonym: --dir (deprecated, removed in v0.1.0).
   --direction <up|down>   For tree: walk ancestors (up) or descendants (down). Default: up.
 `;
+
+const DEPRECATION_NOTICE =
+  'context/deprecated-flag: --dir is deprecated; use --context-dir (will be removed in v0.1.0)\n';
 
 export interface CliIo {
   stdout: (text: string) => void;
@@ -40,6 +43,20 @@ const defaultIo: CliIo = {
 function resolveDir(value: unknown): string {
   const dir = typeof value === 'string' ? value : './context';
   return resolve(process.cwd(), dir);
+}
+
+/**
+ * v0.0.10 — Resolve `--context-dir` (canonical) vs `--dir` (deprecated).
+ * When `--dir` is passed (with or without `--context-dir`), emit a one-line
+ * deprecation notice on stderr exactly once. When both are passed,
+ * `--context-dir` wins (canonical takes precedence over alias).
+ */
+function resolveContextDir(values: { 'context-dir'?: string; dir?: string }, io: CliIo): string {
+  if (values.dir !== undefined) {
+    io.stderr(DEPRECATION_NOTICE);
+  }
+  const chosen = values['context-dir'] ?? values.dir;
+  return resolveDir(chosen);
 }
 
 export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<void> {
@@ -72,6 +89,7 @@ async function runList(args: string[], io: CliIo): Promise<void> {
       args,
       options: {
         dir: { type: 'string' },
+        'context-dir': { type: 'string' },
         type: { type: 'string' },
       },
       allowPositionals: true,
@@ -82,7 +100,15 @@ async function runList(args: string[], io: CliIo): Promise<void> {
     io.exit(2);
     return;
   }
-  const dir = resolveDir(parsed.values.dir);
+  const dir = resolveContextDir(
+    {
+      ...(typeof parsed.values['context-dir'] === 'string'
+        ? { 'context-dir': parsed.values['context-dir'] }
+        : {}),
+      ...(typeof parsed.values.dir === 'string' ? { dir: parsed.values.dir } : {}),
+    },
+    io,
+  );
   const typeFilter = typeof parsed.values.type === 'string' ? parsed.values.type : undefined;
   let result: Awaited<ReturnType<typeof listRecords>>;
   try {
@@ -111,7 +137,7 @@ async function runGet(args: string[], io: CliIo): Promise<void> {
   try {
     parsed = parseArgs({
       args,
-      options: { dir: { type: 'string' } },
+      options: { dir: { type: 'string' }, 'context-dir': { type: 'string' } },
       allowPositionals: true,
       strict: true,
     });
@@ -126,7 +152,15 @@ async function runGet(args: string[], io: CliIo): Promise<void> {
     io.exit(2);
     return;
   }
-  const dir = resolveDir(parsed.values.dir);
+  const dir = resolveContextDir(
+    {
+      ...(typeof parsed.values['context-dir'] === 'string'
+        ? { 'context-dir': parsed.values['context-dir'] }
+        : {}),
+      ...(typeof parsed.values.dir === 'string' ? { dir: parsed.values.dir } : {}),
+    },
+    io,
+  );
   let rec: Awaited<ReturnType<typeof readRecord>>;
   try {
     rec = await readRecord(dir, id);
@@ -152,7 +186,11 @@ async function runTree(args: string[], io: CliIo): Promise<void> {
   try {
     parsed = parseArgs({
       args,
-      options: { dir: { type: 'string' }, direction: { type: 'string' } },
+      options: {
+        dir: { type: 'string' },
+        'context-dir': { type: 'string' },
+        direction: { type: 'string' },
+      },
       allowPositionals: true,
       strict: true,
     });
@@ -176,7 +214,15 @@ async function runTree(args: string[], io: CliIo): Promise<void> {
     io.exit(2);
     return;
   }
-  const dir = resolveDir(parsed.values.dir);
+  const dir = resolveContextDir(
+    {
+      ...(typeof parsed.values['context-dir'] === 'string'
+        ? { 'context-dir': parsed.values['context-dir'] }
+        : {}),
+      ...(typeof parsed.values.dir === 'string' ? { dir: parsed.values.dir } : {}),
+    },
+    io,
+  );
 
   if (direction === 'up') {
     // Probe the root first so a missing root maps to exit 3, while missing

@@ -91,7 +91,7 @@ describe('runInit — happy path', () => {
       .replace(/[^a-z0-9_-]+/g, '-')
       .replace(/^-+/, '');
     expect(pkg.name).toBe(expectedName);
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.9');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.10');
 
     // tsconfig.json is self-contained.
     const tsconfig = JSON.parse(readFileSync(join(dir, 'tsconfig.json'), 'utf8'));
@@ -163,7 +163,7 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     run(['--name', 'test'], io.io);
     expect(io.exitCode()).toBe(0);
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.9');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.10');
     // Existing devDep stays alongside.
     expect(pkg.devDependencies['@types/bun']).toBeDefined();
   });
@@ -218,15 +218,15 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     expect(stat.isFile()).toBe(true);
   });
 
-  test('scaffold dependencies pin @wifo/factory-* at ^0.0.9', () => {
+  test('scaffold dependencies pin @wifo/factory-* at ^0.0.10', () => {
     const io = makeIo();
     run(['--name', 'test'], io.io);
     expect(io.exitCode()).toBe(0);
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.9');
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.9');
-    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.9');
-    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.9');
+    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.10');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.10');
+    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.10');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.10');
   });
 
   test('scaffold README contains Multi-spec products section', () => {
@@ -276,7 +276,7 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     expect(biome.files.include).toContain('src/**/*.ts');
   });
 
-  test('scaffold is self-contained: README + slash command + config + deps all at v0.0.9', () => {
+  test('scaffold is self-contained: README + slash command + config + deps all at v0.0.10', () => {
     const io = makeIo();
     run(['--name', 'test'], io.io);
     expect(io.exitCode()).toBe(0);
@@ -293,12 +293,12 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     // factory.config.json provides defaults (v0.0.5.1+).
     expect(existsSync(join(dir, 'factory.config.json'))).toBe(true);
 
-    // package.json deps at ^0.0.9.
+    // package.json deps at ^0.0.10.
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.9');
-    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.9');
-    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.9');
-    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.9');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.10');
+    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.10');
+    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.10');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.10');
   });
 });
 

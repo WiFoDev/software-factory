@@ -88,11 +88,43 @@ export const FactoryImplementReportSchema = z.object({
   priorValidateReportId: z.string().optional(),
 });
 
+// v0.0.10 — DoD-verifier output. Persisted by `dodPhase` once per iteration.
+// Per-bullet `kind: 'shell' | 'judge'` mirrors `parseDodBullets`'s
+// classification; shell bullets carry `command`/`exitCode`/`stderrTail`,
+// judge bullets carry `judgeReasoning`.
+export const FactoryDodReportSchema = z.object({
+  specId: z.string(),
+  specPath: z.string().optional(),
+  iteration: z.number().int().positive(),
+  startedAt: z.string(),
+  durationMs: z.number().int().nonnegative(),
+  bullets: z.array(
+    z.object({
+      kind: z.enum(['shell', 'judge']),
+      bullet: z.string(),
+      status: z.enum(['pass', 'fail', 'error']),
+      command: z.string().optional(),
+      exitCode: z.number().int().nullable().optional(),
+      stderrTail: z.string().optional(),
+      judgeReasoning: z.string().optional(),
+      durationMs: z.number().int().nonnegative(),
+    }),
+  ),
+  summary: z.object({
+    pass: z.number().int().nonnegative(),
+    fail: z.number().int().nonnegative(),
+    error: z.number().int().nonnegative(),
+    skipped: z.number().int().nonnegative(),
+  }),
+  status: z.enum(['pass', 'fail', 'error']),
+});
+
 export type FactoryRunPayload = z.infer<typeof FactoryRunSchema>;
 export type FactorySequencePayload = z.infer<typeof FactorySequenceSchema>;
 export type FactoryPhasePayload = z.infer<typeof FactoryPhaseSchema>;
 export type FactoryValidateReportPayload = z.infer<typeof FactoryValidateReportSchema>;
 export type FactoryImplementReportPayload = z.infer<typeof FactoryImplementReportSchema>;
+export type FactoryDodReportPayload = z.infer<typeof FactoryDodReportSchema>;
 
 /**
  * Register a record type, swallowing only `context/duplicate-registration`.

@@ -55,7 +55,7 @@ describe('docs hygiene (factory-docs-v0-0-5)', () => {
   test('core README contains the PostToolUse hook recipe with both lint and review commands', () => {
     const body = readDoc('packages/core/README.md');
 
-    expect(body).toContain('## Harness-enforced spec linting + review (Claude Code hook recipe)');
+    expect(body).toContain('## Harness-enforced spec linting + review');
     expect(body).toContain('PostToolUse');
     expect(body).toContain('Write|Edit');
     expect(body).toContain('matcher');

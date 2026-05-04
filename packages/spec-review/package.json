@@ -1,6 +1,6 @@
 {
   "name": "@wifo/factory-spec-review",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "LLM-judged spec quality reviewer — runs subscription-paid `claude -p` judges against software-factory specs and emits findings in factory-spec-lint's output format",
   "license": "MIT",
   "author": "Luis (WiFoDev)",

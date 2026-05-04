@@ -289,6 +289,21 @@ interface PriorValidatePayload {
   scenarios?: unknown;
 }
 
+// v0.0.10 — Prior DoD report shape (subset of FactoryDodReportPayload).
+interface PriorDodBullet {
+  kind?: unknown;
+  status?: unknown;
+  command?: unknown;
+  exitCode?: unknown;
+  stderrTail?: unknown;
+  judgeReasoning?: unknown;
+  bullet?: unknown;
+}
+interface PriorDodPayload {
+  bullets?: unknown;
+  status?: unknown;
+}
+
 /**
  * Resolve a scenario's name from the spec's scenarios then holdouts. Falls
  * back to a literal '(name not in spec)' marker when the id is unknown.
@@ -375,6 +390,60 @@ function buildPriorValidateSection(
   return { text: acc.join('\n'), truncated };
 }
 
+/**
+ * v0.0.10 — Compose the `# Prior DoD report` section from the prior
+ * dod-report payload. Emits only failed bullets (status === 'fail' or
+ * 'error'), preserving the payload's order. Returns empty `text` when no
+ * failures (or no record). Uses the same per-line + section-total caps as
+ * `buildPriorValidateSection`; truncation marker is distinct so the
+ * runtime log line `[runtime] truncated prior-DoD section` is unambiguous.
+ */
+function buildPriorDodSection(priorPayload: PriorDodPayload): PriorSectionResult {
+  const bullets = Array.isArray(priorPayload.bullets) ? priorPayload.bullets : [];
+  const lines: string[] = [];
+  for (const raw of bullets) {
+    const b = raw as PriorDodBullet;
+    if (b.status !== 'fail' && b.status !== 'error') continue;
+    let line: string;
+    if (b.kind === 'shell') {
+      const command = typeof b.command === 'string' ? b.command : '';
+      const exitCodeStr =
+        typeof b.exitCode === 'number' ? String(b.exitCode) : b.exitCode === null ? 'null' : '?';
+      const stderrTail = typeof b.stderrTail === 'string' ? b.stderrTail.replace(/\n/g, ' ') : '';
+      line = `**\`${command}\`** — exit ${exitCodeStr}: ${stderrTail}`;
+    } else {
+      // judge bullet — surface the criterion + reasoning
+      const criterion = typeof b.bullet === 'string' ? b.bullet.replace(/^[-*]\s*/, '') : '';
+      const reasoning = typeof b.judgeReasoning === 'string' ? b.judgeReasoning : '';
+      line = `**${criterion}** — ${reasoning}`;
+    }
+    if (Buffer.byteLength(line, 'utf8') > PRIOR_DETAIL_PER_LINE_BYTES_CAP) {
+      const suffixBytes = Buffer.byteLength(TRUNCATION_SUFFIX, 'utf8');
+      const targetBytes = Math.max(0, PRIOR_DETAIL_PER_LINE_BYTES_CAP - suffixBytes);
+      let cut = line.length;
+      while (cut > 0 && Buffer.byteLength(line.slice(0, cut), 'utf8') > targetBytes) cut--;
+      line = `${line.slice(0, cut)}${TRUNCATION_SUFFIX}`;
+    }
+    lines.push(line);
+  }
+  if (lines.length === 0) return { text: '', truncated: false };
+
+  const header = ['# Prior DoD report', ''];
+  const acc: string[] = [...header];
+  let usedBytes = Buffer.byteLength(acc.join('\n'), 'utf8');
+  let truncated = false;
+  for (const l of lines) {
+    const next = Buffer.byteLength(`${l}\n`, 'utf8');
+    if (usedBytes + next > PRIOR_SECTION_TOTAL_BYTES_CAP) {
+      truncated = true;
+      break;
+    }
+    acc.push(l);
+    usedBytes += next;
+  }
+  return { text: acc.join('\n'), truncated };
+}
+
 // v0.0.5 — Behavior-prior prompt prefix. Stable across iterations so the bytes
 // are byte-identical and `claude -p`'s ephemeral cache hits the same key on
 // every implement spawn. NOT exported from the package's public surface
@@ -395,6 +464,13 @@ export function buildPrompt(args: {
   iteration: number;
   promptExtra?: string;
   priorSection?: string;
+  /**
+   * v0.0.10 — Optional `# Prior DoD report` section. Emitted after
+   * `priorSection` (the v0.0.3 prior-validate section) and before
+   * `# Working directory`. Byte-stable across iterations of the same
+   * failure for cache friendliness.
+   */
+  priorDodSection?: string;
 }): string {
   const lines = [
     'You are an automated coding agent in a software factory. Your task is to',
@@ -412,6 +488,9 @@ export function buildPrompt(args: {
   ];
   if (args.priorSection !== undefined && args.priorSection !== '') {
     lines.push(args.priorSection, '');
+  }
+  if (args.priorDodSection !== undefined && args.priorDodSection !== '') {
+    lines.push(args.priorDodSection, '');
   }
   lines.push(
     '# Working directory',
@@ -727,11 +806,26 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
       ctx.log('[runtime] truncated prior-validate section');
     }
 
+    // v0.0.10 — prior DoD report threading (parallel to v0.0.3 validate
+    // threading). Threaded via ctx.inputs from the prior iteration's
+    // terminal phase (dodPhase in the default v0.0.10 graph).
+    const priorDodRecord: ContextRecord | undefined = ctx.inputs.find(
+      (r) => r.type === 'factory-dod-report',
+    );
+    const priorDodSection =
+      priorDodRecord !== undefined
+        ? buildPriorDodSection(priorDodRecord.payload as PriorDodPayload)
+        : { text: '', truncated: false };
+    if (priorDodSection.truncated) {
+      ctx.log('[runtime] truncated prior-DoD section');
+    }
+
     const prompt = buildPrompt({
       specSource: ctx.spec.raw.source,
       cwd,
       iteration: ctx.iteration,
       ...(priorSection.text !== '' ? { priorSection: priorSection.text } : {}),
+      ...(priorDodSection.text !== '' ? { priorDodSection: priorDodSection.text } : {}),
       ...(opts.promptExtra !== undefined ? { promptExtra: opts.promptExtra } : {}),
     });
 

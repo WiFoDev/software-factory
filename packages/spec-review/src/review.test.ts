@@ -92,9 +92,11 @@ describe('runReview — happy path', () => {
       cacheDir,
     });
     expect(findings).toEqual([]);
-    // 5 enabled - cross-doc-consistency (no plan) - judge-parity (1 scenario)
-    // - holdout-distinctness (no holdouts) = 2 actually invoked.
-    expect(m.invocations()).toBe(2);
+    // 8 enabled - cross-doc-consistency (no plan, no deps) - judge-parity
+    // (1 scenario) - holdout-distinctness (no holdouts) - api-surface-drift
+    // (no plan) - feasibility (no LOC estimates) = 3 actually invoked
+    // (internal-consistency + dod-precision + scope-creep).
+    expect(m.invocations()).toBe(3);
   });
 
   test('one judge fails → one finding emitted at the right severity + line', async () => {
@@ -230,7 +232,9 @@ describe('runReview — applicability + section-missing', () => {
         cacheDir: cacheDir2,
         technicalPlan: '## Architecture\nThis is a tech plan.',
       });
-      expect(withPlan.invocations()).toBe(withoutCount + 1);
+      // Adding a tech-plan enables BOTH cross-doc-consistency and
+      // api-surface-drift (v0.0.10) — net +2 over the no-plan baseline.
+      expect(withPlan.invocations()).toBe(withoutCount + 2);
     } finally {
       await Bun.$`rm -rf ${cacheDir2}`.quiet().nothrow();
     }

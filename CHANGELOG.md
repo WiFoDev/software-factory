@@ -6,6 +6,43 @@ For the project's forward direction and shipped-release retrospectives, see [`RO
 
 ---
 
+## [0.0.10] — 2026-05-03
+
+**Theme: trust contract — DoD-verifier + reviewer judges = trust on both sides.** v0.0.10 closes the v0.0.9 BASELINE friction list with five sibling specs that together turn each spec's Definition of Done into a checked contract and tighten the spec-quality teeth. The DoD verifier now treats unchecked DoD items as a converge-blocking signal; three new reviewer judges (`feasibility`, `api-surface-drift`, `scope-creep`) catch quality regressions before runtime; `run-sequence` polish + `factory spec watch` smooth the workflow; and the `spec/wide-blast-radius` heuristic is recalibrated against empirical data.
+
+### Added
+
+- **DoD-verifier phase** *(factory-runtime)*. New verifier consumes the spec's `## Definition of Done` checklist and surfaces unchecked items as a converge-blocking signal. Public surface: `+2` exports (21 → 23).
+- **Three reviewer judges** *(factory-spec-review)*: `feasibility`, `api-surface-drift`, `scope-creep`. Three new `ReviewCode` union members; export count unchanged at 10.
+- **`factory spec watch`** *(factory-core)*. Watches a directory tree for `*.md` changes and re-runs `factory spec lint` (and optionally `factory spec review --no-cache`) on every save. Public surface: `+2` exports (29 → 31).
+- **`spec/wide-blast-radius` threshold raise from 8 to 12 + NOQA suppression directive** *(factory-core)*. Threshold raised based on v0.0.8 self-build evidence (the spec that actually timed out touched 12 files) + v0.0.9 BASELINE empirical data (18 historical specs warned at threshold 8). New HTML-comment NOQA directive (`<!-- NOQA: spec/wide-blast-radius -->` / `<!-- NOQA: code-a, code-b -->` / blanket `<!-- NOQA -->`) suppresses warnings per-spec; per-code, per-spec scope; never suppresses severity-`error` codes.
+- **`run-sequence` polish** *(factory-runtime)*. Workflow ergonomics improvements landed alongside the other v0.0.10 deliverables.
+
+### Changed
+
+- **All six `@wifo/factory-*` packages bumped to `0.0.10`** in lockstep. `init-templates.ts` `PACKAGE_JSON_TEMPLATE.dependencies` bumped from `^0.0.9` to `^0.0.10` for every `@wifo/factory-*` dep.
+- **`spec/wide-blast-radius` warning message** updated to reference the new `>= 12` threshold.
+
+### Public API surface
+
+| Package | v0.0.9 | v0.0.10 |
+|---|---|---|
+| `@wifo/factory-core` | 29 | 33 (+watch +DoD helpers) |
+| `@wifo/factory-context` | 18 | 18 |
+| `@wifo/factory-harness` | ~16 | ~16 |
+| `@wifo/factory-runtime` | 21 | 23 (+DoD-verifier) |
+| `@wifo/factory-spec-review` | 10 | 10 (+3 ReviewCode union members; count unchanged) |
+| `@wifo/factory-twin` | ~7 | ~7 |
+
+### Reconciliations worth knowing
+
+- **NOQA does NOT suppress errors.** Severity-`error` codes (e.g., `spec/invalid-depends-on`) always fire. NOQA is warnings-only.
+- **NOQA placement constraint.** The directive lives in the spec body (HTML comment), NOT in the YAML frontmatter — the schema is `.strict()` and would reject the comment as an unknown key.
+- **NOQA scope is per-spec, not per-line.** A single matching comment anywhere in the body suppresses every emission of the named code from `lintSpec`.
+- **No retroactive NOQA additions.** v0.0.10 raises the threshold but does NOT walk the 18 historical specs to add NOQA — most fall below 12 paths after the raise; the rest can opt in on demand.
+
+---
+
 ## [0.0.9] — 2026-05-03
 
 **Theme: status-aware run-sequence + per-spec timeout + scaffold scripts + dep-aware internal-consistency.** Four small frictions surfaced in the v0.0.8 BASELINE — drafting specs got pulled into `run-sequence`; wide-blast-radius specs hit the 600s agent-timeout ceiling with no override; the scaffold's `package.json` shipped empty `scripts` even as every spec's DoD claimed they were runnable; `internal-consistency` flagged shared constraints in multi-spec products as unreferenced because it didn't follow `depends-on` edges. v0.0.9 closes all four.

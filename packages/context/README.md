@@ -85,12 +85,28 @@ What this means in practice:
 ## CLI
 
 ```
-factory-context list           [--type <name>] [--dir <path>]
-factory-context get  <id>      [--dir <path>]
-factory-context tree <id>      [--dir <path>] [--direction <up|down>]
+factory-context list           [--type <name>] [--context-dir <path>]
+factory-context get  <id>      [--context-dir <path>]
+factory-context tree <id>      [--context-dir <path>] [--direction <up|down>]
 ```
 
-Default `--dir` is `./context`. The CLI works directly on the on-disk envelope — it does not need any types registered.
+Default `--context-dir` is `./context`. The CLI works directly on the on-disk envelope — it does not need any types registered.
+
+### `--context-dir` (canonical) vs `--dir` (deprecated)
+
+v0.0.10 adds `--context-dir` as the canonical flag for the records directory, harmonizing with `factory-runtime --context-dir` (which has used that name since v0.0.7). The legacy `--dir` flag continues to work as a synonym, but emits a one-line deprecation notice on stderr:
+
+```
+context/deprecated-flag: --dir is deprecated; use --context-dir (will be removed in v0.1.0)
+```
+
+Three-version deprecation arc:
+
+- **v0.0.10** — `--context-dir` added; `--dir` still works + emits one-line deprecation notice.
+- **v0.0.11** — same behavior (synonym + warning); maintainer migration window.
+- **v0.1.0** — `--dir` removed; only `--context-dir` is accepted.
+
+When both flags are passed, `--context-dir` wins (the canonical takes precedence over the alias). The deprecation notice for `--dir` still fires.
 
 ```sh
 $ factory-context list --dir ./.factory/context
