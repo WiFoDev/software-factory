@@ -324,6 +324,20 @@ Lean: ship (b) + (c) together in v0.0.9. (a) is too crude. (d) is v0.1.0+ territ
 
 ---
 
+## Shipped in v0.0.10 (kept here briefly for history)
+
+The "trust contract + spec-quality teeth + workflow polish" cluster shipped in v0.0.10. Five specs (1 DEEP centerpiece + 4 LIGHT) scoped via `/scope-project` (third clean dogfood) + run via `factory-runtime run-sequence` with `--include-drafting --max-agent-timeout-ms 1800000` (30min budget for the DEEP DoD-verifier + chore-coordinator):
+
+- ✅ **DoD-verifier runtime phase** — `dodPhase` parses `## Definition of Done` for shell-runnable bullets (allowlist: pnpm/bun/npm/node/tsc/git/npx/bash/sh/make/pwd/ls + `./` paths), runs each via Bash, dispatches non-shell to harness judge runner. New `factory-dod-report` record. Convergence requires DoD shell gates green AND test/judge satisfactions green. Closes the trust contract gap from v0.0.6 BASELINE.
+- ✅ **Three deferred reviewer judges** — `review/api-surface-drift`, `review/feasibility`, `review/scope-creep`. Round out v0.0.4's 9-judge plan; v0.0.10 closes 3 of the original 4 deferred (only `review/format-strictness` already lives in `lint`). ReviewCode union 8 → 11.
+- ✅ **`run-sequence` workflow polish** — already-converged dedup (closes the v0.0.9 BASELINE N² re-run pattern), `<dir>/done/` consulted for depends-on resolution, `factory-context --context-dir` synonym for `--dir` with deprecation arc.
+- ✅ **`factory spec watch` + PostToolUse hook recipe** — long-running CLI companion + harness-enforced lint+review path documented.
+- ✅ **`spec/wide-blast-radius` calibration** — threshold 8 → 12; NOQA HTML-comment directive (per-spec, multi-code, blanket forms).
+
+**v0.0.10 dogfood summary:** 5/5 first-try converges in 81 min wall-clock (biggest cluster yet). Workspace tests 581 → 640 (+59). Lint warnings on historical specs dropped 18 → 4 post-calibration. The factory's trust contract closed on both sides (runtime-side via DoD-verifier; spec-side via 3 new reviewer judges) in the same release. The v0.0.10 BASELINE re-run is the next maintainer-driven step.
+
+---
+
 ## Shipped in v0.0.9 (kept here briefly for history)
 
 The "close v0.0.8 BASELINE friction list" cluster shipped in v0.0.9 (commit `ded0863`). Four LIGHT specs, scoped via `/scope-project` (second clean dogfood) + run via `factory-runtime run-sequence` with `--max-agent-timeout-ms 1200000` (20min escape hatch — the v0.0.9 per-spec field lands in this very cluster):
