@@ -13,10 +13,13 @@ import { type ImplementPhaseOptions, implementPhase } from './phases/implement.j
 import { validatePhase } from './phases/validate.js';
 import { run } from './runtime.js';
 import { runSequence } from './sequence.js';
+import { listWorktrees, removeWorktree } from './worktree.js';
 
 const USAGE = `Usage:
   factory-runtime run <spec-path> [flags]
   factory-runtime run-sequence <dir> [flags]
+  factory-runtime worktree list [--context-dir <path>]
+  factory-runtime worktree clean [--all] [--keep-failed] [--context-dir <path>]
 
 Flags (run + run-sequence):
   --max-iterations <n>             Per-spec cap on iterations (default: 5)
@@ -26,6 +29,8 @@ Flags (run + run-sequence):
   --no-judge                       Skip judge satisfactions in the harness
   --no-implement                   Drop the implement phase (v0.0.1 [validate]-only graph)
   --skip-dod-phase                 Drop the DoD-verifier phase (v0.0.10; restores v0.0.9 graph)
+  --check-holdouts                 Run holdouts each iteration; both visible AND holdouts must pass (v0.0.11; default off)
+  --worktree                       Run inside an isolated git worktree at .factory/worktrees/<runId>/ (v0.0.11; default off)
   --max-prompt-tokens <n>          Per-phase cap on agent input tokens (default: 100000)
   --claude-bin <path>              Path to the claude executable (default: 'claude' on PATH)
   --twin-mode <record|replay|off>  Twin recording mode (default: record)
@@ -63,6 +68,8 @@ const FactoryConfigRuntimeSchema = z
     includeDrafting: z.boolean().optional(),
     // v0.0.10 — DoD-verifier opt-out
     skipDodPhase: z.boolean().optional(),
+    // v0.0.11 — holdout-aware convergence opt-in
+    checkHoldouts: z.boolean().optional(),
   })
   .partial();
 
@@ -116,6 +123,10 @@ export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<voi
     await runRunSequence(rest, io);
     return;
   }
+  if (command === 'worktree') {
+    await runWorktree(rest, io);
+    return;
+  }
   io.stderr(`Unknown subcommand: ${command}\n${USAGE}`);
   io.exit(2);
 }
@@ -133,6 +144,8 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
         'no-judge': { type: 'boolean' },
         'no-implement': { type: 'boolean' },
         'skip-dod-phase': { type: 'boolean' },
+        'check-holdouts': { type: 'boolean' },
+        worktree: { type: 'boolean' },
         'max-prompt-tokens': { type: 'string' },
         'max-agent-timeout-ms': { type: 'string' },
         'claude-bin': { type: 'string' },
@@ -313,6 +326,11 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
   const noJudge = noJudgeFromCli || fileRuntime?.noJudge === true;
   // v0.0.10 — CLI flag wins over config; built-in default is false.
   const skipDodPhase = skipDodPhaseFromCli || fileRuntime?.skipDodPhase === true;
+  // v0.0.11 — CLI flag wins over config; built-in default is false.
+  const checkHoldoutsFromCli = parsed.values['check-holdouts'] === true;
+  const checkHoldouts = checkHoldoutsFromCli || fileRuntime?.checkHoldouts === true;
+  // v0.0.11 — --worktree opts the run into the isolated-worktree sandbox.
+  const useWorktree = parsed.values.worktree === true;
 
   // --twin-mode: validate set membership (record|replay|off). The 'off'
   // value drives `opts.twin = 'off'`; others drive `opts.twin = { mode, ... }`.
@@ -354,6 +372,7 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
     cwd: process.cwd(),
     ...(scenarioIds !== undefined ? { scenarioIds } : {}),
     ...(noJudge ? { noJudge: true } : {}),
+    ...(checkHoldouts ? { checkHoldouts: true } : {}),
   });
   const dod = skipDodPhase
     ? null
@@ -414,6 +433,8 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
         ...(maxIterations !== undefined ? { maxIterations } : {}),
         ...(maxTotalTokens !== undefined ? { maxTotalTokens } : {}),
         ...(maxAgentTimeoutMs !== undefined ? { maxAgentTimeoutMs } : {}),
+        ...(checkHoldouts ? { checkHoldouts: true } : {}),
+        ...(useWorktree ? { worktree: true } : {}),
       },
     });
   } catch (err) {
@@ -425,16 +446,22 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
     throw err;
   }
 
+  // v0.0.11 — `charged` is the budget-relevant total (input + output across
+  // iterations); `budget` is the resolved RunOptions.maxTotalTokens or the
+  // 500_000 default. Surface both so the user can see "I used X of Y" at a
+  // glance.
+  const chargedDisplay = report.chargedTokens ?? report.totalTokens ?? 0;
+  const budgetDisplay = maxTotalTokens ?? 500_000;
   if (report.status === 'converged') {
     io.stdout(
-      `factory-runtime: converged in ${report.iterationCount} iteration(s) (run=${report.runId}, ${report.durationMs}ms)\n`,
+      `factory-runtime: converged in ${report.iterationCount} iteration(s) (run=${report.runId}, charged=${chargedDisplay}/${budgetDisplay}, ${report.durationMs}ms)\n`,
     );
     io.exit(0);
     return;
   }
   if (report.status === 'no-converge') {
     io.stdout(
-      `factory-runtime: no-converge after ${report.iterationCount} iteration(s) (run=${report.runId})\n`,
+      `factory-runtime: no-converge after ${report.iterationCount} iteration(s) (run=${report.runId}, charged=${chargedDisplay}/${budgetDisplay})\n`,
     );
     io.exit(1);
     return;
@@ -470,6 +497,8 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
         'no-judge': { type: 'boolean' },
         'no-implement': { type: 'boolean' },
         'skip-dod-phase': { type: 'boolean' },
+        'check-holdouts': { type: 'boolean' },
+        worktree: { type: 'boolean' },
         'max-prompt-tokens': { type: 'string' },
         'claude-bin': { type: 'string' },
         'twin-mode': { type: 'string' },
@@ -579,6 +608,10 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
   const noJudgeFromCli = parsed.values['no-judge'] === true;
   const noJudge = noJudgeFromCli || fileRuntime?.noJudge === true;
   const skipDodPhase = skipDodPhaseFromCli || fileRuntime?.skipDodPhase === true;
+  // v0.0.11 — CLI flag wins over config; built-in default false.
+  const checkHoldoutsFromCli = parsed.values['check-holdouts'] === true;
+  const checkHoldouts = checkHoldoutsFromCli || fileRuntime?.checkHoldouts === true;
+  const useWorktree = parsed.values.worktree === true;
   const continueOnFailFromCli = parsed.values['continue-on-fail'] === true;
   const continueOnFail = continueOnFailFromCli || fileRuntime?.continueOnFail === true;
   // v0.0.9 — --include-drafting: CLI flag (when set) wins over config; config
@@ -619,6 +652,7 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
   const validate = validatePhase({
     cwd: process.cwd(),
     ...(noJudge ? { noJudge: true } : {}),
+    ...(checkHoldouts ? { checkHoldouts: true } : {}),
   });
   const dod = skipDodPhase
     ? null
@@ -676,6 +710,8 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
         ...(maxTotalTokens !== undefined ? { maxTotalTokens } : {}),
         ...(maxSequenceTokens !== undefined ? { maxSequenceTokens } : {}),
         ...(maxAgentTimeoutMs !== undefined ? { maxAgentTimeoutMs } : {}),
+        ...(checkHoldouts ? { checkHoldouts: true } : {}),
+        ...(useWorktree ? { worktree: true } : {}),
         continueOnFail,
         includeDrafting,
         skipLog: (line: string) => io.stdout(`${line}\n`),
@@ -700,26 +736,236 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
 
   const total = report.specs.length;
   const converged = report.specs.filter((s) => s.status === 'converged').length;
+  // v0.0.11 — sequence-level charged total mirrors the per-run accumulator;
+  // sequence.totalTokens is already that sum (charged === input + output).
+  const sequenceCharged = report.totalTokens;
   if (report.status === 'converged') {
     io.stdout(
-      `factory-runtime: sequence converged (${converged}/${total} specs, factorySequenceId=${report.factorySequenceId}, ${report.durationMs}ms)\n`,
+      `factory-runtime: sequence converged (${converged}/${total} specs, charged=${sequenceCharged}, factorySequenceId=${report.factorySequenceId}, ${report.durationMs}ms)\n`,
     );
     io.exit(0);
     return;
   }
   // partial / no-converge / error → list per-spec status.
   io.stdout(
-    `factory-runtime: sequence ${report.status} (${converged}/${total} specs, factorySequenceId=${report.factorySequenceId}, ${report.durationMs}ms)\n`,
+    `factory-runtime: sequence ${report.status} (${converged}/${total} specs, charged=${sequenceCharged}, factorySequenceId=${report.factorySequenceId}, ${report.durationMs}ms)\n`,
   );
   for (const s of report.specs) {
     const blocked = s.blockedBy !== undefined ? ` (blockedBy=${s.blockedBy})` : '';
-    io.stdout(`  ${s.specId}: ${s.status}${blocked}\n`);
+    const specCharged =
+      s.runReport !== undefined
+        ? ` (charged=${s.runReport.chargedTokens ?? s.runReport.totalTokens ?? 0})`
+        : '';
+    io.stdout(`  ${s.specId}: ${s.status}${specCharged}${blocked}\n`);
   }
   if (report.status === 'error') {
     io.exit(3);
     return;
   }
   io.exit(1);
+}
+
+// ----- v0.0.11: factory-runtime worktree { list | clean } ----------------
+
+interface FactoryWorktreeRecordPayload {
+  runId: string;
+  worktreePath: string;
+  branch: string;
+  baseSha: string;
+  baseRef: string;
+  createdAt: string;
+  status: 'active' | 'converged' | 'no-converge' | 'error' | 'removed';
+}
+
+async function loadFactoryWorktreeRecords(
+  contextDir: string,
+): Promise<{ id: string; payload: FactoryWorktreeRecordPayload; recordedAt: string }[]> {
+  const store = createContextStore({ dir: contextDir });
+  const all = await store.list({ type: 'factory-worktree' });
+  // Group by runId; keep most recent record per runId so the latest
+  // status wins (re-runs of the same spec under the same parent set will
+  // produce distinct runIds, so this is mostly defensive).
+  const byRunId = new Map<
+    string,
+    { id: string; payload: FactoryWorktreeRecordPayload; recordedAt: string }
+  >();
+  for (const rec of all) {
+    const payload = rec.payload as FactoryWorktreeRecordPayload;
+    const prev = byRunId.get(payload.runId);
+    if (prev === undefined || prev.recordedAt < rec.recordedAt) {
+      byRunId.set(payload.runId, { id: rec.id, payload, recordedAt: rec.recordedAt });
+    }
+  }
+  return [...byRunId.values()];
+}
+
+async function runWorktree(args: string[], io: CliIo): Promise<void> {
+  const [sub, ...rest] = args;
+  if (sub === 'list') {
+    await runWorktreeList(rest, io);
+    return;
+  }
+  if (sub === 'clean') {
+    await runWorktreeClean(rest, io);
+    return;
+  }
+  io.stderr(`Unknown worktree subcommand: ${sub ?? ''}\n${USAGE}`);
+  io.exit(2);
+}
+
+async function runWorktreeList(args: string[], io: CliIo): Promise<void> {
+  let parsed: ReturnType<typeof parseArgs>;
+  try {
+    parsed = parseArgs({
+      args,
+      options: { 'context-dir': { type: 'string' } },
+      allowPositionals: false,
+      strict: true,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    io.stderr(`${msg}\n${USAGE}`);
+    io.exit(2);
+    return;
+  }
+
+  const contextDirRaw =
+    typeof parsed.values['context-dir'] === 'string' ? parsed.values['context-dir'] : './context';
+  const contextDir = resolve(process.cwd(), contextDirRaw);
+  if (!existsSync(contextDir)) {
+    io.stderr(`Context dir not found: ${contextDirRaw}\n`);
+    io.exit(3);
+    return;
+  }
+
+  let records: Awaited<ReturnType<typeof loadFactoryWorktreeRecords>>;
+  try {
+    records = await loadFactoryWorktreeRecords(contextDir);
+  } catch (err) {
+    io.stderr(`runtime/worktree-failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    io.exit(3);
+    return;
+  }
+
+  // Cross-check git's view of the worktrees so the user can see drift
+  // (a record present without an actual worktree → tagged 'removed').
+  let gitWorktrees: { path: string; branch: string }[] = [];
+  try {
+    gitWorktrees = listWorktrees(process.cwd());
+  } catch (err) {
+    io.stderr(
+      `runtime/worktree-failed: failed to enumerate git worktrees: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
+    );
+    io.exit(3);
+    return;
+  }
+  const gitPaths = new Set(gitWorktrees.map((w) => w.path));
+
+  if (records.length === 0) {
+    io.stdout('factory-runtime worktree list: no factory-worktree records\n');
+    io.exit(0);
+    return;
+  }
+  for (const rec of records) {
+    const onDisk = gitPaths.has(rec.payload.worktreePath) ? 'present' : 'absent';
+    io.stdout(
+      `${rec.payload.runId}  ${rec.payload.status}  ${onDisk}  ${rec.payload.worktreePath}\n`,
+    );
+  }
+  io.exit(0);
+}
+
+async function runWorktreeClean(args: string[], io: CliIo): Promise<void> {
+  let parsed: ReturnType<typeof parseArgs>;
+  try {
+    parsed = parseArgs({
+      args,
+      options: {
+        all: { type: 'boolean' },
+        'keep-failed': { type: 'boolean' },
+        'context-dir': { type: 'string' },
+      },
+      allowPositionals: false,
+      strict: true,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    io.stderr(`${msg}\n${USAGE}`);
+    io.exit(2);
+    return;
+  }
+
+  const contextDirRaw =
+    typeof parsed.values['context-dir'] === 'string' ? parsed.values['context-dir'] : './context';
+  const contextDir = resolve(process.cwd(), contextDirRaw);
+  if (!existsSync(contextDir)) {
+    io.stderr(`Context dir not found: ${contextDirRaw}\n`);
+    io.exit(3);
+    return;
+  }
+
+  let records: Awaited<ReturnType<typeof loadFactoryWorktreeRecords>>;
+  try {
+    records = await loadFactoryWorktreeRecords(contextDir);
+  } catch (err) {
+    io.stderr(`runtime/worktree-failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    io.exit(3);
+    return;
+  }
+
+  // Defensive: surface a clear error if `git worktree list` is broken
+  // before we start removing things (H-3).
+  try {
+    listWorktrees(process.cwd());
+  } catch (err) {
+    io.stderr(
+      `runtime/worktree-failed: failed to enumerate git worktrees: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
+    );
+    io.exit(3);
+    return;
+  }
+
+  const all = parsed.values.all === true;
+  // --keep-failed mirrors default behavior (only converged removed); the
+  // flag is recognized for symmetry/UX but doesn't change the algorithm.
+  // Documented for explicitness.
+  const _keepFailed = parsed.values['keep-failed'] === true;
+  void _keepFailed;
+
+  const isConverged = (status: FactoryWorktreeRecordPayload['status']): boolean =>
+    status === 'converged';
+  const isFailed = (status: FactoryWorktreeRecordPayload['status']): boolean =>
+    status === 'no-converge' || status === 'error';
+
+  let removedConverged = 0;
+  let removedFailed = 0;
+  let keptFailed = 0;
+  for (const rec of records) {
+    const status = rec.payload.status;
+    if (status === 'removed') continue;
+    const shouldRemove = all ? isConverged(status) || isFailed(status) : isConverged(status);
+    if (shouldRemove) {
+      const { ok } = removeWorktree(rec.payload.worktreePath, process.cwd());
+      // `git worktree remove` may fail for already-pruned trees; treat
+      // either outcome as "not present anymore" — the maintainer can
+      // double-check with `factory-runtime worktree list`.
+      void ok;
+      if (isConverged(status)) removedConverged++;
+      else removedFailed++;
+    } else if (isFailed(status)) {
+      keptFailed++;
+    }
+  }
+
+  const parts = [`removed ${removedConverged} converged worktree(s)`];
+  if (all) parts.push(`removed ${removedFailed} failed worktree(s)`);
+  else parts.push(`kept ${keptFailed} failed worktree(s)`);
+  io.stdout(`factory-runtime worktree clean: ${parts.join('; ')}\n`);
+  io.exit(0);
 }
 
 if (typeof process !== 'undefined' && Array.isArray(process.argv)) {

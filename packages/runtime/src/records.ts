@@ -38,6 +38,11 @@ export const FactoryValidateReportSchema = z.object({
   startedAt: z.string(),
   durationMs: z.number().int().nonnegative(),
   scenarios: z.array(z.unknown()),
+  // v0.0.11 — populated when validatePhase ran with checkHoldouts. Mirrors
+  // the `scenarios` shape; entries carry `scenarioKind: 'holdout'`. Absent
+  // (or empty) when checkHoldouts was not enabled — preserves v0.0.10
+  // record-set parity for default flows.
+  holdouts: z.array(z.unknown()).optional(),
   summary: z.object({
     pass: z.number().int().nonnegative(),
     fail: z.number().int().nonnegative(),
@@ -74,6 +79,10 @@ export const FactoryImplementReportSchema = z.object({
   tokens: z.object({
     input: z.number().int().nonnegative(),
     output: z.number().int().nonnegative(),
+    // v0.0.11 — `charged === input + output` (the budget-relevant value).
+    // Optional in the schema so legacy v0.0.10 records still parse; required
+    // when implementPhase persists a fresh report.
+    charged: z.number().int().nonnegative().optional(),
     cacheCreate: z.number().int().nonnegative().optional(),
     cacheRead: z.number().int().nonnegative().optional(),
     total: z.number().int().nonnegative(),
@@ -119,12 +128,27 @@ export const FactoryDodReportSchema = z.object({
   status: z.enum(['pass', 'fail', 'error']),
 });
 
+// v0.0.11 — Per-run isolated git-worktree record. Persisted by `run()` when
+// `RunOptions.worktree` is set; `parents=[runId]`. Status updates after the
+// run terminates ('converged' | 'no-converge' | 'error'); `factory-runtime
+// worktree clean` flips it to 'removed' on cleanup.
+export const FactoryWorktreeSchema = z.object({
+  runId: z.string(),
+  worktreePath: z.string(),
+  branch: z.string(),
+  baseSha: z.string(),
+  baseRef: z.string(),
+  createdAt: z.string(),
+  status: z.enum(['active', 'converged', 'no-converge', 'error', 'removed']),
+});
+
 export type FactoryRunPayload = z.infer<typeof FactoryRunSchema>;
 export type FactorySequencePayload = z.infer<typeof FactorySequenceSchema>;
 export type FactoryPhasePayload = z.infer<typeof FactoryPhaseSchema>;
 export type FactoryValidateReportPayload = z.infer<typeof FactoryValidateReportSchema>;
 export type FactoryImplementReportPayload = z.infer<typeof FactoryImplementReportSchema>;
 export type FactoryDodReportPayload = z.infer<typeof FactoryDodReportSchema>;
+export type FactoryWorktreePayload = z.infer<typeof FactoryWorktreeSchema>;
 
 /**
  * Register a record type, swallowing only `context/duplicate-registration`.

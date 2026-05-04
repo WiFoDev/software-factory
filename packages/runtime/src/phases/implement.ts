@@ -304,6 +304,18 @@ interface PriorDodPayload {
   status?: unknown;
 }
 
+// v0.0.11 — Prior holdout section bounds. Tighter section-total cap than
+// the validate section's 50 KB because we emit IDs only (no body text).
+const PRIOR_HOLDOUT_SECTION_TOTAL_BYTES_CAP = 10 * 1024; // 10 KB section total
+
+interface PriorHoldoutScenario {
+  scenarioId?: unknown;
+  status?: unknown;
+}
+interface PriorValidatePayloadWithHoldouts extends PriorValidatePayload {
+  holdouts?: unknown;
+}
+
 /**
  * Resolve a scenario's name from the spec's scenarios then holdouts. Falls
  * back to a literal '(name not in spec)' marker when the id is unknown.
@@ -444,6 +456,79 @@ function buildPriorDodSection(priorPayload: PriorDodPayload): PriorSectionResult
   return { text: acc.join('\n'), truncated };
 }
 
+/**
+ * v0.0.11 — Compose the `# Prior holdout fail` section from the prior
+ * validate-report's `holdouts` array. Emits **only** the IDs of failed
+ * holdouts (status === 'fail' or 'error'); the criterion text is never
+ * surfaced — preserves the v0.0.4 overfit guard invariant. Returns empty
+ * `text` when no failed holdouts (or no `holdouts` array).
+ *
+ * The locked format is byte-stable across iterations of the same failure
+ * (cache-friendly for `claude -p`'s prompt cache). Per-line cap 1 KB;
+ * section-total cap 10 KB (tighter than the validate section's 50 KB —
+ * IDs are short, so one-shot truncation is plenty).
+ */
+function buildPriorHoldoutSection(
+  priorPayload: PriorValidatePayloadWithHoldouts,
+  iteration: number,
+): PriorSectionResult {
+  const holdouts = Array.isArray(priorPayload.holdouts) ? priorPayload.holdouts : [];
+  const failedIds: string[] = [];
+  for (const raw of holdouts) {
+    const rec = raw as PriorHoldoutScenario;
+    if (typeof rec.scenarioId !== 'string') continue;
+    if (rec.status !== 'fail' && rec.status !== 'error') continue;
+    failedIds.push(rec.scenarioId);
+  }
+  if (failedIds.length === 0) return { text: '', truncated: false };
+
+  const priorIter = Math.max(1, iteration - 1);
+  const header = [
+    '# Prior holdout fail',
+    '',
+    `Iteration ${priorIter}'s visible scenarios passed but the following holdouts failed:`,
+    '',
+  ];
+  const footer = [
+    '',
+    'These holdouts are intentionally hidden — their content is NOT shown to you.',
+    'Fix the underlying behavior so they pass without looking them up.',
+  ];
+
+  // Build bullet lines (per-line cap 1 KB).
+  const bullets: string[] = [];
+  for (const id of failedIds) {
+    let line = `- **${id}**`;
+    if (Buffer.byteLength(line, 'utf8') > PRIOR_DETAIL_PER_LINE_BYTES_CAP) {
+      const suffixBytes = Buffer.byteLength(TRUNCATION_SUFFIX, 'utf8');
+      const targetBytes = Math.max(0, PRIOR_DETAIL_PER_LINE_BYTES_CAP - suffixBytes);
+      let cut = line.length;
+      while (cut > 0 && Buffer.byteLength(line.slice(0, cut), 'utf8') > targetBytes) cut--;
+      line = `${line.slice(0, cut)}${TRUNCATION_SUFFIX}`;
+    }
+    bullets.push(line);
+  }
+
+  // Apply section-total cap. Reserve room for the footer so the section is
+  // always closed cleanly (closing prose isn't dropped by truncation).
+  const headerBytes = Buffer.byteLength(`${header.join('\n')}\n`, 'utf8');
+  const footerBytes = Buffer.byteLength(`${footer.join('\n')}\n`, 'utf8');
+  const availableForBullets = PRIOR_HOLDOUT_SECTION_TOTAL_BYTES_CAP - headerBytes - footerBytes;
+  const acc: string[] = [];
+  let usedBullets = 0;
+  let truncated = false;
+  for (const b of bullets) {
+    const next = Buffer.byteLength(`${b}\n`, 'utf8');
+    if (usedBullets + next > availableForBullets) {
+      truncated = true;
+      break;
+    }
+    acc.push(b);
+    usedBullets += next;
+  }
+  return { text: [...header, ...acc, ...footer].join('\n'), truncated };
+}
+
 // v0.0.5 — Behavior-prior prompt prefix. Stable across iterations so the bytes
 // are byte-identical and `claude -p`'s ephemeral cache hits the same key on
 // every implement spawn. NOT exported from the package's public surface
@@ -471,6 +556,12 @@ export function buildPrompt(args: {
    * failure for cache friendliness.
    */
   priorDodSection?: string;
+  /**
+   * v0.0.11 — Optional `# Prior holdout fail` section. IDs-only (preserves
+   * the overfit guard invariant). Emitted after `priorDodSection` and
+   * before `# Working directory`.
+   */
+  priorHoldoutSection?: string;
 }): string {
   const lines = [
     'You are an automated coding agent in a software factory. Your task is to',
@@ -491,6 +582,9 @@ export function buildPrompt(args: {
   }
   if (args.priorDodSection !== undefined && args.priorDodSection !== '') {
     lines.push(args.priorDodSection, '');
+  }
+  if (args.priorHoldoutSection !== undefined && args.priorHoldoutSection !== '') {
+    lines.push(args.priorHoldoutSection, '');
   }
   lines.push(
     '# Working directory',
@@ -774,7 +868,11 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
   return definePhase('implement', async (ctx) => {
     tryRegister(ctx.contextStore, 'factory-implement-report', FactoryImplementReportSchema);
 
+    // v0.0.11 — `ctx.cwd` (set by runtime when worktree mode is enabled)
+    // wins over `opts.cwd` so the agent's edits land in the isolated
+    // worktree, never the maintainer's main tree.
     const cwd =
+      ctx.cwd ??
       opts.cwd ??
       (ctx.spec.raw.filename !== undefined
         ? dirname(resolve(ctx.spec.raw.filename))
@@ -820,12 +918,30 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
       ctx.log('[runtime] truncated prior-DoD section');
     }
 
+    // v0.0.11 — prior holdout fail section (IDs-only). Reads the
+    // `holdouts` array from the same prior validate-report (when
+    // checkHoldouts was enabled in the prior iteration). The section is
+    // intentionally a separate emitter from the prior-validate section so
+    // the byte layout stays stable: failed visible scenarios go to
+    // `priorSection`; failed holdouts go to `priorHoldoutSection`.
+    const priorHoldoutSection =
+      priorValidateRecord !== undefined
+        ? buildPriorHoldoutSection(
+            priorValidateRecord.payload as PriorValidatePayloadWithHoldouts,
+            ctx.iteration,
+          )
+        : { text: '', truncated: false };
+    if (priorHoldoutSection.truncated) {
+      ctx.log('[runtime] truncated prior-holdouts section');
+    }
+
     const prompt = buildPrompt({
       specSource: ctx.spec.raw.source,
       cwd,
       iteration: ctx.iteration,
       ...(priorSection.text !== '' ? { priorSection: priorSection.text } : {}),
       ...(priorDodSection.text !== '' ? { priorDodSection: priorDodSection.text } : {}),
+      ...(priorHoldoutSection.text !== '' ? { priorHoldoutSection: priorHoldoutSection.text } : {}),
       ...(opts.promptExtra !== undefined ? { promptExtra: opts.promptExtra } : {}),
     });
 
@@ -876,6 +992,11 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
     const cacheCreate = numOrUndef(u.cache_creation_input_tokens);
     const cacheRead = numOrUndef(u.cache_read_input_tokens);
     const tokensTotal = tokensInput + tokensOutput + (cacheCreate ?? 0) + (cacheRead ?? 0);
+    // v0.0.11 — `charged` is the budget-relevant value (input + output).
+    // Cache reads/creates are free per Anthropic's pricing; the runtime's
+    // budget enforcement and surface metrics should track `charged`, not
+    // the SDK's cache-aware `total`.
+    const tokensCharged = tokensInput + tokensOutput;
 
     // Result text — always populated, regardless of is_error.
     const result = String(envelope.result ?? '');
@@ -927,6 +1048,7 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
       tokens: {
         input: tokensInput,
         output: tokensOutput,
+        charged: tokensCharged,
         ...(cacheCreate !== undefined ? { cacheCreate } : {}),
         ...(cacheRead !== undefined ? { cacheRead } : {}),
         total: tokensTotal,

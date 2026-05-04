@@ -452,6 +452,42 @@ describe('implementPhase — happy path (S-1)', () => {
   });
 });
 
+describe('implementPhase — tokens.charged (v0.0.11)', () => {
+  test('implementPhase populates tokens.charged = input + output', async () => {
+    const { ctx } = await setupCtx();
+    const phase = implementPhase({
+      cwd: workDir,
+      claudePath: FAKE_CLAUDE,
+      twin: 'off',
+    });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '7000';
+    process.env.FAKE_CLAUDE_OUTPUT_TOKENS = '300';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+
+    try {
+      const result = await phase.run(ctx);
+      expect(result.status).toBe('pass');
+      const payload = result.records[0]?.payload as {
+        tokens: { input: number; output: number; charged: number; total: number };
+      };
+      expect(payload.tokens.input).toBe(7000);
+      expect(payload.tokens.output).toBe(300);
+      expect(payload.tokens.charged).toBe(7300);
+      // total mirrors the SDK's cache-aware sum; without cache the fake
+      // returns equal-to-charged here.
+      expect(payload.tokens.total).toBe(7300);
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_OUTPUT_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+});
+
 describe('implementPhase — cost cap (S-2)', () => {
   test('overrun → report persisted with status=error and result preserved before RuntimeError is thrown', async () => {
     const { ctx, runId } = await setupCtx();
@@ -1598,6 +1634,168 @@ describe('implementPhase — v0.0.10 Prior DoD report threading (S-4)', () => {
       const result = await phase.run(ctx);
       const payload = result.records[0]?.payload as { prompt: string };
       expect(payload.prompt).not.toContain('# Prior DoD report');
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+});
+
+// ----- v0.0.11: Prior holdout fail section (S-2) ------------------------
+
+async function makePriorValidateRecordWithHoldouts(
+  store: ReturnType<typeof createContextStore>,
+  runId: string,
+  visible: ReadonlyArray<{
+    scenarioId: string;
+    status: 'pass' | 'fail' | 'error' | 'skipped';
+    detail?: string;
+  }>,
+  holdouts: ReadonlyArray<{
+    scenarioId: string;
+    status: 'pass' | 'fail' | 'error' | 'skipped';
+    detail?: string;
+  }>,
+): Promise<{ id: string; record: NonNullable<Awaited<ReturnType<typeof store.get>>> }> {
+  tryRegister(store, 'factory-validate-report', FactoryValidateReportSchema);
+  const summary = { pass: 0, fail: 0, error: 0, skipped: 0 };
+  for (const s of [...visible, ...holdouts]) summary[s.status]++;
+  const reportStatus = summary.error > 0 ? 'error' : summary.fail > 0 ? 'fail' : 'pass';
+  const id = await store.put(
+    'factory-validate-report',
+    {
+      specId: 'runtime-smoke-needs-impl',
+      startedAt: new Date().toISOString(),
+      durationMs: 100,
+      scenarios: visible.map((s) => ({
+        scenarioId: s.scenarioId,
+        scenarioKind: 'scenario',
+        status: s.status,
+        satisfactions:
+          s.detail !== undefined ? [{ kind: 'test', detail: s.detail, status: s.status }] : [],
+      })),
+      holdouts: holdouts.map((h) => ({
+        scenarioId: h.scenarioId,
+        scenarioKind: 'holdout',
+        status: h.status,
+        satisfactions:
+          h.detail !== undefined ? [{ kind: 'test', detail: h.detail, status: h.status }] : [],
+      })),
+      summary,
+      status: reportStatus,
+    },
+    { parents: [runId] },
+  );
+  const record = await store.get(id);
+  if (record === null) throw new Error('vanished');
+  return { id, record };
+}
+
+describe('implementPhase — v0.0.11 Prior holdout fail section (S-2)', () => {
+  test('buildPrompt emits Prior holdout fail section listing IDs only', async () => {
+    const { ctx, runId } = await setupCtx();
+    const { record: priorRec } = await makePriorValidateRecordWithHoldouts(
+      ctx.contextStore,
+      runId,
+      [{ scenarioId: 'S-1', status: 'pass' }],
+      [
+        { scenarioId: 'H-1', status: 'fail', detail: 'this is the H-1 criterion text — secret' },
+        { scenarioId: 'H-2', status: 'fail', detail: 'this is the H-2 criterion text — secret' },
+      ],
+    );
+    const ctxWithPrior: PhaseContext = { ...ctx, iteration: 2, inputs: [priorRec] };
+    const phase = implementPhase({ cwd: workDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const result = await phase.run(ctxWithPrior);
+      const payload = result.records[0]?.payload as { prompt: string };
+      expect(payload.prompt).toContain('# Prior holdout fail');
+      expect(payload.prompt).toContain('- **H-1**');
+      expect(payload.prompt).toContain('- **H-2**');
+      expect(payload.prompt).toContain('intentionally hidden');
+      // Section sits AFTER any prior-validate / prior-DoD section and BEFORE
+      // # Working directory.
+      const holdoutIdx = payload.prompt.indexOf('# Prior holdout fail');
+      const workingIdx = payload.prompt.indexOf('# Working directory');
+      expect(holdoutIdx).toBeGreaterThan(-1);
+      expect(workingIdx).toBeGreaterThan(holdoutIdx);
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('buildPrompt does not emit holdout criterion text', async () => {
+    // The agent must see only the failed holdout IDs, never the criterion
+    // / scenario body. We thread a prior validate-report whose holdout
+    // entries carry distinctive `detail` strings, then assert those strings
+    // never reach the rendered prompt.
+    const secret1 = 'SECRET-CRITERION-XYZ-DO-NOT-LEAK-ALPHA';
+    const secret2 = 'SECRET-CRITERION-XYZ-DO-NOT-LEAK-BETA';
+    const { ctx, runId } = await setupCtx();
+    const { record: priorRec } = await makePriorValidateRecordWithHoldouts(
+      ctx.contextStore,
+      runId,
+      [{ scenarioId: 'S-1', status: 'pass' }],
+      [
+        { scenarioId: 'H-1', status: 'fail', detail: secret1 },
+        { scenarioId: 'H-2', status: 'fail', detail: secret2 },
+      ],
+    );
+    const ctxWithPrior: PhaseContext = { ...ctx, iteration: 2, inputs: [priorRec] };
+    const phase = implementPhase({ cwd: workDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const result = await phase.run(ctxWithPrior);
+      const payload = result.records[0]?.payload as { prompt: string };
+      expect(payload.prompt).toContain('# Prior holdout fail');
+      expect(payload.prompt).toContain('- **H-1**');
+      expect(payload.prompt).toContain('- **H-2**');
+      // Locked invariant: criterion text never appears in the section we add.
+      // We assert the IDs-only invariant by carving out the section we added
+      // and searching ONLY in there (the spec body itself may contain unrelated
+      // matches; here, the spec body has no holdouts, so the secrets cannot
+      // come from the spec source).
+      expect(payload.prompt).not.toContain(secret1);
+      expect(payload.prompt).not.toContain(secret2);
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+
+  test('Prior holdout fail section absent when no holdout fails', async () => {
+    const { ctx, runId } = await setupCtx();
+    // All holdouts pass → no section emitted. Visible has a fail to keep
+    // the prior-validate section non-empty for contrast.
+    const { record: priorRec } = await makePriorValidateRecordWithHoldouts(
+      ctx.contextStore,
+      runId,
+      [{ scenarioId: 'S-1', status: 'fail', detail: 'visible failed' }],
+      [{ scenarioId: 'H-1', status: 'pass' }],
+    );
+    const ctxWithPrior: PhaseContext = { ...ctx, iteration: 2, inputs: [priorRec] };
+    const phase = implementPhase({ cwd: workDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const result = await phase.run(ctxWithPrior);
+      const payload = result.records[0]?.payload as { prompt: string };
+      expect(payload.prompt).not.toContain('# Prior holdout fail');
     } finally {
       Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
       Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');

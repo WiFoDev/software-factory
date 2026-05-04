@@ -1,5 +1,6 @@
 import type { ContextRecord, ContextStore } from '@wifo/factory-context';
 import type { Spec } from '@wifo/factory-core';
+import type { WorktreeOptions } from './worktree.js';
 
 export type PhaseStatus = 'pass' | 'fail' | 'error';
 
@@ -32,6 +33,17 @@ export interface PhaseContext {
    * option is unset; an explicit per-phase `timeoutMs` always wins.
    */
   maxAgentTimeoutMs?: number;
+  /**
+   * v0.0.11 — Working directory the runtime threads to phase invocations.
+   * Set when `RunOptions.worktree` is enabled — the runtime creates a git
+   * worktree at `<projectRoot>/.factory/worktrees/<runId>/` and threads
+   * its absolute path here. Built-in phases (`validatePhase`,
+   * `implementPhase`, `dodPhase`) consult this BEFORE their own
+   * `opts.cwd`, so the maintainer's main tree is never touched by the
+   * agent. Undefined when worktree is not enabled — phases fall back to
+   * their own `opts.cwd` (or `process.cwd()`).
+   */
+  cwd?: string;
 }
 
 export interface Phase {
@@ -78,6 +90,22 @@ export interface RunOptions {
    * affected (they include or exclude `dodPhase` as they choose).
    */
   skipDodPhase?: boolean;
+  /**
+   * v0.0.11 — Field-level addition. Consumed by the CLI default-graph
+   * composition (which threads it into `validatePhase({ checkHoldouts })`);
+   * programmatic callers building their own graph aren't affected unless
+   * they read this field. Default `false`.
+   */
+  checkHoldouts?: boolean;
+  /**
+   * v0.0.11 — Field-level addition. When set, `run()` creates an isolated
+   * git worktree at `<projectRoot>/.factory/worktrees/<runId>/` BEFORE the
+   * phase graph runs and threads the worktree path as `cwd` into every
+   * phase invocation. `true` uses defaults; an object overrides the
+   * default `rootDir` / `projectRoot`. `undefined` (default) preserves
+   * v0.0.10 behavior — phases run from `process.cwd()`.
+   */
+  worktree?: boolean | WorktreeOptions;
 }
 
 export interface PhaseInvocationResult {
@@ -105,11 +133,21 @@ export interface RunReport {
   iterations: PhaseIterationResult[];
   status: RunStatus;
   /**
-   * v0.0.7 — sum of `tokens.input + tokens.output` across every
-   * `factory-implement-report` produced during this run. Used by the
-   * sequence-runner to enforce a cross-spec budget without re-walking the
-   * context store. Optional for backward-compat: pre-v0.0.7 callers that
-   * construct RunReport themselves don't break.
+   * v0.0.11 — sum of `tokens.charged` (i.e. `input + output`) across every
+   * `factory-implement-report` produced during this run. The
+   * budget-relevant value: cache reads/creates are free per Anthropic's
+   * pricing and excluded. Used by the sequence-runner to enforce a
+   * cross-spec budget without re-walking the context store. Optional for
+   * backward-compat: pre-v0.0.7 callers that construct RunReport
+   * themselves don't break.
+   */
+  chargedTokens?: number;
+  /**
+   * @deprecated Use `chargedTokens` for the budget-relevant total.
+   * `totalTokens` is the same value but the name is misleading — it
+   * suggests the SDK's `usage.total_tokens` (cache-aware) when in fact
+   * the runtime always summed `input + output`. Removal scheduled for
+   * v0.1.0.
    */
   totalTokens?: number;
 }

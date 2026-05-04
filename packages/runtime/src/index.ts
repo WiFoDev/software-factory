@@ -18,6 +18,10 @@ export type { DodPhaseOptions } from './phases/dod.js';
 export { RuntimeError } from './errors.js';
 export type { RuntimeErrorCode } from './errors.js';
 
+// v0.0.11 — worktree-sandbox
+export { createWorktree } from './worktree.js';
+export type { WorktreeOptions, CreatedWorktree } from './worktree.js';
+
 // types
 export type {
   Phase,

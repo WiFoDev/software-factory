@@ -395,32 +395,29 @@ describe('runSequence — v0.0.9 drafting filter', () => {
     writeFileSync(join(specsDir, `${id}.md`), specSourceWithStatus(id, status, deps));
   }
 
-  test('run-sequence default skips status: drafting; runs only ready', async () => {
+  test('run-sequence default walks drafting specs dynamically (v0.0.11 default behavior change)', async () => {
+    // v0.0.11: drafting specs are no longer skipped upfront. They get
+    // promoted (drafting → ready, in-memory) as their deps converge. The
+    // v0.0.9 "skipping <id> (status: drafting)" notice no longer fires in
+    // default mode.
     writeSpecStatus('a', 'ready');
     writeSpecStatus('b', 'drafting', ['a']);
     writeSpecStatus('c', 'drafting', ['b']);
-    const skips: string[] = [];
+    const logs: string[] = [];
     const report = await runSequence({
       specsDir,
       graph: makeSyntheticGraph({ status: 'pass' }),
       contextStore: createContextStore({ dir: ctxDir }),
-      options: { maxIterations: 1, skipLog: (line) => skips.push(line) },
+      options: { maxIterations: 1, skipLog: (line) => logs.push(line) },
     });
     expect(report.status).toBe('converged');
-    expect(report.topoOrder).toEqual(['a']);
-    expect(report.specs).toHaveLength(1);
-    expect(report.specs[0]?.specId).toBe('a');
-    expect(report.specs[0]?.status).toBe('converged');
-    // Skipped specs noted via skipLog only — one line per drafting spec, in
-    // alphabetic order ('b' before 'c').
-    expect(skips).toEqual([
-      'factory-runtime: skipping b (status: drafting)',
-      'factory-runtime: skipping c (status: drafting)',
-    ]);
-    // No factory-run records persisted for b or c.
-    const all: ContextRecord[] = (await listRecords(ctxDir)).records;
-    const runRecs = all.filter((r) => r.type === 'factory-run');
-    expect(runRecs).toHaveLength(1);
+    expect(report.topoOrder).toEqual(['a', 'b', 'c']);
+    expect(report.specs).toHaveLength(3);
+    // No "skipping ... (status: drafting)" lines.
+    expect(logs.some((l) => l.includes('skipping') && l.includes('drafting'))).toBe(false);
+    // Promotion logs in dep order.
+    expect(logs).toContain('factory-runtime: a converged → promoting b');
+    expect(logs).toContain('factory-runtime: b converged → promoting c');
   });
 
   test('run-sequence --include-drafting walks every spec regardless of status', async () => {
@@ -681,5 +678,239 @@ describe('runSequence — v0.0.10 done/ dep resolution', () => {
     expect(caught).toBeInstanceOf(RuntimeError);
     expect(caught?.code).toBe('runtime/sequence-dep-not-found');
     expect(caught?.message).toContain("spec 'b' depends on 'ghost'");
+  });
+});
+
+// ----- v0.0.11: dynamic DAG walk + drafting → ready promotion ------------
+
+describe('runSequence — v0.0.11 dynamic DAG walk', () => {
+  function specSourceWithStatus(
+    id: string,
+    status: 'ready' | 'drafting',
+    deps: string[] = [],
+  ): string {
+    const depsLine =
+      deps.length === 0 ? '' : `depends-on:\n${deps.map((d) => `  - ${d}`).join('\n')}\n`;
+    return [
+      '---',
+      `id: ${id}`,
+      'classification: light',
+      'type: feat',
+      `status: ${status}`,
+      depsLine.replace(/\n$/, ''),
+      '---',
+      '',
+      `# ${id}`,
+      '',
+      '## Intent',
+      'Test fixture spec.',
+      '',
+      '## Scenarios',
+      '**S-1** — passes',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: nope.test.ts',
+      '',
+      '## Definition of Done',
+      '- ok',
+      '',
+    ]
+      .filter((line, i, arr) => !(line === '' && arr[i - 1] === ''))
+      .join('\n');
+  }
+  function writeSpecStatus(id: string, status: 'ready' | 'drafting', deps: string[] = []): void {
+    writeFileSync(join(specsDir, `${id}.md`), specSourceWithStatus(id, status, deps));
+  }
+
+  test('run-sequence dynamically promotes direct dependents on convergence in linear chain', async () => {
+    // S-1 happy path: 1 ready + 3 drafting in a linear chain. Single
+    // invocation runs all 4 in topological order via dynamic promotion.
+    writeSpecStatus('a', 'ready');
+    writeSpecStatus('b', 'drafting', ['a']);
+    writeSpecStatus('c', 'drafting', ['b']);
+    writeSpecStatus('d', 'drafting', ['c']);
+    const logs: string[] = [];
+    const report = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: createContextStore({ dir: ctxDir }),
+      options: { maxIterations: 1, skipLog: (line) => logs.push(line) },
+    });
+    expect(report.status).toBe('converged');
+    expect(report.specs).toHaveLength(4);
+    expect(report.specs.map((s) => s.specId)).toEqual(['a', 'b', 'c', 'd']);
+    for (const s of report.specs) expect(s.status).toBe('converged');
+    expect(logs).toEqual([
+      'factory-runtime: a converged → promoting b',
+      'factory-runtime: b converged → promoting c',
+      'factory-runtime: c converged → promoting d',
+    ]);
+  });
+
+  test('failed prior spec stops promotion of its dependents', async () => {
+    // S-1 failure cascade: a converges → b promoted → b fails (no-converge).
+    // c and d are NEVER promoted (their deps never all converged) and are
+    // therefore absent from specs[]. Default continueOnFail=false stops the
+    // walk after b's failure too.
+    writeSpecStatus('a', 'ready');
+    writeSpecStatus('b', 'drafting', ['a']);
+    writeSpecStatus('c', 'drafting', ['b']);
+    writeSpecStatus('d', 'drafting', ['c']);
+
+    const phase = definePhase('validate', async (ctx: PhaseContext): Promise<PhaseResult> => {
+      return { status: ctx.spec.frontmatter.id === 'b' ? 'fail' : 'pass', records: [] };
+    });
+    const graph = definePhaseGraph([phase], []);
+
+    const logs: string[] = [];
+    const report = await runSequence({
+      specsDir,
+      graph,
+      contextStore: createContextStore({ dir: ctxDir }),
+      options: { maxIterations: 1, skipLog: (line) => logs.push(line) },
+    });
+    // 'b' failed → status is 'partial' (a converged, b didn't), exit-code-1
+    // family in CLI but the report status here.
+    expect(report.status).toBe('partial');
+    const ids = report.specs.map((s) => s.specId);
+    expect(ids).toEqual(['a', 'b']);
+    const byId = new Map(report.specs.map((s) => [s.specId, s]));
+    expect(byId.get('a')?.status).toBe('converged');
+    expect(byId.get('b')?.status).toBe('no-converge');
+    // c and d are absent — they were never promoted.
+    expect(ids).not.toContain('c');
+    expect(ids).not.toContain('d');
+    // Only the 'a → promoting b' line appears (b's failure cancels c's promotion).
+    expect(logs).toContain('factory-runtime: a converged → promoting b');
+    expect(logs.some((l) => l.includes('promoting c'))).toBe(false);
+    expect(logs.some((l) => l.includes('promoting d'))).toBe(false);
+  });
+
+  test('diamond DAG: dependent promoted only when all deps converged', async () => {
+    // S-2 diamond: a → b, a → c, {b, c} → d. After a converges, both b and
+    // c are promoted at once (alphabetic tie-break). After b converges, d's
+    // deps aren't all converged yet (c missing). After c converges, d is
+    // promoted. Final order: [a, b, c, d].
+    writeSpecStatus('a', 'ready');
+    writeSpecStatus('b', 'drafting', ['a']);
+    writeSpecStatus('c', 'drafting', ['a']);
+    writeSpecStatus('d', 'drafting', ['b', 'c']);
+
+    const logs: string[] = [];
+    const report = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: createContextStore({ dir: ctxDir }),
+      options: { maxIterations: 1, skipLog: (line) => logs.push(line) },
+    });
+    expect(report.status).toBe('converged');
+    expect(report.specs.map((s) => s.specId)).toEqual(['a', 'b', 'c', 'd']);
+    // Promotion log: a triggers b AND c at once (both eligible). b's
+    // convergence does NOT promote d (c not converged yet). c's convergence
+    // promotes d.
+    expect(logs).toEqual([
+      'factory-runtime: a converged → promoting b',
+      'factory-runtime: a converged → promoting c',
+      'factory-runtime: c converged → promoting d',
+    ]);
+  });
+
+  test('spec with 3 deps stays drafting until all 3 converge', async () => {
+    // Variant: 3 ready roots (no deps) + 1 drafting spec depending on all 3.
+    // The drafting spec should be promoted exactly once — when the third
+    // (final) dep converges, not earlier.
+    writeSpecStatus('a', 'ready');
+    writeSpecStatus('b', 'ready');
+    writeSpecStatus('c', 'ready');
+    writeSpecStatus('d', 'drafting', ['a', 'b', 'c']);
+
+    const logs: string[] = [];
+    const report = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: createContextStore({ dir: ctxDir }),
+      options: { maxIterations: 1, skipLog: (line) => logs.push(line) },
+    });
+    expect(report.status).toBe('converged');
+    expect(report.specs.map((s) => s.specId)).toEqual(['a', 'b', 'c', 'd']);
+    // d is promoted exactly once, by the last converging dep (c).
+    const promotionLines = logs.filter((l) => l.includes('promoting d'));
+    expect(promotionLines).toEqual(['factory-runtime: c converged → promoting d']);
+  });
+
+  test('--include-drafting flag walks every spec from start; auto-promotion is a no-op', async () => {
+    // S-3: --include-drafting preserves the v0.0.10 walk-everything-from-start
+    // semantic. Drafting specs are routed to the `included` set by loadSpecs;
+    // the runtime's draftingIds is empty; promotion is therefore a no-op.
+    writeSpecStatus('a', 'ready');
+    writeSpecStatus('b', 'drafting', ['a']);
+    writeSpecStatus('c', 'drafting', ['b']);
+
+    const logs: string[] = [];
+    const report = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: createContextStore({ dir: ctxDir }),
+      options: {
+        maxIterations: 1,
+        includeDrafting: true,
+        skipLog: (line) => logs.push(line),
+      },
+    });
+    expect(report.status).toBe('converged');
+    expect(report.topoOrder).toEqual(['a', 'b', 'c']);
+    expect(report.specs).toHaveLength(3);
+    // Promotion log is silent under --include-drafting.
+    expect(logs.some((l) => l.includes('promoting'))).toBe(false);
+    // Skipping log is also silent (drafting routed to ready).
+    expect(logs.some((l) => l.includes('skipping') && l.includes('drafting'))).toBe(false);
+  });
+
+  test('already-converged dedup + dynamic promotion compose: prior-converged specs trigger downstream promotion', async () => {
+    // S-4: seed a context dir with a converged factory-run for spec 'a',
+    // then re-invoke against (a + b drafting deps=[a] + c drafting deps=[b]).
+    // 'a' is detected as already-converged (v0.0.10 dedup) AND triggers
+    // promotion of 'b'. b runs, converges, triggers promotion of c.
+    writeSpecStatus('a', 'ready');
+    const store = createContextStore({ dir: ctxDir });
+
+    // Seed: run 'a' alone first.
+    await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: store,
+      options: { maxIterations: 1 },
+    });
+    const seedAll: ContextRecord[] = (await listRecords(ctxDir)).records;
+    const seedRunA = seedAll.find(
+      (r) => r.type === 'factory-run' && (r.payload as { specId?: string }).specId === 'a',
+    );
+    expect(seedRunA).toBeDefined();
+
+    // Now add b.md + c.md (both drafting) and re-invoke.
+    writeSpecStatus('b', 'drafting', ['a']);
+    writeSpecStatus('c', 'drafting', ['b']);
+    const logs: string[] = [];
+    const second = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: store,
+      options: { maxIterations: 1, skipLog: (line) => logs.push(line) },
+    });
+    expect(second.status).toBe('converged');
+    expect(second.specs.map((s) => s.specId)).toEqual(['a', 'b', 'c']);
+    // 'a' is detected as already-converged AND promotes 'b'; 'b' converges
+    // and promotes 'c'. The dedup notice for 'a' AND the promotion lines
+    // both appear via skipLog.
+    expect(logs.some((l) => l.includes('a already converged'))).toBe(true);
+    expect(logs).toContain('factory-runtime: a converged → promoting b');
+    expect(logs).toContain('factory-runtime: b converged → promoting c');
+
+    // Only 2 NEW factory-run records (b, c) were created; a was reused.
+    const all: ContextRecord[] = (await listRecords(ctxDir)).records;
+    const runRecs = all.filter((r) => r.type === 'factory-run');
+    expect(runRecs).toHaveLength(3); // 1 seed (a) + 2 new (b, c)
   });
 });

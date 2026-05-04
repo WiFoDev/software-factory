@@ -1,4 +1,9 @@
-import { ContextError, type ContextRecord, type ContextStore } from '@wifo/factory-context';
+import {
+  ContextError,
+  type ContextRecord,
+  type ContextStore,
+  hashRecord,
+} from '@wifo/factory-context';
 import type { Spec } from '@wifo/factory-core';
 import { RuntimeError } from './errors.js';
 import {
@@ -6,6 +11,8 @@ import {
   FactoryPhaseSchema,
   type FactoryRunPayload,
   FactoryRunSchema,
+  type FactoryWorktreePayload,
+  FactoryWorktreeSchema,
   tryRegister,
 } from './records.js';
 import type {
@@ -18,6 +25,7 @@ import type {
   RunReport,
   RunStatus,
 } from './types.js';
+import { type CreatedWorktree, type WorktreeOptions, createWorktree } from './worktree.js';
 
 const DEFAULT_MAX_ITERATIONS = 5;
 const DEFAULT_MAX_TOTAL_TOKENS = 500_000;
@@ -130,7 +138,32 @@ export async function run(args: RunArgs): Promise<RunReport> {
     startedAt: startedAt.toISOString(),
   };
 
-  const runId = await putOrWrap(contextStore, 'factory-run', runPayload, args.runParents ?? []);
+  // v0.0.11 — When `RunOptions.worktree` is set, create the isolated git
+  // worktree BEFORE persisting `factory-run` so a creation failure leaves
+  // no orphan run record (H-2). The runId is pre-computed from the same
+  // canonical hash inputs that `put()` uses, so the worktree path
+  // (`<rootDir>/<runId>/`) and the eventual factory-run id agree.
+  const runParents = args.runParents ?? [];
+  let worktree: CreatedWorktree | undefined;
+  if (options.worktree !== undefined && options.worktree !== false) {
+    tryRegister(contextStore, 'factory-worktree', FactoryWorktreeSchema);
+    const worktreeOpts: WorktreeOptions = options.worktree === true ? {} : options.worktree;
+    const preRunId = hashRecord({
+      type: 'factory-run',
+      parents: runParents,
+      payload: runPayload,
+    });
+    worktree = createWorktree(preRunId, worktreeOpts);
+  }
+
+  const runId = await putOrWrap(contextStore, 'factory-run', runPayload, runParents);
+
+  // Captured for the factory-worktree record that's persisted at run end
+  // (once we know the final run status). Not persisted up-front: the
+  // context store is content-addressed, so an "active → converged"
+  // mutation would change the id; recording once with the final status
+  // keeps the record set immutable + small.
+  const worktreeCreatedAt = worktree !== undefined ? new Date().toISOString() : undefined;
 
   const phaseByName = new Map<string, Phase>();
   for (const phase of graph.phases) phaseByName.set(phase.name, phase);
@@ -147,7 +180,9 @@ export async function run(args: RunArgs): Promise<RunReport> {
 
   // v0.0.3: whole-run token budget accumulator. Sums tokens.input + tokens.output
   // from every factory-implement-report produced across all iterations.
-  let runningTotalTokens = 0;
+  // v0.0.11: this is the "charged" total — the budget-relevant value
+  // (cache reads/creates are free per Anthropic's pricing).
+  let runningChargedTokens = 0;
 
   // v0.0.3: prior iteration's terminal-phase outputs, threaded into the next
   // iteration's root phase via ctx.inputs (NOT via factory-phase.parents).
@@ -208,6 +243,7 @@ export async function run(args: RunArgs): Promise<RunReport> {
           iteration,
           inputs: ctxInputs,
           maxAgentTimeoutMs,
+          ...(worktree !== undefined ? { cwd: worktree.path } : {}),
         });
         status = result.status;
         outputRecords = result.records;
@@ -219,11 +255,11 @@ export async function run(args: RunArgs): Promise<RunReport> {
         // mirroring the v0.0.2 per-phase cost-cap chain.
         const implementTokens = sumImplementTokens(outputRecords);
         if (implementTokens > 0) {
-          runningTotalTokens += implementTokens;
-          if (runningTotalTokens > maxTotalTokens) {
+          runningChargedTokens += implementTokens;
+          if (runningChargedTokens > maxTotalTokens) {
             throw new RuntimeError(
               'runtime/total-cost-cap-exceeded',
-              `running_total=${runningTotalTokens} > maxTotalTokens=${maxTotalTokens}`,
+              `running_charged=${runningChargedTokens} > maxTotalTokens=${maxTotalTokens}`,
             );
           }
         }
@@ -289,6 +325,23 @@ export async function run(args: RunArgs): Promise<RunReport> {
 
   const durationMs = Math.round(performance.now() - t0);
 
+  // v0.0.11 — Persist the `factory-worktree` record (parents=[runId]) once
+  // we know the final run status. The CLI `worktree clean` subcommand
+  // walks these to decide which worktrees to prune (converged → remove
+  // by default; no-converge / error → preserve for forensic value).
+  if (worktree !== undefined && worktreeCreatedAt !== undefined) {
+    const worktreePayload: FactoryWorktreePayload = {
+      runId,
+      worktreePath: worktree.path,
+      branch: worktree.branch,
+      baseSha: worktree.baseSha,
+      baseRef: worktree.baseRef,
+      createdAt: worktreeCreatedAt,
+      status: runStatus,
+    };
+    await putOrWrap(contextStore, 'factory-worktree', worktreePayload, [runId]);
+  }
+
   return {
     runId,
     specId: spec.frontmatter.id,
@@ -297,6 +350,7 @@ export async function run(args: RunArgs): Promise<RunReport> {
     iterationCount: iterations.length,
     iterations,
     status: runStatus,
-    totalTokens: runningTotalTokens,
+    chargedTokens: runningChargedTokens,
+    totalTokens: runningChargedTokens,
   };
 }

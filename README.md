@@ -6,21 +6,19 @@ A toolkit for **spec-driven, agent-friendly software development**. You write a 
 
 ---
 
-## v0.0.10: trust contract closed on both sides
+## v0.0.11: trust → isolation — runs sandboxed in their own git worktree
 
-**Runtime side:** `dodPhase` parses each spec's `## Definition of Done`, runs shell-bullets via Bash (allowlist: `pnpm/bun/npm/node/tsc/git/npx/bash/sh/make` + relative paths), dispatches non-shell to LLM judges. Convergence requires DoD gates green AND test/judge satisfactions green. **"Runtime says converged → ship it"** is finally a checked contract.
+**Runtime side:** `factory-runtime run --worktree` materializes an isolated `git worktree` at `<projectRoot>/.factory/worktrees/<runId>/` on a throwaway branch `factory-run/<runId>`; the implement / validate / DoD phases all execute against that checkout, so the maintainer's main tree is never touched by the agent. Strong undo by construction; enables parallel runs against distinct worktree paths. New CLI subcommand `factory-runtime worktree { list | clean }` for forensic inspection + maintenance. New context record type `factory-worktree`.
 
-**Spec side:** three new reviewer judges (`api-surface-drift`, `feasibility`, `scope-creep`) round out the v0.0.4 plan; total of 8 LLM judges scoring spec quality before any agent token is spent.
+**Polish:** holdout-aware convergence (`--check-holdouts` runs `## Holdout Scenarios` each iteration; both sets must pass); `dod-precision` recalibrated against v0.0.10 BASELINE; `RunReport.chargedTokens` exposes the budget-relevant total (cache reads/creates excluded); `run-sequence` walks the dep DAG dynamically (drafting specs auto-promoted as their deps converge).
 
-Plus: `run-sequence` skips already-converged specs (closes v0.0.9 BASELINE's N² re-run); `<dir>/done/` consulted for `depends-on` resolution; `factory spec watch` for terminal-companion lint+review on every save; `spec/wide-blast-radius` calibrated to threshold 12 with a per-spec `<!-- NOQA -->` directive.
-
-**Release lineage:** v0.0.1 framework → v0.0.2 single-shot agent → v0.0.3 closed loop → v0.0.4 spec quality + bootstrap → v0.0.5 npm publish + implement-guidelines → v0.0.6 v0.0.5.x cluster → v0.0.7 real-product workflow (`/scope-project` + `depends-on` + `run-sequence`) → v0.0.8 discoverability + scaffold drops → v0.0.9 status-aware sequence + per-spec timeout → **v0.0.10 trust contract**.
+**Release lineage:** v0.0.1 framework → v0.0.2 single-shot agent → v0.0.3 closed loop → v0.0.4 spec quality + bootstrap → v0.0.5 npm publish + implement-guidelines → v0.0.6 v0.0.5.x cluster → v0.0.7 real-product workflow → v0.0.8 discoverability + scaffold drops → v0.0.9 status-aware sequence + per-spec timeout → v0.0.10 trust contract → **v0.0.11 worktree-sandbox + trust-layer calibration**.
 
 Inspired by the [StrongDM Software Factory](https://factory.strongdm.ai/) model.
 
 ---
 
-## The canonical workflow (v0.0.10)
+## The canonical workflow (v0.0.11)
 
 The recommended end-to-end shape from a fresh directory to a shipped product:
 
@@ -34,7 +32,7 @@ pnpm install
   ↓
 factory spec lint docs/specs/                   # format check (fast, free, deterministic)
   ↓
-factory spec review docs/specs/<first>.md       # quality check — 8 LLM judges (v0.0.4+; +3 in v0.0.10)
+factory spec review docs/specs/<first>.md       # quality check — 8 LLM judges (v0.0.4+; +3 in v0.0.10; recalibrated in v0.0.11)
   ↓
 factory-runtime run-sequence docs/specs/        # walk the depends-on DAG (v0.0.7+)
   ↓                                             #   [implement → validate → dod] phases per spec (v0.0.10+)
@@ -44,7 +42,7 @@ factory-context tree <factorySequenceId> --direction down   # walk the entire pr
 
 For one feature (not a multi-feature product), substitute `/scope-task <feature>` and `factory-runtime run <spec>` for the slash command + sequence-runner.
 
-**Empirical evidence (longitudinal in [`BASELINE.md`](./BASELINE.md)):** the canonical URL-shortener (4-5 specs, JSON-over-HTTP + click tracking + stats) ships in 5-10 minutes wall-clock + ~20-30k raw tokens, all DoD shell gates green. Versus v0.0.5's manual ~32 maintainer interventions to ship the same product, v0.0.10 collapses to ~3-8.
+**Empirical evidence (longitudinal in [`BASELINE.md`](./BASELINE.md)):** the canonical URL-shortener (4-5 specs, JSON-over-HTTP + click tracking + stats) ships in 5-10 minutes wall-clock + ~20-30k raw tokens, all DoD shell gates green. Versus v0.0.5's manual ~32 maintainer interventions to ship the same product, v0.0.10 / v0.0.11 collapses to ~3-8. Add `--worktree` to keep the maintainer's main tree untouched.
 
 **Three modes of use:**
 

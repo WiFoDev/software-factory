@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type CliIo, runCli } from './cli.js';
@@ -110,6 +110,50 @@ describe('factory-runtime CLI — converged path (v0.0.1 [validate]-only via --n
     // Persisted three record types
     const types = (await Bun.$`ls ${ctxDir}`.quiet().text()).trim().split('\n');
     expect(types.length).toBe(3);
+  });
+
+  test('factory-runtime run output shows tokens charged + budget', async () => {
+    // v0.0.11 — converged stdout includes `charged=<n>/<budget>` where the
+    // budget is RunOptions.maxTotalTokens (or its 500_000 default). Use
+    // --no-implement so charged is 0 (no implement-report → no tokens).
+    const cap = makeIo();
+    await invoke(
+      [
+        'run',
+        ALL_PASS,
+        '--no-judge',
+        '--no-implement',
+        '--skip-dod-phase',
+        '--max-total-tokens',
+        '1000000',
+        '--context-dir',
+        ctxDir,
+      ],
+      cap.io,
+    );
+    expect(cap.exitCode()).toBe(0);
+    expect(cap.stdout()).toContain('charged=0/1000000');
+    // Default budget when --max-total-tokens unset is 500_000.
+    const ctxDir2 = mkdtempSync(join(tmpdir(), 'runtime-cli-charged-default-'));
+    const cap2 = makeIo();
+    try {
+      await invoke(
+        [
+          'run',
+          ALL_PASS,
+          '--no-judge',
+          '--no-implement',
+          '--skip-dod-phase',
+          '--context-dir',
+          ctxDir2,
+        ],
+        cap2.io,
+      );
+      expect(cap2.exitCode()).toBe(0);
+      expect(cap2.stdout()).toContain('charged=0/500000');
+    } finally {
+      await Bun.$`rm -rf ${ctxDir2}`.quiet().nothrow();
+    }
   });
 });
 
@@ -529,7 +573,7 @@ describe('factory-runtime CLI — v0.0.3 --max-total-tokens', () => {
       expect(cap.exitCode()).toBe(3);
       expect(cap.stdout()).toContain("error during phase 'implement' iteration 1");
       expect(cap.stdout()).toContain('runtime/total-cost-cap-exceeded');
-      expect(cap.stdout()).toContain('running_total=1000');
+      expect(cap.stdout()).toContain('running_charged=1000');
       expect(cap.stdout()).toContain('maxTotalTokens=500');
     } finally {
       Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
@@ -920,7 +964,10 @@ describe('factory-runtime run-sequence CLI — v0.0.9 drafting filter', () => {
     return { work, specs };
   }
 
-  test('run-sequence skipping logs one line per skipped spec to stdout', async () => {
+  test('run-sequence default emits promotion logs to stdout (v0.0.11 dynamic walk)', async () => {
+    // v0.0.11 default: drafting specs are walked dynamically, not skipped.
+    // CLI stdout shows the promotion line per dep convergence and a 3/3
+    // converged summary.
     const { work, specs } = await setupRunseqWorkdir();
     const prevCwd = process.cwd();
     try {
@@ -944,14 +991,16 @@ describe('factory-runtime run-sequence CLI — v0.0.9 drafting filter', () => {
         cap.io,
       );
       expect(cap.exitCode()).toBe(0);
-      expect(cap.stdout()).toContain('factory-runtime: skipping b (status: drafting)');
-      expect(cap.stdout()).toContain('factory-runtime: skipping c (status: drafting)');
-      // Skip lines come before the converged summary line.
-      const skipBIdx = cap.stdout().indexOf('skipping b');
+      expect(cap.stdout()).toContain('factory-runtime: a converged → promoting b');
+      expect(cap.stdout()).toContain('factory-runtime: b converged → promoting c');
+      // Promotion lines come before the converged summary line.
+      const promoteBIdx = cap.stdout().indexOf('promoting b');
       const summaryIdx = cap.stdout().indexOf('sequence converged');
-      expect(skipBIdx).toBeGreaterThanOrEqual(0);
-      expect(summaryIdx).toBeGreaterThan(skipBIdx);
-      expect(cap.stdout()).toContain('sequence converged (1/1 specs');
+      expect(promoteBIdx).toBeGreaterThanOrEqual(0);
+      expect(summaryIdx).toBeGreaterThan(promoteBIdx);
+      expect(cap.stdout()).toContain('sequence converged (3/3 specs');
+      // No "skipping ... drafting" lines anymore in default mode.
+      expect(cap.stdout()).not.toContain('skipping');
     } finally {
       process.chdir(prevCwd);
       await Bun.$`rm -rf ${work} ${specs}`.quiet().nothrow();
@@ -989,7 +1038,11 @@ describe('factory-runtime run-sequence CLI — v0.0.9 drafting filter', () => {
     }
   });
 
-  test('factory.config.json runtime.includeDrafting=true makes run-sequence walk drafting specs', async () => {
+  test('factory.config.json runtime.includeDrafting=true preserves legacy semantic', async () => {
+    // S-3 back-compat: under --include-drafting (or runtime.includeDrafting),
+    // drafting specs are routed to the ready set at load time, so the dynamic
+    // promotion path is a no-op (no "promoting" lines). Walk-everything
+    // semantic from v0.0.10 is preserved.
     const { work, specs } = await setupRunseqWorkdir();
     const prevCwd = process.cwd();
     try {
@@ -1019,13 +1072,17 @@ describe('factory-runtime run-sequence CLI — v0.0.9 drafting filter', () => {
       expect(cap.exitCode()).toBe(0);
       expect(cap.stdout()).toContain('sequence converged (3/3 specs');
       expect(cap.stdout()).not.toContain('skipping');
+      // Auto-promotion is a no-op when every spec is already eligible from start.
+      expect(cap.stdout()).not.toContain('promoting');
     } finally {
       process.chdir(prevCwd);
       await Bun.$`rm -rf ${work} ${specs}`.quiet().nothrow();
     }
   });
 
-  test('absent factory.config.json leaves run-sequence default (drafting skipped)', async () => {
+  test('absent factory.config.json leaves run-sequence default (drafting walked dynamically in v0.0.11)', async () => {
+    // v0.0.11 default: drafting specs walked dynamically. Single invocation
+    // ships all 2 specs via promotion of 'b' on 'a' converging.
     const { work, specs } = await setupRunseqWorkdir();
     const prevCwd = process.cwd();
     try {
@@ -1048,8 +1105,8 @@ describe('factory-runtime run-sequence CLI — v0.0.9 drafting filter', () => {
         cap.io,
       );
       expect(cap.exitCode()).toBe(0);
-      expect(cap.stdout()).toContain('sequence converged (1/1 specs');
-      expect(cap.stdout()).toContain('skipping b (status: drafting)');
+      expect(cap.stdout()).toContain('sequence converged (2/2 specs');
+      expect(cap.stdout()).toContain('factory-runtime: a converged → promoting b');
     } finally {
       process.chdir(prevCwd);
       await Bun.$`rm -rf ${work} ${specs}`.quiet().nothrow();
@@ -1160,5 +1217,378 @@ describe('factory-runtime CLI — v0.0.10 default graph (S-3)', () => {
       if (rec.type === 'factory-run') graphPhases = rec.payload.graphPhases ?? null;
     }
     expect(graphPhases).toEqual(['validate', 'dod']);
+  });
+});
+
+// ----- v0.0.11 — --check-holdouts + factory.config.json (S-3) ---------
+
+const HOLDOUTS_SPEC_FOR_CLI = `---
+id: runtime-cli-checkholdouts
+classification: light
+type: feat
+status: ready
+---
+
+# runtime-cli-checkholdouts — holdouts present; visible passes; holdout fails when run
+
+## Scenarios
+
+**S-1** — visible passes
+  Given the trivial-pass fixture
+  When the harness runs the test satisfaction
+  Then the test passes
+  Satisfaction:
+    - test: trivial-pass.test.ts "trivial passes"
+
+## Holdout Scenarios
+
+**H-1** — holdout fails (would block convergence under --check-holdouts)
+  Given the trivial-fail fixture
+  When the harness runs the holdout satisfaction
+  Then the test fails
+  Satisfaction:
+    - test: trivial-fail.test.ts "trivial fails"
+
+## Definition of Done
+
+- the visible scenario passes
+`;
+
+async function setupHoldoutsWorkdir(prefix: string): Promise<string> {
+  const work = mkdtempSync(join(tmpdir(), prefix));
+  await Bun.write(join(work, 'with-holdouts.md'), HOLDOUTS_SPEC_FOR_CLI);
+  await Bun.write(
+    join(work, 'trivial-pass.test.ts'),
+    await Bun.file(join(RUNTIME_ROOT, 'test-fixtures/trivial-pass.test.ts')).text(),
+  );
+  await Bun.write(
+    join(work, 'trivial-fail.test.ts'),
+    await Bun.file(join(RUNTIME_ROOT, 'test-fixtures/trivial-fail.test.ts')).text(),
+  );
+  return work;
+}
+
+// ----- v0.0.11: factory-runtime worktree { list | clean } (S-2 + H-3) ---
+
+async function initGitRepoForWtCli(d: string): Promise<void> {
+  await Bun.$`git init -q ${d}`.quiet();
+  await Bun.$`git -C ${d} config user.email "test@example.com"`.quiet();
+  await Bun.$`git -C ${d} config user.name "test"`.quiet();
+  await Bun.$`git -C ${d} config commit.gpgsign false`.quiet();
+  await Bun.write(join(d, 'README.md'), '# fixture\n');
+  await Bun.$`git -C ${d} add -A`.quiet();
+  await Bun.$`git -C ${d} commit -q -m "init"`.quiet();
+}
+
+async function seedFactoryWorktreeRecord(
+  contextDir: string,
+  payload: {
+    runId: string;
+    worktreePath: string;
+    branch: string;
+    baseSha: string;
+    baseRef: string;
+    createdAt: string;
+    status: 'active' | 'converged' | 'no-converge' | 'error' | 'removed';
+  },
+): Promise<void> {
+  // Mirror the runtime's persist pattern: register schema if needed, put().
+  const { createContextStore } = await import('@wifo/factory-context');
+  const { FactoryWorktreeSchema, FactoryRunSchema, tryRegister } = await import('./records.js');
+  const store = createContextStore({ dir: contextDir });
+  tryRegister(store, 'factory-run', FactoryRunSchema);
+  tryRegister(store, 'factory-worktree', FactoryWorktreeSchema);
+  // factory-worktree.parents = [runId] requires the runId to be a real
+  // factory-run record on disk — seed a stub.
+  const runId = await store.put(
+    'factory-run',
+    {
+      specId: `seed-${payload.runId}`,
+      graphPhases: ['validate'],
+      maxIterations: 1,
+      startedAt: payload.createdAt,
+    },
+    { parents: [] },
+  );
+  await store.put('factory-worktree', { ...payload, runId }, { parents: [runId] });
+}
+
+describe('factory-runtime worktree CLI (v0.0.11) — S-2 + H-3', () => {
+  test('factory-runtime worktree clean removes converged worktrees by default', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'wt-cli-clean-'));
+    const wtCtx = mkdtempSync(join(tmpdir(), 'wt-cli-clean-ctx-'));
+    try {
+      await initGitRepoForWtCli(projectRoot);
+      const prevCwd = process.cwd();
+      process.chdir(projectRoot);
+      try {
+        // Create two real worktrees via git, then seed factory-worktree
+        // records for each pinning their final status.
+        const conv = join(projectRoot, '.factory/worktrees/aaaa1111aaaa1111');
+        const fail = join(projectRoot, '.factory/worktrees/bbbb2222bbbb2222');
+        await Bun.$`git -C ${projectRoot} worktree add ${conv} -b factory-run/aaaa1111aaaa1111`.quiet();
+        await Bun.$`git -C ${projectRoot} worktree add ${fail} -b factory-run/bbbb2222bbbb2222`.quiet();
+
+        const baseShaResult = await Bun.$`git -C ${projectRoot} rev-parse HEAD`.text();
+        const baseSha = baseShaResult.trim();
+
+        await seedFactoryWorktreeRecord(wtCtx, {
+          runId: 'aaaa1111aaaa1111',
+          worktreePath: conv,
+          branch: 'factory-run/aaaa1111aaaa1111',
+          baseSha,
+          baseRef: 'refs/heads/main',
+          createdAt: new Date().toISOString(),
+          status: 'converged',
+        });
+        await seedFactoryWorktreeRecord(wtCtx, {
+          runId: 'bbbb2222bbbb2222',
+          worktreePath: fail,
+          branch: 'factory-run/bbbb2222bbbb2222',
+          baseSha,
+          baseRef: 'refs/heads/main',
+          createdAt: new Date().toISOString(),
+          status: 'no-converge',
+        });
+
+        const cap = makeIo();
+        await invoke(['worktree', 'clean', '--context-dir', wtCtx], cap.io);
+        expect(cap.exitCode()).toBe(0);
+        expect(cap.stdout()).toContain('removed 1 converged worktree(s)');
+        expect(cap.stdout()).toContain('kept 1 failed worktree(s)');
+        // Converged worktree dir gone; failed kept.
+        expect(existsSync(conv)).toBe(false);
+        expect(existsSync(fail)).toBe(true);
+      } finally {
+        process.chdir(prevCwd);
+      }
+    } finally {
+      await Bun.$`rm -rf ${projectRoot} ${wtCtx}`.quiet().nothrow();
+    }
+  });
+
+  test('factory-runtime worktree clean --all removes failed worktrees too', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'wt-cli-clean-all-'));
+    const wtCtx = mkdtempSync(join(tmpdir(), 'wt-cli-clean-all-ctx-'));
+    try {
+      await initGitRepoForWtCli(projectRoot);
+      const prevCwd = process.cwd();
+      process.chdir(projectRoot);
+      try {
+        const conv = join(projectRoot, '.factory/worktrees/cccc3333cccc3333');
+        const fail = join(projectRoot, '.factory/worktrees/dddd4444dddd4444');
+        await Bun.$`git -C ${projectRoot} worktree add ${conv} -b factory-run/cccc3333cccc3333`.quiet();
+        await Bun.$`git -C ${projectRoot} worktree add ${fail} -b factory-run/dddd4444dddd4444`.quiet();
+
+        const baseShaResult = await Bun.$`git -C ${projectRoot} rev-parse HEAD`.text();
+        const baseSha = baseShaResult.trim();
+
+        await seedFactoryWorktreeRecord(wtCtx, {
+          runId: 'cccc3333cccc3333',
+          worktreePath: conv,
+          branch: 'factory-run/cccc3333cccc3333',
+          baseSha,
+          baseRef: 'refs/heads/main',
+          createdAt: new Date().toISOString(),
+          status: 'converged',
+        });
+        await seedFactoryWorktreeRecord(wtCtx, {
+          runId: 'dddd4444dddd4444',
+          worktreePath: fail,
+          branch: 'factory-run/dddd4444dddd4444',
+          baseSha,
+          baseRef: 'refs/heads/main',
+          createdAt: new Date().toISOString(),
+          status: 'no-converge',
+        });
+
+        const cap = makeIo();
+        await invoke(['worktree', 'clean', '--all', '--context-dir', wtCtx], cap.io);
+        expect(cap.exitCode()).toBe(0);
+        expect(cap.stdout()).toContain('removed 1 converged worktree(s)');
+        expect(cap.stdout()).toContain('removed 1 failed worktree(s)');
+        expect(existsSync(conv)).toBe(false);
+        expect(existsSync(fail)).toBe(false);
+      } finally {
+        process.chdir(prevCwd);
+      }
+    } finally {
+      await Bun.$`rm -rf ${projectRoot} ${wtCtx}`.quiet().nothrow();
+    }
+  });
+
+  test('factory-runtime worktree list shows status per worktree', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'wt-cli-list-'));
+    const wtCtx = mkdtempSync(join(tmpdir(), 'wt-cli-list-ctx-'));
+    try {
+      await initGitRepoForWtCli(projectRoot);
+      const prevCwd = process.cwd();
+      process.chdir(projectRoot);
+      try {
+        const conv = join(projectRoot, '.factory/worktrees/eeee5555eeee5555');
+        const fail = join(projectRoot, '.factory/worktrees/ffff6666ffff6666');
+        await Bun.$`git -C ${projectRoot} worktree add ${conv} -b factory-run/eeee5555eeee5555`.quiet();
+        await Bun.$`git -C ${projectRoot} worktree add ${fail} -b factory-run/ffff6666ffff6666`.quiet();
+
+        const baseShaResult = await Bun.$`git -C ${projectRoot} rev-parse HEAD`.text();
+        const baseSha = baseShaResult.trim();
+
+        await seedFactoryWorktreeRecord(wtCtx, {
+          runId: 'eeee5555eeee5555',
+          worktreePath: conv,
+          branch: 'factory-run/eeee5555eeee5555',
+          baseSha,
+          baseRef: 'refs/heads/main',
+          createdAt: new Date().toISOString(),
+          status: 'converged',
+        });
+        await seedFactoryWorktreeRecord(wtCtx, {
+          runId: 'ffff6666ffff6666',
+          worktreePath: fail,
+          branch: 'factory-run/ffff6666ffff6666',
+          baseSha,
+          baseRef: 'refs/heads/main',
+          createdAt: new Date().toISOString(),
+          status: 'no-converge',
+        });
+
+        const cap = makeIo();
+        await invoke(['worktree', 'list', '--context-dir', wtCtx], cap.io);
+        expect(cap.exitCode()).toBe(0);
+        // Each row carries the runId, the status label, and the path.
+        expect(cap.stdout()).toContain('eeee5555eeee5555');
+        expect(cap.stdout()).toContain('converged');
+        expect(cap.stdout()).toContain('ffff6666ffff6666');
+        expect(cap.stdout()).toContain('no-converge');
+      } finally {
+        process.chdir(prevCwd);
+      }
+    } finally {
+      await Bun.$`rm -rf ${projectRoot} ${wtCtx}`.quiet().nothrow();
+    }
+  });
+
+  test('worktree list / clean outside a git repo → exit 3 with runtime/worktree-failed (H-3)', async () => {
+    const nonGit = mkdtempSync(join(tmpdir(), 'wt-cli-nongit-'));
+    const wtCtx = mkdtempSync(join(tmpdir(), 'wt-cli-nongit-ctx-'));
+    try {
+      // Seed a factory-worktree record so the loadFactoryWorktreeRecords
+      // path is exercised; the failure is from listWorktrees() refusing
+      // because the cwd isn't a git repo.
+      await seedFactoryWorktreeRecord(wtCtx, {
+        runId: '7777aaaa7777aaaa',
+        worktreePath: '/tmp/dummy',
+        branch: 'factory-run/7777aaaa7777aaaa',
+        baseSha: '0000000000000000000000000000000000000000',
+        baseRef: 'refs/heads/main',
+        createdAt: new Date().toISOString(),
+        status: 'converged',
+      });
+      const prevCwd = process.cwd();
+      process.chdir(nonGit);
+      try {
+        const cap = makeIo();
+        await invoke(['worktree', 'list', '--context-dir', wtCtx], cap.io);
+        expect(cap.exitCode()).toBe(3);
+        expect(cap.stderr()).toContain('runtime/worktree-failed');
+      } finally {
+        process.chdir(prevCwd);
+      }
+    } finally {
+      await Bun.$`rm -rf ${nonGit} ${wtCtx}`.quiet().nothrow();
+    }
+  });
+});
+
+describe('factory-runtime CLI — v0.0.11 --check-holdouts (S-3)', () => {
+  test('factory.config.json runtime.checkHoldouts=true runs holdouts even without --check-holdouts flag', async () => {
+    const work = await setupHoldoutsWorkdir('runtime-cli-checkholdouts-config-');
+    writeFileSync(
+      join(work, 'factory.config.json'),
+      JSON.stringify({ runtime: { checkHoldouts: true } }),
+    );
+    const prevCwd = process.cwd();
+    process.chdir(work);
+    try {
+      const cap = makeIo();
+      // --max-iterations 1 + --no-implement so a holdout fail surfaces as
+      // no-converge after a single iteration (no agent loop).
+      await invoke(
+        [
+          'run',
+          'with-holdouts.md',
+          '--no-judge',
+          '--no-implement',
+          '--skip-dod-phase',
+          '--max-iterations',
+          '1',
+          '--context-dir',
+          ctxDir,
+        ],
+        cap.io,
+      );
+      // Holdout fails → run does not converge in iter 1.
+      expect(cap.exitCode()).toBe(1);
+      // Validate-report should carry both arrays.
+      let foundReportWithHoldouts = false;
+      const fileList = (await Bun.$`ls ${ctxDir}`.quiet().text()).trim().split('\n');
+      for (const fname of fileList) {
+        const text = await Bun.file(join(ctxDir, fname)).text();
+        const rec = JSON.parse(text) as {
+          type: string;
+          payload?: { holdouts?: { status: string }[] };
+        };
+        if (rec.type === 'factory-validate-report' && (rec.payload?.holdouts?.length ?? 0) > 0) {
+          foundReportWithHoldouts = true;
+        }
+      }
+      expect(foundReportWithHoldouts).toBe(true);
+    } finally {
+      process.chdir(prevCwd);
+      await Bun.$`rm -rf ${work}`.quiet().nothrow();
+    }
+  });
+
+  test('absent factory.config.json + no flag leaves holdouts unrun (default)', async () => {
+    const work = await setupHoldoutsWorkdir('runtime-cli-checkholdouts-noconfig-');
+    const prevCwd = process.cwd();
+    process.chdir(work);
+    try {
+      const cap = makeIo();
+      // No --check-holdouts flag, no factory.config.json → holdouts should
+      // not run. The visible scenario passes → exit 0.
+      await invoke(
+        [
+          'run',
+          'with-holdouts.md',
+          '--no-judge',
+          '--no-implement',
+          '--skip-dod-phase',
+          '--max-iterations',
+          '1',
+          '--context-dir',
+          ctxDir,
+        ],
+        cap.io,
+      );
+      expect(cap.exitCode()).toBe(0);
+      // No validate-report should carry a non-empty `holdouts` array.
+      const fileList = (await Bun.$`ls ${ctxDir}`.quiet().text()).trim().split('\n');
+      for (const fname of fileList) {
+        const text = await Bun.file(join(ctxDir, fname)).text();
+        const rec = JSON.parse(text) as {
+          type: string;
+          payload?: { holdouts?: { status: string }[] };
+        };
+        if (rec.type === 'factory-validate-report') {
+          expect(rec.payload?.holdouts === undefined || rec.payload.holdouts.length === 0).toBe(
+            true,
+          );
+        }
+      }
+    } finally {
+      process.chdir(prevCwd);
+      await Bun.$`rm -rf ${work}`.quiet().nothrow();
+    }
   });
 });

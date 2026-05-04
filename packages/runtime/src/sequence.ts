@@ -323,18 +323,38 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
   const startedAt = new Date();
   const t0 = performance.now();
 
-  const { included: loaded, skippedDrafting, donePool } = loadSpecs(specsDir, includeDrafting);
-  for (const s of skippedDrafting) {
-    skipLog(`factory-runtime: skipping ${s.id} (status: drafting)`);
-  }
-  if (loaded.length === 0) {
+  const { included: ready, skippedDrafting, donePool } = loadSpecs(specsDir, includeDrafting);
+  if (ready.length === 0) {
     throw new RuntimeError(
       'runtime/sequence-empty',
       `no specs with status: ready found in ${specsDir} (use --include-drafting to walk all specs regardless of status)`,
     );
   }
-  const topoOrder = buildDag(loaded, donePool, specsDir);
-  const byId = new Map(loaded.map((s) => [s.id, s]));
+
+  // v0.0.11 — drafting specs are part of the unified DAG scope. They're not
+  // skipped upfront; they get promoted (in-memory drafting → ready) as their
+  // deps converge during execution. When `includeDrafting` is true, the
+  // loader already routes everything to `ready` and `skippedDrafting` is
+  // empty, so the union below is a no-op and promotion never fires.
+  const scope: LoadedSpec[] = [...ready, ...skippedDrafting].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+  );
+  const topoOrder = buildDag(scope, donePool, specsDir);
+  const byId = new Map(scope.map((s) => [s.id, s]));
+  const draftingIds = new Set(skippedDrafting.map((s) => s.id));
+
+  // Inverse-deps map over the scope: for each id, list the dependents whose
+  // `depends-on` includes it. Built once at sequence start; referenced after
+  // every convergence to find drafting dependents whose deps are NOW all
+  // converged.
+  const inverseDeps = new Map<string, string[]>();
+  for (const s of scope) inverseDeps.set(s.id, []);
+  for (const s of scope) {
+    for (const dep of s.deps) {
+      const list = inverseDeps.get(dep);
+      if (list !== undefined) list.push(s.id);
+    }
+  }
 
   // v0.0.10 — already-converged dedup. Build a Map<specId, ExistingRun> from
   // every prior `factory-run` whose `parents[]` includes a `factory-sequence`
@@ -384,6 +404,32 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
   let stopRequested = false;
   let sawError = false;
 
+  // v0.0.11 — convergedSet seeded with donePool ids (always-converged) and
+  // grows as in-scope specs converge during the walk. promotedSet tracks
+  // drafting specs that were moved drafting → ready in-memory. Both are
+  // consulted in the topo loop to decide whether a drafting spec is
+  // executable yet.
+  const convergedSet = new Set<string>(donePool.map((s) => s.id));
+  const promotedSet = new Set<string>();
+
+  const promoteDependents = (convergedId: string): void => {
+    const dependents = inverseDeps.get(convergedId) ?? [];
+    const eligible: string[] = [];
+    for (const depId of dependents) {
+      if (!draftingIds.has(depId)) continue;
+      if (promotedSet.has(depId)) continue;
+      const depSpec = byId.get(depId);
+      if (depSpec === undefined) continue;
+      if (!depSpec.deps.every((d) => convergedSet.has(d))) continue;
+      eligible.push(depId);
+    }
+    eligible.sort();
+    for (const depId of eligible) {
+      promotedSet.add(depId);
+      skipLog(`factory-runtime: ${convergedId} converged → promoting ${depId}`);
+    }
+  };
+
   // Per-spec inner options: copy options but strip sequence-only keys.
   const perSpecOptions: RunOptions = {};
   if (options.maxIterations !== undefined) perSpecOptions.maxIterations = options.maxIterations;
@@ -391,10 +437,21 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
   if (options.maxAgentTimeoutMs !== undefined)
     perSpecOptions.maxAgentTimeoutMs = options.maxAgentTimeoutMs;
   if (options.log !== undefined) perSpecOptions.log = options.log;
+  if (options.worktree !== undefined) perSpecOptions.worktree = options.worktree;
 
   for (const id of topoOrder) {
     const loadedSpec = byId.get(id);
     if (loadedSpec === undefined) continue;
+
+    // v0.0.11 — drafting specs that were never promoted (deps didn't all
+    // converge during this walk) are absent from results. They aren't
+    // 'skipped' (a status reserved for ready specs whose deps failed); they
+    // simply weren't in the executable set. By topological order, all of a
+    // spec's deps have already been processed by the time we reach it, so
+    // `promotedSet` is authoritative here.
+    if (draftingIds.has(id) && !promotedSet.has(id)) {
+      continue;
+    }
 
     if (stopRequested) {
       const cause = blockedByMap.get(id) ?? '<sequence-stopped>';
@@ -448,6 +505,10 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
         status: 'converged',
         runReport: synthReport,
       });
+      // v0.0.11 — already-converged specs feed dynamic promotion the same
+      // way fresh convergences do.
+      convergedSet.add(id);
+      promoteDependents(id);
       continue;
     }
 
@@ -482,7 +543,11 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
       runReport: report,
     });
 
-    if (report.status !== 'converged') {
+    if (report.status === 'converged') {
+      // v0.0.11 — promote drafting dependents whose deps are now all converged.
+      convergedSet.add(id);
+      promoteDependents(id);
+    } else {
       failedSet.add(id);
       blockedByMap.set(id, id);
       if (report.status === 'error') sawError = true;

@@ -46,6 +46,8 @@ Flags shared by both subcommands:
 | `--no-judge` | off | Skip LLM-judged satisfactions in `validatePhase`. |
 | `--no-implement` | off | Drop `implementPhase` from the graph. |
 | `--skip-dod-phase` | off | Drop `dodPhase` from the graph (v0.0.10+). |
+| `--check-holdouts` | off | Run `## Holdout Scenarios` each iteration; both visible AND holdouts must pass to converge (v0.0.11+). |
+| `--worktree` | off | Run inside an isolated git worktree at `.factory/worktrees/<runId>/` (v0.0.11+). |
 | `--claude-bin <path>` | `claude` on PATH | Agent binary override (test injection). |
 | `--twin-mode <record\|replay\|off>` | `record` | Twin recording mode. |
 | `--twin-recordings-dir <path>` | `<cwd>/.factory/twin-recordings` | Twin recordings location. |
@@ -82,14 +84,55 @@ Convergence requires every phase `pass`. With `--no-implement`, graph becomes `[
 
 ### Cross-iteration prompt threading
 
-When iteration N fails, iteration N+1's `implementPhase` prompt grows two byte-stable sections (cache-friendly):
+When iteration N fails, iteration N+1's `implementPhase` prompt grows up to three byte-stable sections (cache-friendly):
 
 - `# Prior validate report` (v0.0.3+) — failed scenarios from iter N's validate.
 - `# Prior DoD report` (v0.0.10+) — failed shell bullets from iter N's dod with exit codes + stderr-tails.
+- `# Prior holdout fail` (v0.0.11+) — IDs only of failed holdouts from iter N's validate (when `--check-holdouts` is set). Criterion text is intentionally never surfaced to the agent — preserves the v0.0.4 overfit guard. Capped at 1 KB per line, 10 KB total.
 
-Both capped at 1 KB per line, 50 KB total per section.
+The validate / DoD sections are capped at 1 KB per line, 50 KB total.
 
-### Public API (23 exports as of v0.0.10)
+### Holdout-aware convergence (v0.0.11+)
+
+Pass `--check-holdouts` (or set `runtime.checkHoldouts: true` in `factory.config.json`) to validate `## Holdout Scenarios` at the end of EACH iteration. Convergence requires both visible scenarios AND holdouts to pass. The persisted `factory-validate-report.payload` carries a separate `holdouts: ScenarioResult[]` array (alongside `scenarios`); entries are tagged with `scenarioKind: 'holdout'`.
+
+**IDs-only invariant.** When iteration N's holdouts fail, iteration N+1's prompt gains a `# Prior holdout fail` section listing **only the failed holdout IDs** — never the criterion, the given/when/then, or the satisfaction text. The agent sees that holdouts failed; it doesn't see what they checked. Closes the visible-only-overfit gap left by v0.0.10's DoD verifier.
+
+```json
+// factory.config.json — opt in for the whole repo
+{ "runtime": { "checkHoldouts": true } }
+```
+
+Default `false`: only visible scenarios run (v0.0.10 behavior preserved).
+
+### Worktree sandbox (v0.0.11+)
+
+Pass `--worktree` to materialize an isolated `git worktree` for the run. Default location: `<projectRoot>/.factory/worktrees/<runId>/`; default branch: `factory-run/<runId>`. The implement / validate / DoD phases all execute against that checkout — so the agent's edits, the harness's `bun test` invocation, and the DoD shell bullets resolve against the worktree's tree. The maintainer's main tree is never touched.
+
+```sh
+factory-runtime run --worktree docs/specs/foo.md --context-dir ./context
+factory-runtime worktree list --context-dir ./context
+factory-runtime worktree clean --context-dir ./context           # removes converged worktrees
+factory-runtime worktree clean --all --context-dir ./context     # also removes failed worktrees (destructive)
+```
+
+The runtime persists a new `factory-worktree` context record (parents=[runId]) capturing `runId / worktreePath / branch / baseSha / baseRef / createdAt / status`. `factory-context tree --direction down <runId>` walks it as a sibling of `factory-phase`.
+
+Programmatic shorthand on already-exported types:
+
+```ts
+import { run } from '@wifo/factory-runtime';
+
+await run({
+  spec, graph, contextStore,
+  options: { worktree: true },                                 // default root + branch
+  // options: { worktree: { rootDir: '/tmp/wt' } },            // override location
+});
+```
+
+Failure modes throw `RuntimeError({ code: 'runtime/worktree-failed' })`: not a git repo, `git` missing on PATH, conflicting `git worktree add` (disk full / permission denied / index corruption). Atomic on failure — no orphan branch / record persists. Default `false`: phases run from `process.cwd()` (v0.0.10 behavior preserved).
+
+### Public API (26 exports as of v0.0.11)
 
 ```ts
 // Per-spec runtime
@@ -113,9 +156,13 @@ import type { ImplementPhaseOptions, ValidatePhaseOptions, DodPhaseOptions }
 // Errors
 import { RuntimeError } from '@wifo/factory-runtime';
 import type { RuntimeErrorCode } from '@wifo/factory-runtime';
+
+// Worktree sandbox (v0.0.11+)
+import { createWorktree } from '@wifo/factory-runtime';
+import type { WorktreeOptions, CreatedWorktree } from '@wifo/factory-runtime';
 ```
 
-`RuntimeErrorCode` (14 values): `runtime/{graph-empty, graph-duplicate-phase, graph-unknown-phase, graph-cycle, invalid-max-iterations, io-error, cost-cap-exceeded, agent-failed, invalid-max-prompt-tokens, total-cost-cap-exceeded, sequence-cycle, sequence-dep-not-found, sequence-cost-cap-exceeded, sequence-empty}`.
+`RuntimeErrorCode` (15 values): `runtime/{graph-empty, graph-duplicate-phase, graph-unknown-phase, graph-cycle, invalid-max-iterations, io-error, cost-cap-exceeded, agent-failed, invalid-max-prompt-tokens, total-cost-cap-exceeded, sequence-cycle, sequence-dep-not-found, sequence-cost-cap-exceeded, sequence-empty, worktree-failed}`.
 
 ### Concepts
 
@@ -123,7 +170,9 @@ import type { RuntimeErrorCode } from '@wifo/factory-runtime';
 
 **Cost caps.** Three layers, each with its own escape hatch: per-phase (`--max-prompt-tokens`), per-spec (`--max-total-tokens`), per-sequence (`--max-sequence-tokens`). Per-spec cap is post-hoc (sum after each implement returns); sequence cap is pre-run (compares cumulative + nextSpec.maxTotalTokens before invoking).
 
-**Status-aware sequence (v0.0.9+).** `run-sequence` skips specs with `status: drafting` by default. Maintainer flips `drafting → ready` as each prior spec converges; the runtime walks only the ready set. Pass `--include-drafting` for cluster-atomic shipping.
+**Status-aware sequence (v0.0.9+).** `run-sequence` walks specs in topological order. With `--include-drafting`, every spec runs from start regardless of `frontmatter.status` (cluster-atomic shipping). Without it, behavior depends on the runtime version — see the next section for v0.0.11+ semantics.
+
+**Dynamic DAG walk (v0.0.11+).** The default `run-sequence` walks the DAG dynamically: drafting specs are no longer skipped indefinitely. After each spec converges, the runtime promotes any direct dependent whose deps are NOW all converged (in-memory `drafting → ready`) and continues the walk. A 4-spec linear chain (1 ready + 3 drafting) ships in ONE invocation — no manual `drafting → ready` flips needed. Each promotion logs `factory-runtime: <converged-id> converged → promoting <dependent-id>` to stdout. Failed specs do NOT promote their dependents — drafting specs whose deps fail stay drafting and are absent from the report. The promotion is in-memory only; `<dir>/<spec>.md`'s `status:` field is NOT edited on disk. Pass `--include-drafting` (or set `runtime.includeDrafting: true` in `factory.config.json`) to preserve the v0.0.10 walk-everything-from-start semantic.
 
 **Already-converged dedup (v0.0.10+).** `runSequence` queries the context store for existing converged `factory-run` records scoped to the current `specsDir`. Match → skip + log. Closes the v0.0.9 BASELINE's N² re-run pattern.
 

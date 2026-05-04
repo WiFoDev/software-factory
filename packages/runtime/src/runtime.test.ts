@@ -525,7 +525,7 @@ describe('run() — v0.0.3 whole-run cost cap', () => {
     };
     expect(iter2Payload.status).toBe('error');
     expect(iter2Payload.failureDetail).toContain('runtime/total-cost-cap-exceeded');
-    expect(iter2Payload.failureDetail).toContain('running_total=500000');
+    expect(iter2Payload.failureDetail).toContain('running_charged=500000');
     expect(iter2Payload.failureDetail).toContain('maxTotalTokens=400000');
     // The implement-report from iter 2 IS on disk (parents=[runId]) but factory-phase.outputRecordIds=[]
     expect(iter2Payload.outputRecordIds).toEqual([]);
@@ -698,6 +698,127 @@ describe('run() — multi-phase input dedup', () => {
     expect(seenMaxAgentTimeoutMs).toBe(900_000);
   });
 
+  test('RunReport.chargedTokens is the budget-relevant total', async () => {
+    const store = createContextStore({ dir });
+    const phase = definePhase('p', async (ctx) => {
+      try {
+        ctx.contextStore.register('factory-implement-report', z.unknown());
+      } catch {
+        // already registered
+      }
+      // 8000 input + 2000 output + 30000 cache-read = SDK total 40000.
+      // charged === input + output === 10000.
+      const recId = await ctx.contextStore.put(
+        'factory-implement-report',
+        {
+          tokens: { input: 8000, output: 2000, charged: 10000, cacheRead: 30000, total: 40000 },
+        },
+        { parents: [] },
+      );
+      const rec = await ctx.contextStore.get(recId);
+      return { status: 'pass', records: rec === null ? [] : [rec] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({ spec: makeSpec(), graph, contextStore: store });
+    expect(report.chargedTokens).toBe(10_000);
+  });
+
+  test('RunReport.totalTokens still exists as deprecated alias for back-compat', async () => {
+    const store = createContextStore({ dir });
+    const phase = definePhase('p', async (ctx) => {
+      try {
+        ctx.contextStore.register('factory-implement-report', z.unknown());
+      } catch {
+        // already registered
+      }
+      const recId = await ctx.contextStore.put(
+        'factory-implement-report',
+        { tokens: { input: 50, output: 50 } },
+        { parents: [] },
+      );
+      const rec = await ctx.contextStore.get(recId);
+      return { status: 'pass', records: rec === null ? [] : [rec] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({ spec: makeSpec(), graph, contextStore: store });
+    expect(report.totalTokens).toBe(100);
+    expect(report.chargedTokens).toBe(100);
+    // Deprecated alias holds the same value as the canonical field.
+    expect(report.totalTokens).toBe(report.chargedTokens);
+  });
+
+  test('cost cap enforcement uses tokens.charged not tokens.total', async () => {
+    const store = createContextStore({ dir });
+    // Per iter: 8000 input + 2000 output (charged=10000) + 30000 cache-read
+    // (SDK total=40000). Cap = 10000 → at-or-below charged → must NOT trip.
+    const phase = definePhase('implement', async (ctx) => {
+      try {
+        ctx.contextStore.register('factory-implement-report', z.unknown());
+      } catch {
+        // already registered
+      }
+      const id = await ctx.contextStore.put(
+        'factory-implement-report',
+        {
+          tokens: { input: 8000, output: 2000, charged: 10000, cacheRead: 30000, total: 40000 },
+        },
+        { parents: [ctx.runId] },
+      );
+      const rec = await ctx.contextStore.get(id);
+      if (rec === null) throw new Error('vanished');
+      return { status: 'pass', records: [rec] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 1, maxTotalTokens: 10_000 },
+    });
+    // Cap is inclusive: charged === cap converges, doesn't error.
+    expect(report.status).toBe('converged');
+    expect(report.chargedTokens).toBe(10_000);
+  });
+
+  test('cost-cap-exceeded message names charged value', async () => {
+    const store = createContextStore({ dir });
+    // Per iter: charged=11000 > cap=10000 → trip.
+    const phase = definePhase('implement', async (ctx) => {
+      try {
+        ctx.contextStore.register('factory-implement-report', z.unknown());
+      } catch {
+        // already registered
+      }
+      const id = await ctx.contextStore.put(
+        'factory-implement-report',
+        {
+          tokens: { input: 9000, output: 2000, charged: 11000, cacheRead: 30000, total: 41000 },
+        },
+        { parents: [ctx.runId] },
+      );
+      const rec = await ctx.contextStore.get(id);
+      if (rec === null) throw new Error('vanished');
+      return { status: 'fail', records: [rec] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 1, maxTotalTokens: 10_000 },
+    });
+    expect(report.status).toBe('error');
+    const phaseRecs = await store.list({ type: 'factory-phase' });
+    const erroredPhase = phaseRecs.find(
+      (r) => (r.payload as { status: string }).status === 'error',
+    );
+    const detail = (erroredPhase?.payload as { failureDetail?: string }).failureDetail;
+    expect(detail).toContain('running_charged=11000');
+    expect(detail).toContain('maxTotalTokens=10000');
+    // The new format names the budget-relevant variable, not the cache-aware total.
+    expect(detail).not.toContain('running_total=');
+  });
+
   test('RunReport.totalTokens sums implement-report tokens across iterations', async () => {
     const store = createContextStore({ dir });
     const phase = definePhase('p', async (ctx) => {
@@ -717,6 +838,131 @@ describe('run() — multi-phase input dedup', () => {
     const graph = definePhaseGraph([phase], []);
     const report = await run({ spec: makeSpec(), graph, contextStore: store });
     expect(report.totalTokens).toBe(100);
+  });
+});
+
+// ----- v0.0.11: RunOptions.worktree + factory-context tree (S-3, S-4) ---
+
+describe('run() — v0.0.11 RunOptions.worktree (S-3 + S-4)', () => {
+  async function initGitRepo(d: string): Promise<void> {
+    await Bun.$`git init -q ${d}`.quiet();
+    await Bun.$`git -C ${d} config user.email "test@example.com"`.quiet();
+    await Bun.$`git -C ${d} config user.name "test"`.quiet();
+    await Bun.$`git -C ${d} config commit.gpgsign false`.quiet();
+    await Bun.write(join(d, 'README.md'), '# fixture\n');
+    await Bun.$`git -C ${d} add -A`.quiet();
+    await Bun.$`git -C ${d} commit -q -m "init"`.quiet();
+  }
+
+  test('RunOptions.worktree=true creates worktree at default root', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'wt-rotr-default-'));
+    try {
+      await initGitRepo(projectRoot);
+      const prevCwd = process.cwd();
+      process.chdir(projectRoot);
+      try {
+        const store = createContextStore({ dir });
+        let observedCwd: string | undefined;
+        const phase = definePhase('p', async (ctx) => {
+          observedCwd = ctx.cwd;
+          return { status: 'pass', records: [] };
+        });
+        const graph = definePhaseGraph([phase], []);
+        const report = await run({
+          spec: makeSpec(),
+          graph,
+          contextStore: store,
+          options: { worktree: true },
+        });
+        expect(report.status).toBe('converged');
+        // Default root: <projectRoot>/.factory/worktrees/<runId>/
+        expect(observedCwd).toBeDefined();
+        if (observedCwd === undefined) return;
+        expect(observedCwd.endsWith(`.factory/worktrees/${report.runId}`)).toBe(true);
+      } finally {
+        process.chdir(prevCwd);
+      }
+    } finally {
+      await Bun.$`rm -rf ${projectRoot}`.quiet().nothrow();
+    }
+  });
+
+  test('RunOptions.worktree.rootDir overrides default root', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'wt-rotr-override-'));
+    const altRoot = mkdtempSync(join(tmpdir(), 'wt-altroot-'));
+    try {
+      await initGitRepo(projectRoot);
+      const store = createContextStore({ dir });
+      let observedCwd: string | undefined;
+      const phase = definePhase('p', async (ctx) => {
+        observedCwd = ctx.cwd;
+        return { status: 'pass', records: [] };
+      });
+      const graph = definePhaseGraph([phase], []);
+      const report = await run({
+        spec: makeSpec(),
+        graph,
+        contextStore: store,
+        options: { worktree: { projectRoot, rootDir: altRoot } },
+      });
+      expect(observedCwd).toBe(join(altRoot, report.runId));
+    } finally {
+      // Best-effort prune; the worktree was created under altRoot.
+      await Bun.$`rm -rf ${projectRoot} ${altRoot}`.quiet().nothrow();
+    }
+  });
+
+  test('RunOptions.worktree=undefined preserves v0.0.10 behavior', async () => {
+    const store = createContextStore({ dir });
+    let observedCwd: string | undefined;
+    const phase = definePhase('p', async (ctx) => {
+      observedCwd = ctx.cwd;
+      return { status: 'pass', records: [] };
+    });
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({ spec: makeSpec(), graph, contextStore: store });
+    expect(report.status).toBe('converged');
+    // No ctx.cwd injected; phases fall back to their own opts.cwd / process.cwd().
+    expect(observedCwd).toBeUndefined();
+
+    // No factory-worktree record produced.
+    const wtRecs = await store.list({ type: 'factory-worktree' });
+    expect(wtRecs.length).toBe(0);
+  });
+
+  test('factory-worktree is reachable via factory-context tree --direction down <runId>', async () => {
+    // S-4 — the factory-worktree record's parents include the runId so a
+    // down-walk from factory-run reaches it as a sibling of factory-phase.
+    const projectRoot = mkdtempSync(join(tmpdir(), 'wt-tree-down-'));
+    try {
+      await initGitRepo(projectRoot);
+      const store = createContextStore({ dir });
+      const phase = definePhase('p', async () => ({ status: 'pass', records: [] }));
+      const graph = definePhaseGraph([phase], []);
+      const report = await run({
+        spec: makeSpec(),
+        graph,
+        contextStore: store,
+        options: { worktree: { projectRoot } },
+      });
+      expect(report.status).toBe('converged');
+
+      // Walk down from runId: collect descendants whose parents include runId.
+      const all = await store.list({});
+      const descendants = all.filter((r) => r.parents.includes(report.runId));
+      const types = descendants.map((r) => r.type).sort();
+      // factory-phase + factory-worktree are both descendants of factory-run.
+      expect(types).toContain('factory-phase');
+      expect(types).toContain('factory-worktree');
+
+      const wtRec = descendants.find((r) => r.type === 'factory-worktree');
+      expect(wtRec).toBeDefined();
+      const payload = wtRec?.payload as { runId: string; status: string };
+      expect(payload.runId).toBe(report.runId);
+      expect(['converged', 'no-converge', 'error']).toContain(payload.status);
+    } finally {
+      await Bun.$`rm -rf ${projectRoot}`.quiet().nothrow();
+    }
   });
 });
 

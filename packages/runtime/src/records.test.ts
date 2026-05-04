@@ -237,6 +237,24 @@ describe('FactoryImplementReportSchema', () => {
     });
     expect(parsed.success).toBe(false);
   });
+
+  test('FactoryImplementReportSchema.tokens accepts charged field', () => {
+    const parsed = FactoryImplementReportSchema.safeParse({
+      ...baseValid,
+      tokens: {
+        input: 1000,
+        output: 500,
+        charged: 1500,
+        cacheCreate: 200,
+        cacheRead: 5000,
+        total: 6700,
+      },
+    });
+    expect(parsed.success).toBe(true);
+    // Legacy v0.0.10 records (without `charged`) still parse — `charged` is optional.
+    const legacy = FactoryImplementReportSchema.safeParse(baseValid);
+    expect(legacy.success).toBe(true);
+  });
 });
 
 describe('tryRegister', () => {

@@ -141,7 +141,11 @@ export function dodPhase(opts: DodPhaseOptions = {}): Phase {
   return definePhase('dod', async (ctx) => {
     tryRegister(ctx.contextStore, 'factory-dod-report', FactoryDodReportSchema);
 
+    // v0.0.11 — `ctx.cwd` (set by runtime when worktree mode is enabled)
+    // wins over `opts.cwd` so DoD shell bullets resolve against the
+    // worktree's checkout, not the maintainer's main tree.
     const cwd =
+      ctx.cwd ??
       opts.cwd ??
       (ctx.spec.raw.filename !== undefined
         ? dirname(resolve(ctx.spec.raw.filename))

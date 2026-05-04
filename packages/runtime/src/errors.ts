@@ -16,7 +16,9 @@ export type RuntimeErrorCode =
   | 'runtime/sequence-dep-not-found'
   | 'runtime/sequence-cost-cap-exceeded'
   // v0.0.9 — sequence-runner drafting filter
-  | 'runtime/sequence-empty';
+  | 'runtime/sequence-empty'
+  // v0.0.11 — worktree-sandbox
+  | 'runtime/worktree-failed';
 
 export class RuntimeError extends Error {
   readonly code: RuntimeErrorCode;

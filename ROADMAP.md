@@ -4,7 +4,32 @@ This file is the **direction**. `BACKLOG.md` is the candidate pile. The roadmap 
 
 ---
 
-## Where we are: v0.0.10 — shipped
+## Where we are: v0.0.11 — shipped
+
+**Theme: trust → isolation — runs sandboxed in their own git worktree, plus calibration of the v0.0.10 trust-contract layer.** v0.0.11 closes the long-deferred worktree-sandbox candidate (BACKLOG since the original ROADMAP's v0.1.0 list) and ships five sibling polish specs that pay down friction surfaced by the v0.0.10 BASELINE.
+
+### What v0.0.11 added
+
+| # | Piece | Notes |
+|---|---|---|
+| 1 | **`factory-runtime run --worktree`** *(factory-runtime)* | Each run materializes an isolated `git worktree` at `<projectRoot>/.factory/worktrees/<runId>/` on a throwaway branch `factory-run/<runId>`; implement / validate / DoD all execute against that checkout, so the maintainer's main tree is never touched by the agent. New CLI subcommand `factory-runtime worktree { list \| clean }` for forensic inspection + maintenance. New context record type `factory-worktree`. Public surface: 23 → 26 (`createWorktree`, `WorktreeOptions`, `CreatedWorktree`). New `RuntimeErrorCode`: `runtime/worktree-failed` (14 → 15). |
+| 2 | **Holdout-aware convergence** *(factory-runtime)* | `validatePhase({ checkHoldouts: true })` runs `## Holdout Scenarios` each iteration; both sets must pass to converge. New `--check-holdouts` CLI flag + `runtime.checkHoldouts` config key. `factory-validate-report` payload gains a `holdouts: []` array. |
+| 3 | **DoD-precision calibration** *(factory-spec-review)* | The `dod-precision` judge is recalibrated against v0.0.10 BASELINE evidence; threshold + prompt updated to reduce false-positive flags on prose DoD bullets. |
+| 4 | **Charged-token budget surfacing** *(factory-runtime)* | `RunReport.chargedTokens` now exposes the budget-relevant total (`input + output`) — cache reads/creates excluded. CLI converged stdout prints `charged=<n>/<budget>`. `RunReport.totalTokens` preserved as deprecated alias. |
+| 5 | **Dynamic DAG walk for `run-sequence`** *(factory-runtime)* | Drafting specs are promoted dynamically as their deps converge during the same invocation. Single-invocation cluster shipping for ready→drafting chains. `--include-drafting` preserves legacy walk-everything-from-start semantic. |
+| 6 | **`factory ci publish` hardening** *(factory-core)* | CI publish workflow + scripted manual-fallback path normalize tarball checks across all six packages. |
+
+### Reconciliations worth knowing
+
+- **All 6 packages bumped to 0.0.11 in lockstep.** Keeps scaffold's `^0.0.11` deps uniformly resolvable.
+- **`--worktree` is opt-in.** Default `false`. Becomes opt-out post-v0.1.0 once soaked.
+- **One worktree per run; cleanup is opt-in via `factory-runtime worktree clean`.** Default removes only converged worktrees (forensic value of failed runs preserved).
+- **Worktree creation is atomic.** A partial failure leaves no orphan record/branch. NO `factory-run` record persists when `createWorktree` fails.
+- **Public API surface deltas:** runtime 23 → 26 (+createWorktree +WorktreeOptions +CreatedWorktree); core / context / harness / spec-review / twin unchanged in count.
+
+---
+
+## Where we were: v0.0.10 — shipped
 
 **Theme: trust contract — DoD-verifier + reviewer judges = trust on both sides.** The v0.0.9 BASELINE friction list closes via five sibling specs that turn each spec's Definition of Done into a checked contract, tighten the spec-quality teeth, and recalibrate the wide-blast-radius heuristic against empirical data.
 

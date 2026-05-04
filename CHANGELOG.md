@@ -6,6 +6,43 @@ For the project's forward direction and shipped-release retrospectives, see [`RO
 
 ---
 
+## [0.0.11] — 2026-05-04
+
+**Theme: trust → isolation — runs sandboxed in their own git worktree, plus calibration of the v0.0.10 trust-contract layer.** v0.0.11 closes the long-deferred worktree-sandbox candidate (BACKLOG since the original ROADMAP's v0.1.0 list) and ships five sibling polish specs that pay down friction surfaced by the v0.0.10 BASELINE: holdout-aware convergence, DoD-precision calibration, dynamic DAG walk for run-sequence, charged-token budget surfacing, and CI publish hygiene.
+
+### Added
+
+- **`factory-runtime run --worktree`** *(factory-runtime)*. Each run materializes an isolated `git worktree` at `<projectRoot>/.factory/worktrees/<runId>/` on a throwaway branch `factory-run/<runId>`; the implement / validate / DoD phases all execute against that checkout, so the maintainer's main tree is never touched by the agent. Strong undo by construction (`git worktree remove`); enables parallel runs against distinct worktree paths. New CLI subcommand `factory-runtime worktree { list | clean [--all] [--keep-failed] }` for forensic inspection + maintenance. New context record type `factory-worktree` (parents=[runId]) carrying `runId / worktreePath / branch / baseSha / baseRef / createdAt / status`. Public surface: `+3` exports (23 → 26: `createWorktree`, `WorktreeOptions`, `CreatedWorktree`). New `RuntimeErrorCode`: `runtime/worktree-failed` (14 → 15).
+- **Holdout-aware convergence** *(factory-runtime)*. `validatePhase({ checkHoldouts: true })` runs `## Holdout Scenarios` each iteration alongside the visible scenarios; convergence requires both to pass. New CLI flag `--check-holdouts` and `factory.config.json` key `runtime.checkHoldouts`. The persisted `factory-validate-report` payload gains a `holdouts: []` array (legacy records without it still parse).
+- **DoD-precision calibration** *(factory-spec-review)*. The `dod-precision` judge is recalibrated against v0.0.10 BASELINE evidence; threshold + prompt updated to reduce false-positive flags on prose DoD bullets.
+- **Charged-token budget surfacing** *(factory-runtime)*. `RunReport.chargedTokens` now exposes the budget-relevant total (`input + output`) — cache reads/creates are excluded per Anthropic's pricing. CLI converged/no-converge stdout prints `charged=<n>/<budget>`. The existing `RunReport.totalTokens` is preserved as a deprecated alias for back-compat.
+- **Dynamic DAG walk for run-sequence** *(factory-runtime)*. `factory-runtime run-sequence` now promotes drafting specs dynamically as their deps converge during the same invocation (auto-promotion log line: `<dep> converged → promoting <dependent>`). Single-invocation cluster shipping for ready→drafting chains; `--include-drafting` (and `runtime.includeDrafting`) preserve the legacy walk-everything-from-start semantic.
+- **`factory ci publish` hardening** *(factory-core)*. CI publish workflow + scripted manual-fallback path normalize tarball checks across all six packages.
+
+### Changed
+
+- **All six `@wifo/factory-*` packages bumped to `0.0.11`** in lockstep. `init-templates.ts` `PACKAGE_JSON_TEMPLATE.dependencies` bumped from `^0.0.10` to `^0.0.11` for every `@wifo/factory-*` dep.
+
+### Public API surface
+
+| Package | v0.0.10 | v0.0.11 |
+|---|---|---|
+| `@wifo/factory-core` | 33 | 33 |
+| `@wifo/factory-context` | 18 | 18 |
+| `@wifo/factory-harness` | ~16 | ~16 |
+| `@wifo/factory-runtime` | 23 | 26 (+createWorktree, +WorktreeOptions, +CreatedWorktree) |
+| `@wifo/factory-spec-review` | 10 | 10 |
+| `@wifo/factory-twin` | ~7 | ~7 |
+
+### Reconciliations worth knowing
+
+- **`--worktree` is opt-in for v0.0.11.** Default `false`. Becomes opt-out post-v0.1.0 once soaked.
+- **One worktree per `run()` invocation.** All phases share the worktree for that run. Cleanup is opt-in via `factory-runtime worktree clean` (default removes only converged worktrees; `--all` also removes failed ones, preserving forensic value of failed runs).
+- **Worktree creation is atomic** — a partial failure (disk full, permission denied) leaves no orphan record/branch. NO `factory-run` record persists when `createWorktree` fails (the run never started).
+- **v0.0.11 explicitly does NOT ship**: parallel agent execution within a single sequence; auto-cleanup of converged worktrees on run end; worktree GC after N days; auto-merge of converged worktrees back into the main branch (the maintainer reviews + merges manually); per-spec worktree options in spec frontmatter (only `RunOptions.worktree` for now); cross-platform Windows worktree handling (best-effort; tested on macOS/Linux).
+
+---
+
 ## [0.0.10] — 2026-05-03
 
 **Theme: trust contract — DoD-verifier + reviewer judges = trust on both sides.** v0.0.10 closes the v0.0.9 BASELINE friction list with five sibling specs that together turn each spec's Definition of Done into a checked contract and tighten the spec-quality teeth. The DoD verifier now treats unchecked DoD items as a converge-blocking signal; three new reviewer judges (`feasibility`, `api-surface-drift`, `scope-creep`) catch quality regressions before runtime; `run-sequence` polish + `factory spec watch` smooth the workflow; and the `spec/wide-blast-radius` heuristic is recalibrated against empirical data.
