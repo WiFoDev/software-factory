@@ -384,6 +384,76 @@ The "close v0.0.8 BASELINE friction list" cluster shipped (per-spec `agent-timeo
 
 **Would you want to use the factory for the next product?** Per the agent: "yes — after fixes 1 and 2 above." Verdict: the workflow IS smoother than v0.0.8 (drafting filter works; reviewer false-positive gone) but the next layer of friction is now visible. v0.0.10 should close it; v0.0.10's BASELINE will tell us whether the curve is still trending right.
 
+##### v0.0.10 — shipped 2026-05-03 (trust contract held; friction is polish not foundational)
+
+The "trust contract + spec-quality teeth + workflow polish" cluster shipped (`dodPhase` runtime phase, 3 new reviewer judges, run-sequence already-converged dedup + done/ dep resolution, `factory spec watch` + PostToolUse hook recipe, `spec/wide-blast-radius` calibration to 12 + NOQA directive). Run executed in `~/dev/url-shortener-v0.0.10/` against the published 0.0.10 packages.
+
+**Predictions (locked before the run):**
+
+1. DoD-verifier fires on every iteration.
+2. First baseline where some specs may require iter 2+ (DoD failures).
+3. Per-iteration wall-clock +10-30 seconds from Bash subprocess overhead.
+4. 3 new reviewer judges may surface findings on canonical specs.
+5. Already-converged dedup eliminates v0.0.9 BASELINE's N² re-run pattern.
+6. `<dir>/done/` dep resolution works.
+7. Token totals may drop or rise (hard to predict).
+
+**Actuals:**
+
+| Spec | Iterations | Wall-clock | Tokens (input+output) |
+|---|---|---|---|
+| core-utilities | 1 | 81.1s | 4,504 |
+| shorten-endpoint | 1 | 105.4s | 5,863 |
+| redirect-and-tracking | 1 | 70.8s | 3,976 |
+| stats-endpoint | 1 | 54.8s | 3,079 |
+| **Total (4 specs)** | **4** | **5m 12s (312s)** | **17,422** |
+
+| Metric | v0.0.5 | v0.0.6 | v0.0.7 | v0.0.8 | v0.0.9 | v0.0.10 |
+|---|---|---|---|---|---|---|
+| Specs shipped | 4 (linear) | 4 (linear) | 4 (linear) | 5 (diamond) | 4 (diamond) | **4 (linear)** |
+| Wall-clock | 7m 3s | 4m 26s | 5m 9s | 6m 26s | 6m 26s | **5m 12s** |
+| Wall-clock per spec | 106 s | 67 s | 77 s | 77 s | 77 s | **78 s** ✓ |
+| Raw tokens | 22,703 | — | 17,009 | 20,900 | 17,009 | **17,422** |
+| Tokens per spec | — | — | ~4,250 | ~4,180 | ~4,180 | **~4,355** ✓ |
+| Tests | 14 | 16 | 19 | 16 | 16 | **16** |
+| Iterations / spec | 1 each | 1 each | 1 each | 1 each | 1 each | **1 each** ✓ |
+| Maintainer interventions | ~32 | 32 | 32 | ~3-8 | ~3-8 | **7** (4 invocations + 3 status flips) |
+
+**End-to-end smoke:** all `curl` calls in the cookbook behave per spec.
+
+**Top 3 friction points (per agent's JOURNAL):**
+
+1. **`run-sequence` doesn't walk the DAG dynamically.** It skips `status: drafting` specs instead of promoting direct dependents on convergence. 4 specs = 4 manual invocations + 3 manual `drafting → ready` status flips. The maintainer is the DAG walker. v0.0.9 added status-awareness; v0.0.10 added already-converged dedup; v0.0.11 needs **dynamic dependent promotion** — when spec X converges, run-sequence in-memory promotes any direct dependent whose deps are all converged AND continues walking, all in one invocation. **NEW v0.0.11 BACKLOG entry needed (lead candidate).**
+2. **`tokens.total` includes cache reads but budgets exclude them — same field, two meanings.** The Anthropic SDK's `tokens.total` includes cache reads + cache creates + input + output. The runtime's `--max-total-tokens` budget enforcement uses `input + output` only (cache is free, by Anthropic's pricing). Reports surface `tokens.total` which makes runs LOOK like they blew a 1M budget when they didn't. **NEW v0.0.11 BACKLOG entry needed:** rename or split — add a `tokens.charged: input + output` field; rename `tokens.total` to `tokens.totalInclCache` for clarity OR drop the SDK's `total` and compute the budget-relevant value ourselves.
+3. **`review/dod-precision` judge fires on color-word DoD bullets ("green", "clean").** The canonical prompt itself uses "tests pass green / lint clean" — idiomatic shorthand. The judge flags these as imprecise ("what does 'green' mean?"). Stylistic nit masquerading as correctness check. **NEW v0.0.11 BACKLOG entry needed:** tighten the `dod-precision` CRITERION to recognize "green / clean" as canonical idioms when paired with a command name (`tests pass green`, `lint clean`). ~20 LOC + judge prompt edit.
+
+**Predicted-vs-actual scoring:**
+
+| Prediction | Outcome | Notes |
+|---|---|---|
+| #1 DoD-verifier fires every iteration | ✅ Landed | Shell gates ran each iter; no spec needed iter 2 because the agent wrote code that passed typecheck/test/check first-try. |
+| #2 First baseline with iter 2+ | ❌ Did NOT land | **5 consecutive baselines now with 1-iter convergence per spec.** The DoD-verifier did its job by NOT firing failures — the agent's code was already correct. The streak holds. |
+| #3 Per-iteration wall-clock +10-30s | ❌ Did NOT land | Per-spec wall-clock essentially flat at 78s (vs 77s in v0.0.7-9). DoD shell gates are fast (~3-5s for typecheck + test + check on a small project); LLM calls dominate. |
+| #4 3 new reviewer judges may surface findings | ⚠️ Partially landed | `review/dod-precision` fired on color-word bullets (false positive — captured as friction #3). `api-surface-drift` and `feasibility` didn't fire on canonical specs. `scope-creep` not exercised. Net: the new judges are too loose (dod-precision) or didn't get exercised (api-surface, feasibility, scope-creep). |
+| #5 Already-converged dedup kills N² re-runs | ✅ Landed | The maintainer made 4 invocations (one per spec), but each invocation ran exactly ONE spec — the newly-promoted one. Zero wasted re-runs. **The friction shifted UP one layer to "why am I making 4 invocations instead of 1?" — the dynamic-DAG-walk gap.** |
+| #6 Move-to-done resolution works | ❓ Not exercised | Agent didn't move specs to `done/` mid-cluster (kept all 4 in `docs/specs/`). The fix shipped; no failure mode encountered. |
+| #7 Token totals may drop or rise | ✅ Dropped | 17,422 raw vs v0.0.9's 20,900 → -17% (mostly from 4 specs vs 5). Per-spec flat at ~4,355 — invariant holds. |
+
+**Surprises (the high-value entries):**
+
+- **Per-spec compute invariant has held across 5 baselines.** v0.0.7 / v0.0.8 / v0.0.9 / v0.0.10 all clock 77-78s/spec wall-clock + ~4,200-4,400 tokens. The v0.0.5 prompt-cache + implementation-guidelines prefix continues to earn its keep across every release that's touched the agent prompt. **Anything that breaks this baseline should be flagged as a regression in code review.**
+- **DoD-verifier added ZERO per-spec cost.** Predicted +10-30s per iteration; actual flat. Bash subprocess overhead for `pnpm typecheck && pnpm test && pnpm check` on a small project is 3-5s — orders of magnitude less than the LLM call cost.
+- **The friction shifted from "runtime does too much" to "runtime doesn't do enough yet."** v0.0.9 friction was "run-sequence ignores status; runs converged specs wastefully." v0.0.10 fixed both. v0.0.10 friction is "the maintainer is still the DAG walker; runtime should walk dependents automatically." Each release surfaces friction one abstraction layer higher than the prior release. **That's the curve trending right.**
+- **3 of the 5 status-flips would have been zero invocations** if `run-sequence` had walked the DAG dynamically. 4 invocations → 1 invocation. That's the v0.0.11 prize.
+- **Verdict crossed a threshold.** The agent wrote: *"would use the factory for the next product. ... Remaining friction is runtime/judge polish, not the scoping or implementing loop itself."* This is the first BASELINE where the friction is universally polish-tier, not foundational-tier. The factory is mature enough to be RECOMMENDED for the next product without major caveats.
+
+**Mapped BACKLOG entries:**
+- Friction #1 (dynamic DAG walk) → NEW v0.0.11 entry — this is the lead candidate; closes the 4×-invocations pattern.
+- Friction #2 (tokens.total semantics) → NEW v0.0.11 entry — telemetry/UX cleanup.
+- Friction #3 (dod-precision color-word false positive) → NEW v0.0.11 entry — judge calibration.
+
+**Would you want to use the factory for the next product?** Per the agent: *"yes — would use the factory for the next product. First-iteration convergence on every spec with locked shared decisions surviving four independent implementer invocations is a real win — `/scope-project` did its job."* Net signal: **v0.0.10 is the first release where the factory is recommended without caveats** — first-iter convergence on every spec, DoD gates working as designed, /scope-project's decomposition surviving multi-spec consistency, friction shifted to polish tier.
+
 ##### v0.1.0 — pending
 
 After scheduler (Layer 5) ships. The maintainer prompt should reduce to "scope this product, ship it overnight" with no hand-driving. If we're not there by v0.1.0, the scheduler isn't done.

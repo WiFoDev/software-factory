@@ -208,6 +208,68 @@ Lean: (a). `--context-dir` is the more descriptive name; `factory.config.json`'s
 
 ---
 
+## `run-sequence` walks the DAG dynamically (auto-promote dependents on convergence) *(NEW, surfaced by v0.0.10 BASELINE — friction #1, lead candidate for v0.0.11)*
+
+**What:** When a spec converges within a `run-sequence` invocation, the runtime should detect any direct dependent whose deps are now ALL converged AND in-memory promote it from `status: drafting` → `status: ready` AND continue walking — all in the same invocation. The maintainer should not need to flip statuses by hand or re-invoke `run-sequence` per spec. The v0.0.10 BASELINE measured the gap empirically: 4 specs in a linear chain required 4 separate `run-sequence` invocations + 3 manual `drafting → ready` flips between them.
+
+**Why:** This is the next layer of friction beyond v0.0.9's status-aware filter and v0.0.10's already-converged dedup. The runtime ALREADY has every signal it needs:
+- The DAG (parsed from `depends-on`).
+- Convergence status per spec (from each `run()` call's `RunReport.status`).
+- The mapping from spec → "depends on me" (inverse of `depends-on`).
+
+What's missing is the wire-up: after each spec's `run()` returns `'converged'`, walk `inverseDepends[convergedSpec]` and check whether each dependent's deps are now all converged; if yes, in-memory promote to ready and add to the topological execution queue.
+
+**Shape options:**
+- (a) **Default behavior change.** `runSequence` walks the DAG dynamically — `status: drafting` becomes "blocked on a dep that hasn't converged yet" semantically rather than "skipped indefinitely." On convergence, the runtime walks `inverseDepends` and re-runs the loop with the newly-promoted set. `--include-drafting` still forces full-walk-from-start. CLI behavior change but back-compat: existing `--include-drafting` users see no diff; new behavior is what users actually want when they run `run-sequence`.
+- (b) **`--auto-promote` flag, opt-in.** Same logic as (a), but gated behind a flag. Smaller blast radius; explicit. Maintainer runs `run-sequence --auto-promote docs/specs/` for the dynamic walk.
+- (c) **Edit the file on convergence.** When spec X converges, the runtime `git`-edits `docs/specs/<dependent>.md`'s frontmatter from `drafting` → `ready`. More invasive (touches user files), but explicit + recoverable.
+
+Lean: (a). The status field's documented semantic was always "ready when its prior dep ships"; v0.0.7 documented it; v0.0.9 enforced "skip drafting"; v0.0.10 already-converged dedup. (a) closes the gap by making the runtime walk the DAG, which is what the maintainer expected `run-sequence` to do all along. Back-compat preserved via `--include-drafting`.
+
+**Touches:** `packages/runtime/src/sequence.ts` (extend `runSequence`'s execution loop with an inverse-deps map + post-convergence promotion + re-walk), `packages/runtime/src/cli.ts` (no flag changes if (a); add `--auto-promote` if (b)), tests, README. ~120-180 LOC including tests.
+
+**Phasing suggestion:** v0.0.11 lead candidate. **This is the v0.0.10 BASELINE's headline finding** — closes the 4×-invocations pattern, brings maintainer-intervention count from 7 to ~1-2.
+
+---
+
+## `tokens.total` ambiguity — split into `tokens.charged` (budget-relevant) vs `tokens.totalInclCache` *(NEW, surfaced by v0.0.10 BASELINE — friction #2)*
+
+**What:** The Anthropic SDK's `usage.total_tokens` includes cache reads + cache creates + input + output. The runtime's `--max-total-tokens` budget enforcement uses `input + output` only (cache is free per Anthropic's pricing). Reports surface the SDK's `total` value as `tokens.total` — making runs LOOK like they blew a 1M-token budget when they didn't. Same field, two meanings; confusing.
+
+**Why:** The v0.0.10 BASELINE agent flagged this directly: *"reads as 'blew the 1M budget' when it didn't."* The schema field name is misleading. Telemetry/UX issue, not a correctness bug — the budget enforcement is correct; the reporting is misleading.
+
+**Shape options:**
+- (a) **Rename `tokens.total` → `tokens.totalInclCache` + ADD `tokens.charged: input + output`.** Budget enforcement uses `tokens.charged` (which it already does, unchanged). Reports / UI show `tokens.charged` prominently. Field-level addition + rename. Schema migration concern: existing context-store records have `tokens.total`; need a migration shim or version bump.
+- (b) **Drop SDK's `total` from the persisted record entirely.** Compute `tokens.charged` ourselves; report only that. Simpler; loses cache visibility (which is interesting for cache-hit-rate analysis).
+- (c) **Keep `tokens.total` as-is but add `tokens.charged`.** Two fields side by side. Surface `charged` prominently in CLI output; `total` becomes "cache-aware total." Smallest blast radius.
+
+Lean: (c). Add `tokens.charged: input + output`. Update `RunReport` to surface `charged` as the budget-relevant number. Rename CLI output references from "tokens used" (currently shows `total`) to "tokens charged: <charged> / <budget>". Schema gets one new optional field; back-compat preserved.
+
+**Touches:** `packages/runtime/src/records.ts` (add `tokens.charged?: number` to `FactoryImplementReportSchema`), `packages/runtime/src/phases/implement.ts` (compute `charged` from input + output), `packages/runtime/src/cli.ts` (output formatting), `packages/runtime/src/runtime.ts` (`RunReport.totalTokens` already excludes cache — verify + document; consider renaming to `chargedTokens` for symmetry; back-compat via deprecated alias). Tests + README. ~50 LOC.
+
+**Phasing suggestion:** v0.0.11 alongside the dynamic-DAG-walk fix. Telemetry cleanup; small.
+
+---
+
+## `review/dod-precision` calibration — recognize "green / clean" as canonical idioms *(NEW, surfaced by v0.0.10 BASELINE — friction #3)*
+
+**What:** The v0.0.4 `dod-precision` reviewer judge fires on DoD bullets like "all tests pass green" or "lint clean" — flagging them as imprecise ("what does 'green' mean?"). But these are idiomatic shorthand widely understood. The canonical baseline prompt itself uses these exact phrases. The judge is producing false positives on the very phrasing the toolchain promotes.
+
+**Why:** Stylistic nit masquerading as a correctness check. Surfaced repeatedly across baselines; v0.0.10 BASELINE finally documented it explicitly. The judge's CRITERION text is too aggressive — needs to allow conventional idioms when paired with a recognizable command name.
+
+**Shape options:**
+- (a) **Tighten the CRITERION text** to recognize "tests pass green" / "tests green" / "lint clean" / "typecheck clean" / "biome clean" / "<command> clean" / "<command> green" as canonical idioms. Embed examples in the prompt: "These bullets ARE precise enough; do not flag them: ...". Judge prompt edit only; ~10 LOC plus the prompt text.
+- (b) **Add a dictionary of recognized idioms** to the judge's logic — pre-filter bullets that match before sending to the LLM. Faster (no LLM call) + deterministic. ~30 LOC.
+- (c) **Demote `review/dod-precision`** from the default-enabled set; make it opt-in via `--judges`. Sidesteps the calibration question; harshest fix.
+
+Lean: (a). The CRITERION text already does the work for other judges; calibrating it for canonical idioms is exactly the spec-quality knob that v0.0.4 designed for. Doesn't add code; just polishes prompt.
+
+**Touches:** `packages/spec-review/src/judges/dod-precision.ts` (extend CRITERION with positive examples). `ruleSetHash` flips on the prompt change → cache invalidates correctly on next run. Tests. ~30 LOC including a regression test pinning that "tests pass green" + "lint clean" don't fire findings.
+
+**Phasing suggestion:** v0.0.11 alongside the other two BASELINE findings. Trivial; small win.
+
+---
+
 ## Refine `spec/wide-blast-radius` heuristic — threshold of 8 fires on 18 historical specs *(NEW, surfaced by v0.0.9 ship)*
 
 **What:** v0.0.9 added the `spec/wide-blast-radius` lint warning at >= 8 distinct file paths in `## Subtasks`. Running it against the v0.0.9 cluster + every shipped spec under `docs/specs/done/` produces **18 warnings on existing specs** — including small ones like `factory-core-v0-0-5-1` (9 paths) and `factory-runtime-v0-0-5-2` (8 paths) that converged in single-iteration runs without budget pressure. The heuristic catches the v0.0.8 self-build's failure mode (12-file spec) but also normal-shape specs that ship cleanly.
