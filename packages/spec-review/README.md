@@ -1,12 +1,10 @@
 # @wifo/factory-spec-review
 
-LLM-judged spec quality reviewer for the software-factory loop. Runs five `claude -p`-backed judges against `docs/specs/<id>.md` files and emits findings in the same `${file}:${line}  ${sev}  ${code}  ${message}` format as `factory spec lint` — different namespace (`review/...` vs `spec/...`), same ergonomics.
+> The LLM-judged spec quality reviewer. 8 `claude -p`-backed judges score specs for quality issues lint can't catch.
 
-The reviewer is the **spec-side** analog of the harness: harness scores `judge:` lines on scenarios; reviewer scores the spec itself.
+`@wifo/factory-spec-review` is the spec-side analog of the harness. Harness runs `judge:` lines against scenarios at runtime; the reviewer runs structured prompts against the spec itself **before** any agent token is spent. Output mirrors `factory spec lint`'s shape (`file:line  severity  code  message`), in the `review/...` namespace. Cache-backed by content-addressable spec hash + judge rule-set hash, so re-runs on unchanged specs cost zero `claude` spawns.
 
-## Why
-
-`factory spec lint` is fast, free, and deterministic — but only checks **format**. A spec can lint clean and still ship with vague DoD checks, asymmetric satisfactions, or holdouts that paraphrase visible scenarios. Today, that catch happens manually (a human reads the spec, flags issues). The reviewer automates it.
+> **For AI agents:** start at **[`AGENTS.md`](../../AGENTS.md)** (top-level). This README is detailed reference.
 
 ## Install
 
@@ -14,121 +12,125 @@ The reviewer is the **spec-side** analog of the harness: harness scores `judge:`
 pnpm add -D @wifo/factory-spec-review @wifo/factory-core
 ```
 
-## Usage
+Pre-installed via `factory init`. Invoked via `factory spec review` (dispatched from `@wifo/factory-core`).
 
-```sh
-factory spec review docs/specs/<id>.md
-factory spec review docs/specs/                     # recursive
+## When to reach for it
+
+- **Score spec quality before running.** `factory spec review docs/specs/<id>.md` — runs all 8 enabled judges. Subscription-paid via `claude -p`.
+- **Score a directory.** `factory spec review docs/specs/` — recurses; one finding stream per file.
+- **Restrict to specific judges.** `--judges <a,b,c>` runs only those (e.g., quick `--judges dod-precision` for a fast DoD sanity check).
+- **Programmatically review.** Import `runReview({ spec, judgeClient, ... })` to get a typed `ReviewFinding[]` array.
+- **Build a custom judge.** Implement the `JudgeDef` interface, register it via your own `loadJudgeRegistry` wrapper, run it via `runReview`. The default-enabled list is configurable.
+
+## What's inside
+
+### CLI
+
 ```
-
-Auto-resolves the paired technical-plan from `docs/specs/<id>.md` ↔ `docs/technical-plans/<id>.md` (and the `done/` subdirs). Override with `--technical-plan <path>`.
-
-### Flags
+factory spec review <path> [flags]                # dispatched from factory-core
+```
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--cache-dir <path>` | `.factory-spec-review-cache` | Where cached findings live. |
-| `--no-cache` | (off) | Disable lookup AND write. |
-| `--judges <a,b,c>` | all 5 enabled | Comma-separated subset. Codes can be bare (`dod-precision`) or fully namespaced (`review/dod-precision`). |
-| `--claude-bin <path>` | `claude` (PATH) | Test injection for fake-claude fixtures. |
-| `--technical-plan <path>` | auto-resolved | Override paired-plan resolution. |
-| `--timeout-ms <n>` | `60000` | Per-judge wall-clock timeout. |
+| `--cache-dir <path>` | `.factory-spec-review-cache` | Per-spec-bytes cache. Re-runs on unchanged specs are free. |
+| `--no-cache` | off | Disable cache (always run every judge). |
+| `--judges <a,b,c>` | all 8 | Comma-separated subset (e.g. `internal-consistency,dod-precision`). |
+| `--claude-bin <path>` | `claude` on PATH | Override (test injection). |
+| `--technical-plan <path>` | auto-resolved | Override path to paired technical-plan. |
+| `--timeout-ms <n>` | 60000 | Per-judge timeout. |
 
-### Exit codes
+Auto-resolution of paired technical-plan: `docs/specs/<id>.md` ↔ `docs/technical-plans/<id>.md` (and `done/` subdirs).
 
-Mirror `factory spec lint`:
-- `0` — clean OR only `info`/`warning` findings
-- `1` — at least one `error`-severity finding (or path-not-found)
-- `2` — bad CLI args (unknown judge code, missing path, invalid timeout)
-- `3` — `claude -p` couldn't spawn (analogous to `runtime/agent-failed`)
+Auto-loading of `depends-on` deps (v0.0.7+): when reviewing a spec with non-empty `depends-on`, the CLI walks `<projectRoot>/docs/specs/<dep-id>.md` and `<projectRoot>/docs/specs/done/<dep-id>.md` to load each dep's body, then threads it through to the judges that consume `JudgePromptCtx.deps` (currently `cross-doc-consistency` and `internal-consistency`).
 
-## The five v0.0.4 judges
+Exit codes: `0` (clean or warnings only), `1` (errors found).
 
-All ship at `severity: 'warning'` by default. The reviewer's exit-1 condition is therefore **dormant by default** — promote a judge to `error` once you've calibrated it on real specs.
-
-| Code | Reads | What it catches |
-|---|---|---|
-| `review/internal-consistency` | full body + `depends-on` deps' Constraints | Constraints reference deps that aren't declared; scenarios reference test files outside `cwd`; DoD checks don't match constraints. **v0.0.9:** when the spec under review declares `depends-on:`, each dep's `## Constraints / Decisions` section is appended to the artifact (under `## Deps Constraints (referenced via depends-on)`) so shared constraints declared in a parent spec no longer fire as unreferenced. |
-| `review/judge-parity` | scenarios + holdouts | Same category of scenario should have the same satisfaction kinds. If two error-UX scenarios but only one has a `judge:` line — flag it |
-| `review/dod-precision` | DoD section (sliced) | "X matches Y" / "X validates Y" without explicit operator (equal vs subset vs superset). |
-| `review/holdout-distinctness` | scenarios + holdouts | Holdouts overlap with visible scenarios (overfit) OR probe completely unrelated concerns (irrelevant) |
-| `review/cross-doc-consistency` | spec + paired tech-plan | Spec and technical-plan disagree on error codes, public surface, default values, deferral list |
-
-Plus two non-judge codes the runner emits:
-
-- `review/judge-failed` (severity `error`) — JudgeClient threw; pipeline continues
-- `review/section-missing` (severity `info`) — slicer didn't find a required `## ` section; that judge is skipped
-
-## Calibration: warning → error
-
-1. Run the reviewer against representative specs in your repo with `--judges <code>` (single judge at a time).
-2. Eyeball the findings. False positives → tune the judge's prompt in `src/judges/<code>.ts` and bump the rule-set hash automatically (the cache invalidates on any prompt edit).
-3. Once the false-positive rate is acceptable, change `defaultSeverity: 'warning'` to `'error'` in the judge file and ship a point release. CI now fails on that judge's findings.
-
-## Cache
-
-Content-addressable. Cache key = `sha256(specBytes : ruleSetHash : sortedJudges)`. Hit → identical findings, **zero `claude` spawns**. Re-running the reviewer on an unchanged spec with an unchanged rule set is free.
-
-The `ruleSetHash` covers each judge's prompt content — editing a judge prompt without bumping a version still invalidates the cache automatically.
-
-```
-.factory-spec-review-cache/
-├── 3a8f4e9b...d2c1056.json    # ReviewFinding[] for one (spec, ruleSet, judges) tuple
-└── ...
-```
-
-`--no-cache` skips both lookup and write.
-
-## How it talks to `claude`
-
-The reviewer ships a `claudeCliJudgeClient` adapter that implements `@wifo/factory-harness`'s `JudgeClient` interface by spawning `claude -p --output-format json --allowedTools '[]' < prompt`. **Subscription auth** (no `ANTHROPIC_API_KEY`). Mirrors `packages/runtime/src/phases/implement.ts`'s subprocess pattern.
-
-`--allowedTools '[]'` blocks all tool calls, so the judge's `record_judgment` tool path (used by the SDK-based default in harness) isn't available. Instead, the prompt instructs the model to emit strict JSON in the response text:
-
-```
-Respond with a single JSON object on one line, with no surrounding prose:
-{"pass": <boolean>, "score": <number 0-1>, "reasoning": "<one or two sentences>"}
-```
-
-Parser: `JSON.parse` first; on failure, regex-extract the first `{...}` substring containing `"pass"`. Both fail → `judge/malformed-response` → `review/judge-failed` finding (severity `error`). Documented tradeoff: tool-forced JSON is more reliable, but doesn't fit the subscription-auth path.
-
-## Release-gate manual smoke
-
-CI tests use a mocked `JudgeClient` (see `src/review.test.ts`) — burns zero tokens, verifies the **pipeline**, not prompt quality.
-
-Before tagging a release, run each fixture against real claude to verify prompt quality:
-
-```sh
-for f in test-fixtures/*.md test-fixtures/*/*.md; do
-  pnpm exec factory spec review "$f" --no-cache
-done
-```
-
-- `good-spec.md` should produce zero findings (negative control).
-- `inconsistent-deps.md` should produce a `review/internal-consistency` finding.
-- `dod-vague.md` should produce a `review/dod-precision` finding.
-- `holdout-overlapping.md` should produce a `review/holdout-distinctness` finding.
-- `parity-asymmetric.md` should produce a `review/judge-parity` finding.
-- `cross-doc-mismatched/spec.md` (with paired plan) should produce `review/cross-doc-consistency`.
-
-If `good-spec.md` produces noisy findings → tighten the prompts before release.
-
-## Public API surface
-
-`@wifo/factory-spec-review` exports exactly **10 names** (4 functions + 6 types):
+### Public API (10 exports)
 
 ```ts
-runReview, formatFindings, loadJudgeRegistry, claudeCliJudgeClient,
-ReviewFinding, ReviewCode, ReviewSeverity, RunReviewOptions, JudgeDef,
-ClaudeCliJudgeClientOptions
+import { runReview, formatFindings, loadJudgeRegistry, claudeCliJudgeClient }
+  from '@wifo/factory-spec-review';
+
+import type {
+  RunReviewOptions, ReviewFinding, ReviewCode, ReviewSeverity,
+  JudgeDef, ClaudeCliJudgeClientOptions,
+} from '@wifo/factory-spec-review';
 ```
 
-Locked at v0.0.4. Future judges land via `JUDGE_REGISTRY` config (`src/judges/index.ts`); future fixes ship as field-level changes on existing types. Surface-lock test in `src/index.test.ts`.
+### The 8 judges (v0.0.10)
 
-## Deferred to v0.0.4.x
+All ship at `severity: 'warning'` by default — even findings don't escalate exit codes. Promotion to `'error'` happens per-judge in point releases, post-calibration.
 
-- `review/api-surface-drift` — public-API enumeration in spec vs technical-plan
-- `review/feasibility` — LOC estimates vs constraints
-- `review/scope-creep` — subtasks that obviously belong in a future version
+| Code | Catches | Notes |
+|---|---|---|
+| `review/internal-consistency` | Constraints reference deps not declared; scenarios reference test files outside `cwd`. | v0.0.4. Dep-aware since v0.0.9 (loads `depends-on` deps' Constraints). |
+| `review/judge-parity` | Asymmetric satisfaction kinds across same-category scenarios. | v0.0.4. |
+| `review/dod-precision` | Vague DoD checks ("X validates Y" without operator). | v0.0.4. |
+| `review/holdout-distinctness` | Holdouts that overlap with visible scenarios (overfit risk). | v0.0.4. |
+| `review/cross-doc-consistency` | Spec ↔ technical-plan disagreement on names, defaults, deferral list. | v0.0.4. Dep-aware since v0.0.7. |
+| `review/api-surface-drift` | Public API names in spec Constraints don't appear in tech-plan §4 (or vice versa). | v0.0.10. Applies only when paired technical-plan is present. |
+| `review/feasibility` | Subtask LOC estimates that don't match file-path counts. | v0.0.10. Applies when Subtasks contain LOC numbers. |
+| `review/scope-creep` | Subtasks naming future-version work; missing anti-goals in DEEP specs. | v0.0.10. Always applies. |
 
-Each ships with a "this real spec would have caught X" justification.
+Plus three meta-codes:
+
+- `review/judge-failed` — judge subprocess errored (severity: error). Pipeline continues with other judges.
+- `review/section-missing` — judge skipped because target section absent (severity: info).
+- `review/dep-not-found` — declared `depends-on` dep file missing during CLI dep-load (severity: warning).
+
+### Concepts
+
+**Cache.** `cacheKey = sha256(specBytes : ruleSetHash : sortedJudges)`. `ruleSetHash` covers each judge's static prompt content — editing a judge's CRITERION text invalidates correctly. The cache stores BOTH success and failure findings; if a judge errors due to flaky network, you must `--no-cache` after fixing.
+
+**`JudgeDef` shape.** Each judge is `{ code, defaultSeverity, applies(spec, ctx), buildPrompt(spec, sliced, ctx) }`. `applies()` decides whether the judge runs at all (gates on `hasTechnicalPlan`, `hasDod`, `depsCount`); `buildPrompt()` produces a `{ criterion, artifact }` pair fed to the LLM via `JudgeClient.judge`.
+
+**Subscription auth path.** The default `claudeCliJudgeClient` spawns `claude -p --allowedTools '[]' --output-format json` per judge. Strict-JSON-in-text parsing with regex-extract fallback for prefixed prose. **No `ANTHROPIC_API_KEY` required** — auth comes from the `claude` CLI's active subscription session.
+
+**Dep-aware judges.** `cross-doc-consistency` (v0.0.7+) and `internal-consistency` (v0.0.9+) both consume `JudgePromptCtx.deps` — when scoring spec N with non-empty `depends-on`, they get each dep's body as available context. Closes the false-positive on `/scope-project`'s shared-constraints-in-first-spec pattern.
+
+## Worked example
+
+```sh
+# Lint first (fast, free); review only on lint-clean specs
+pnpm exec factory spec lint docs/specs/foo.md && \
+  pnpm exec factory spec review docs/specs/foo.md
+
+# Subset run for a quick sanity check
+pnpm exec factory spec review docs/specs/foo.md \
+  --judges internal-consistency,dod-precision
+
+# Re-run with cache disabled (e.g., after editing a judge's CRITERION)
+pnpm exec factory spec review docs/specs/foo.md --no-cache
+```
+
+Programmatic:
+
+```ts
+import { runReview, claudeCliJudgeClient } from '@wifo/factory-spec-review';
+import { parseSpec } from '@wifo/factory-core';
+
+const spec = parseSpec(await Bun.file('docs/specs/foo.md').text());
+const judgeClient = claudeCliJudgeClient();
+
+const findings = await runReview({
+  specPath: 'docs/specs/foo.md',
+  spec,
+  judgeClient,
+  cacheDir: './.factory-spec-review-cache',
+});
+
+for (const f of findings) {
+  console.log(`${f.file}:${f.line ?? '?'}  ${f.severity}  ${f.code}  ${f.message}`);
+}
+```
+
+## See also
+
+- **[`AGENTS.md`](../../AGENTS.md)** — single doc for AI agents using the toolchain.
+- **[`packages/core/README.md`](../core/README.md)** — `factory spec review` is dispatched from here. `factory spec lint` is the format-floor first stop.
+- **[`packages/harness/README.md`](../harness/README.md)** — the `JudgeClient` interface used here is also used by the runtime's `validatePhase`.
+- **[`CHANGELOG.md`](../../CHANGELOG.md)** — every release's deltas.
+
+## Status
+
+Pre-alpha. The reviewer's exit-1 condition is dormant — all 8 judges ship at `severity: 'warning'`. APIs may break in point releases until v0.1.0.

@@ -1,47 +1,110 @@
 # @wifo/factory-harness
 
-Scenario runner for software-factory specs.
+> The scenario runner. Executes `test:` and `judge:` lines against a parsed spec; produces a typed `HarnessReport`.
 
-Reads a parsed `Spec` (via `@wifo/factory-core`), executes its `Satisfaction:` lines, and produces a typed `HarnessReport`. Two satisfaction kinds:
+`@wifo/factory-harness` powers the runtime's `validatePhase`. Given a parsed `Spec` (from `@wifo/factory-core`), it walks each scenario's `Satisfaction:` block, runs `bun test` for `test:` lines and dispatches to an LLM judge for `judge:` lines, and returns a typed report. You usually don't reach for this package directly — the runtime does.
 
-- **`test:`** — spawns `bun test <file> [-t <pattern>]`. Pass/fail from exit code.
-- **`judge:`** — calls an LLM (Anthropic Claude, default `claude-haiku-4-5`) with the criterion + scenario context + spec body, returns a structured pass/score/reasoning judgment via tool-use.
+> **For AI agents:** start at **[`AGENTS.md`](../../AGENTS.md)** (top-level). This README is detailed reference.
 
-## CLI
+## Install
+
+```sh
+pnpm add @wifo/factory-harness
+```
+
+Pre-installed via `factory init` (the scaffold's runtime depends on it).
+
+## When to reach for it
+
+- **Programmatically run a spec's scenarios** without going through the full runtime. Use `runHarness({ spec, ... })` to get a `HarnessReport`.
+- **Build your own validate phase.** Compose `runTestSatisfaction` + a custom judge client to define a domain-specific `validatePhase`.
+- **Implement a custom judge client.** The exported `JudgeClient` interface is what the runtime + spec-reviewer + dodPhase all consume. Provide your own (e.g., a different LLM provider) and pass it in.
+- **Parse a `test:` line manually.** `parseTestLine` strips the locked syntax (file path + optional `"name"` filter) and tolerates stray backticks.
+
+## What's inside
+
+### CLI
 
 ```
 factory-harness run <spec-path> [flags]
-
-Flags:
-  --scenario <ids>       Comma-separated scenario ids (e.g. S-1,S-2,H-1)
-  --visible              Only visible scenarios
-  --holdouts             Only holdout scenarios
-  --no-judge             Skip judge satisfaction lines (status=skipped)
-  --model <name>         Override judge model (default: claude-haiku-4-5)
-  --timeout-ms <n>       Per-satisfaction timeout (default: 30000)
-  --reporter <text|json> Output format (default: text)
 ```
 
-Exit codes: `0` pass, `1` fail, `2` usage error, `3` operational error.
+| Flag | Default | Notes |
+|---|---|---|
+| `--scenario <ids>` | all | Comma-separated scenario id filter (e.g., `S-1,S-2,H-1`). |
+| `--visible` | off | Only visible scenarios (skip holdouts). |
+| `--holdouts` | off | Only holdout scenarios. |
+| `--no-judge` | off | Skip `judge:` lines (status `skipped`). |
+| `--model <name>` | `claude-haiku-4-5` | Override judge model. |
+| `--timeout-ms <n>` | 60000 | Per-judge timeout. |
 
-## Prerequisites
+The CLI is mostly used in tests + ad-hoc inspection. Production code reaches for `runHarness()` programmatically (or — more likely — uses the runtime's `validatePhase`).
 
-- **`bun` on `PATH`** — the harness shells out to `bun test` regardless of which runtime invokes the CLI. The bundled `dist/cli.js` itself runs under Node.
-- **`ANTHROPIC_API_KEY`** — required when any selected scenario has a `judge:` line and no custom `JudgeClient` is provided. Use `--no-judge` to skip judges entirely.
+### Public API
 
-## Conventions
+```ts
+import { runHarness, runTestSatisfaction, parseTestLine, formatReport }
+  from '@wifo/factory-harness';
 
-- `test:` paths are resolved relative to the directory of the spec file.
-- Test patterns are passed verbatim to `bun test -t <pattern>` (Bun treats `-t` as a regex; users are responsible for escaping metacharacters).
-- The judge artifact for v0.0.1 is the scenario text plus the spec body. Richer artifacts arrive with later layers.
-- When more than 5 judge calls are queued for a run, the harness logs `<N> judge calls planned` to stderr before executing.
+import type {
+  HarnessReport, HarnessScenarioResult, HarnessSatisfactionResult,
+  HarnessOptions, JudgeClient, Judgment,
+  TestRunnerOptions, ParsedTestLine, ReporterKind,
+} from '@wifo/factory-harness';
+```
+
+### Concepts
+
+**Two satisfaction kinds.**
+
+- **`test: <path> "<name>"`** — spawns `bun test <path> [-t "<name>"]`. Pass/fail from exit code. The harness strips a leading + trailing backtick from both the path and the name (since v0.0.6) — bare paths are canonical but legacy backticked paths still work.
+- **`judge: "<criterion>"`** — calls a `JudgeClient` (default: Anthropic Claude via `@anthropic-ai/sdk` with tool-use for structured pass/score/reasoning output). The reviewer + the runtime's `validatePhase` and `dodPhase` all reuse this client interface.
+
+**`JudgeClient` interface.** A single method `judge(args)` that takes `{ criterion, scenario, artifact, model, timeoutMs }` and returns `{ pass, score, reasoning }`. The runtime ships `claudeCliJudgeClient` (subprocess-based) in `@wifo/factory-spec-review`; you can implement your own (e.g., for a different LLM provider).
+
+**Status enum.** Each scenario's satisfaction lines aggregate into one of `pass`, `fail`, `error`, `skipped`. `runHarness` aggregates per-scenario results into the report.
+
+## Worked example
+
+```ts
+import { runHarness } from '@wifo/factory-harness';
+import { parseSpec } from '@wifo/factory-core';
+
+const spec = parseSpec(await Bun.file('docs/specs/foo.md').text());
+
+const report = await runHarness({
+  spec,
+  cwd: process.cwd(),
+  noJudge: false,
+  // optional: provide a custom judge client
+  // judgeClient: myCustomJudgeClient,
+});
+
+console.log(report.summary); // { pass: 3, fail: 0, error: 0, skipped: 0 }
+for (const scenario of report.scenarios) {
+  console.log(scenario.id, scenario.status);
+}
+```
+
+CLI:
+
+```sh
+$ pnpm exec factory-harness run docs/specs/foo.md --no-judge
+spec=foo  scenarios=3
+  S-1: pass
+  S-2: pass
+  S-3: pass
+summary: 3 pass, 0 fail, 0 error, 0 skipped
+```
+
+## See also
+
+- **[`AGENTS.md`](../../AGENTS.md)** — single doc for AI agents using the toolchain.
+- **[`packages/runtime/README.md`](../runtime/README.md)** — the runtime's `validatePhase` is the primary harness consumer.
+- **[`packages/core/README.md`](../core/README.md)** — spec format + parser.
+- **[`packages/spec-review/README.md`](../spec-review/README.md)** — the spec reviewer reuses the harness's `JudgeClient` interface.
+- **[`CHANGELOG.md`](../../CHANGELOG.md)** — every release's deltas.
 
 ## Status
 
-v0.0.1. Layer 1 of the factory.
-
-## Related
-
-[`@wifo/factory-spec-review`](../spec-review/README.md) is the **spec-side analog** of this package. The harness scores `judge:` lines on a spec's *scenarios* (does the implementation satisfy this fuzzy criterion?); the reviewer scores the *spec itself* (is this DoD precise? do the holdouts overlap visible scenarios?). Both run LLM judges, and the reviewer reuses the harness's `JudgeClient` interface — its `claudeCliJudgeClient` adapter implements the same contract over `claude -p` subprocesses, so swapping a custom judge backend in one package costs almost nothing in the other.
-
-A typical pre-implementation flow is `factory spec lint <path>` (format) → `factory spec review <path>` (quality) → `factory-runtime run <path>` (the harness runs as part of the runtime's validate phase). See [`packages/spec-review/README.md`](../spec-review/README.md) for the reviewer's CLI, judge list, and calibration guidance.
+Pre-alpha. APIs may break in point releases until v0.1.0.

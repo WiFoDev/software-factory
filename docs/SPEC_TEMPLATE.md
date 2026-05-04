@@ -1,5 +1,7 @@
 # Spec Template
 
+> **For AI agents:** start at **[`AGENTS.md`](../AGENTS.md)** (top-level) for the canonical workflow. This file is a reference for the spec format itself.
+
 The canonical shape of a single spec file. One spec per file, written to `docs/specs/<id>.md`. Mirrors the format produced by the `/scope-task` slash command.
 
 Filename convention (parallel-tree, since v0.0.3): the spec lives at `docs/specs/<id>.md` and its optional technical plan at `docs/technical-plans/<id>.md`. The rationale: specs and technical plans live in parallel directories so `factory spec lint docs/specs/` recurses without tripping over technical plans.

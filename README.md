@@ -1,48 +1,56 @@
 # software-factory
 
-A toolkit for **spec-driven, agent-friendly software development**. You write a spec describing the *intent* and the *scenarios* a feature must satisfy. The factory's tooling lints the spec, runs the scenarios as tests (and optionally as LLM-judged criteria for things tests can't capture), persists everything as content-addressable records, and gives you a typed convergence report with full DAG provenance.
+A toolkit for **spec-driven, agent-friendly software development**. You write a Markdown spec describing the *intent* and the *scenarios* a feature must satisfy. The factory's tooling lints the spec for format, reviews it for quality with LLM judges, runs the scenarios as tests, executes the Definition of Done as shell gates, and ships the result with full DAG provenance — paid for by a Claude Pro/Max subscription, not per-token API billing.
 
-**v0.0.10 ships the trust contract — DoD-verifier + reviewer judges = trust on both sides.** Each spec's `## Definition of Done` becomes a checked contract via the new `dodPhase` (unchecked items block convergence); three new reviewer judges (`feasibility`, `api-surface-drift`, `scope-creep`) catch quality regressions before the runtime spawns; `factory spec watch` re-runs lint/review on every save; `run-sequence` ergonomics gain polish; and the `spec/wide-blast-radius` heuristic recalibrates against empirical data (threshold 8 → 12) with a per-spec `<!-- NOQA -->` HTML-comment escape hatch for intentionally-wide chore-coordinator specs. v0.0.1 framework, v0.0.2 single-shot agent, v0.0.3 closed loop, v0.0.4 spec quality + bootstrap, v0.0.5 publish + implement-guidelines, v0.0.6 v0.0.5.x cluster, v0.0.7 real-product workflow, v0.0.8 discoverability, v0.0.9 status-aware run-sequence + per-spec timeout + scaffold scripts + dep-aware internal-consistency, **v0.0.10 trust contract — DoD-verifier + reviewer judges**.
+> **For AI agents using this toolchain:** start at **[`AGENTS.md`](./AGENTS.md)**. It maps "what you want to do" to "which command/package gets you there," end to end. ~10 minutes to skim; will save you from every common failure mode.
+
+---
+
+## v0.0.10: trust contract closed on both sides
+
+**Runtime side:** `dodPhase` parses each spec's `## Definition of Done`, runs shell-bullets via Bash (allowlist: `pnpm/bun/npm/node/tsc/git/npx/bash/sh/make` + relative paths), dispatches non-shell to LLM judges. Convergence requires DoD gates green AND test/judge satisfactions green. **"Runtime says converged → ship it"** is finally a checked contract.
+
+**Spec side:** three new reviewer judges (`api-surface-drift`, `feasibility`, `scope-creep`) round out the v0.0.4 plan; total of 8 LLM judges scoring spec quality before any agent token is spent.
+
+Plus: `run-sequence` skips already-converged specs (closes v0.0.9 BASELINE's N² re-run); `<dir>/done/` consulted for `depends-on` resolution; `factory spec watch` for terminal-companion lint+review on every save; `spec/wide-blast-radius` calibrated to threshold 12 with a per-spec `<!-- NOQA -->` directive.
+
+**Release lineage:** v0.0.1 framework → v0.0.2 single-shot agent → v0.0.3 closed loop → v0.0.4 spec quality + bootstrap → v0.0.5 npm publish + implement-guidelines → v0.0.6 v0.0.5.x cluster → v0.0.7 real-product workflow (`/scope-project` + `depends-on` + `run-sequence`) → v0.0.8 discoverability + scaffold drops → v0.0.9 status-aware sequence + per-spec timeout → **v0.0.10 trust contract**.
 
 Inspired by the [StrongDM Software Factory](https://factory.strongdm.ai/) model.
 
 ---
 
-## What you get today (v0.0.7)
+## The canonical workflow (v0.0.10)
 
-The recommended end-to-end shape — same flow whether you implement by hand or let the agent do it:
+The recommended end-to-end shape from a fresh directory to a shipped product:
 
 ```
-factory init                                # bootstrap a project (v0.0.4)
+mkdir my-app && cd my-app
+git init -q
+npx -y @wifo/factory-core init --name my-app    # bootstrap (v0.0.4+)
+pnpm install
   ↓
-/scope-project (or /scope-task)             # decompose a product → N specs (NEW v0.0.7) | one task → one spec
+/scope-project A <product description>          # decompose → N ordered specs (v0.0.7+; auto-installed by init in v0.0.8+)
   ↓
-factory spec lint docs/specs/               # format check (fast, free, deterministic)
+factory spec lint docs/specs/                   # format check (fast, free, deterministic)
   ↓
-factory spec review docs/specs/             # quality check (LLM judges; reads depends-on deps in v0.0.7)
+factory spec review docs/specs/<first>.md       # quality check — 8 LLM judges (v0.0.4+; +3 in v0.0.10)
   ↓
-factory-runtime run-sequence docs/specs/    # walk the depends-on DAG (NEW v0.0.7)
-  ↓                                         #   or run a single spec: factory-runtime run <spec>
-factory-context tree <factorySequenceId> --direction down   # walk the whole product DAG (v0.0.4 + v0.0.7)
+factory-runtime run-sequence docs/specs/        # walk the depends-on DAG (v0.0.7+)
+  ↓                                             #   [implement → validate → dod] phases per spec (v0.0.10+)
+  ↓                                             #   skips status: drafting by default (v0.0.9+)
+factory-context tree <factorySequenceId> --direction down   # walk the entire product DAG
 ```
 
-**Manual mode (v0.0.1, still supported via `--no-implement`):**
-1. **Bootstrap** with `factory init [--name <pkg>]`. Drops the canonical `package.json`, `tsconfig.json`, `.gitignore`, `README.md`, and `docs/{specs,technical-plans}/done/` skeleton. *(v0.0.4)*
-2. **Author a spec** with `/scope-task` (or by hand) — frontmatter + Given/When/Then scenarios + `Satisfaction:` lines pointing at tests and LLM-judged criteria.
-3. **Lint** it: `factory spec lint docs/specs/`. Format only — fast, free, deterministic.
-4. **Review** it: `factory spec review docs/specs/<id>.md`. Five LLM judges score spec **quality** (internal consistency, judge parity, DoD precision, holdout distinctness, cross-doc consistency). Subscription auth via `claude -p`. *(v0.0.4)*
-5. **Implement** by hand.
-6. **Run** validate: `factory-runtime run docs/specs/my-feature.md --no-judge --no-implement`.
-7. **Inspect** the convergence trail: `factory-context tree <runId> --direction down` walks the descendant DAG. *(v0.0.4)*
+For one feature (not a multi-feature product), substitute `/scope-task <feature>` and `factory-runtime run <spec>` for the slash command + sequence-runner.
 
-**Agent-driven mode (v0.0.2 single-shot, v0.0.3 unattended loop — default):**
-1. `factory init`, author + lint + review the spec as above.
-2. **Run** the `[implement → validate]` graph: `factory-runtime run docs/specs/my-feature.md --no-judge`
-   - The runtime spawns `claude -p` with the spec on stdin, lets it use Read/Edit/Write/Bash to satisfy the `test:` lines, then runs validate against its output.
-   - Every implement spawn now sees a stable `# Implementation guidelines` section above `# Spec` (state assumptions, minimum code, surgical edits, verifiable success criteria) — same bytes every iteration so the prompt cache hits consistently. *(v0.0.5)*
-   - On validate-fail, the runtime threads the failed scenarios into the next iteration's prompt under a `# Prior validate report` section and tries again — up to `--max-iterations 5` (default) or until summed `tokens.input + tokens.output` crosses `--max-total-tokens 500_000` (default).
-   - Subscription auth — no `ANTHROPIC_API_KEY` required.
-3. Inspect the trail: `factory-context tree <runId> --direction down` shows every iteration's `factory-implement-report` (full prompt, files changed, tokens used) and `factory-validate-report` as descendants of the run. Walking up from any leaf back to the run still works (`--direction up`, the v0.0.3 default).
+**Empirical evidence (longitudinal in [`BASELINE.md`](./BASELINE.md)):** the canonical URL-shortener (4-5 specs, JSON-over-HTTP + click tracking + stats) ships in 5-10 minutes wall-clock + ~20-30k raw tokens, all DoD shell gates green. Versus v0.0.5's manual ~32 maintainer interventions to ship the same product, v0.0.10 collapses to ~3-8.
+
+**Three modes of use:**
+
+- **Agent-driven (default).** `factory-runtime run` spawns `claude -p` with the spec; the agent edits files; `validate` runs `bun test`; `dod` runs `pnpm typecheck && pnpm test && pnpm check`. Iterates up to 5 times until convergence. Subscription auth — no `ANTHROPIC_API_KEY` needed.
+- **Manual (`--no-implement`).** You implement by hand; the runtime just runs `validate` + `dod` to gate convergence.
+- **Reviewer-only.** `factory spec lint` + `factory spec review` to score a spec for quality without running anything. Cache-backed; re-runs on unchanged specs are free.
 
 ---
 

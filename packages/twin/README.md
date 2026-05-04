@@ -1,152 +1,131 @@
 # @wifo/factory-twin
 
-Digital twin for HTTP/`fetch`. Record real interactions to disk, then replay them in tests and agent runs without burning real API quota or risking production state.
+> The HTTP record/replay layer. Record real `fetch` interactions to disk; replay them in tests and agent runs without burning quota or risking production.
 
-## Modes
+`@wifo/factory-twin` wraps `globalThis.fetch` in either `record` mode (real HTTP, persists each pair to disk) or `replay` mode (deterministic replay, errors on miss). Used by tests + the runtime's `implementPhase` agent subprocess. Filename is a stable 16-char hex hash of `method + url + body + selected headers`.
 
-- **`record`** — wrap a real `fetch`, persist each request/response pair to `recordingsDir` as one JSON file per interaction. Filename is a stable 16-char hex hash of `method + url + body + selected headers`.
-- **`replay`** — match incoming requests against existing recordings. A miss throws `TwinNoMatchError`; the real network is never touched.
-
-`auto`, `passthrough`, and `synthesize` modes are deferred past v0.0.1.
+> **For AI agents:** start at **[`AGENTS.md`](../../AGENTS.md)** (top-level). This README is detailed reference.
 
 ## Install
 
-```bash
+```sh
 pnpm add @wifo/factory-twin
 ```
 
 Requires Node 22+ (or Bun) for the global Fetch types.
 
-## Usage
+Pre-installed via `factory init` (the scaffold's runtime depends on it).
+
+## When to reach for it
+
+- **Deterministic external HTTP in tests.** Wrap your code's `fetch` with `wrapFetch({ mode: 'replay', recordingsDir })` so tests pass against a recorded fixture, never the network.
+- **Record once, replay forever.** Run with `mode: 'record'` first to populate the recordings dir, then commit those files. CI replays without API keys or rate limits.
+- **Make agent runs reproducible.** The runtime's `implementPhase` threads `WIFO_TWIN_MODE` + `WIFO_TWIN_RECORDINGS_DIR` env vars to the spawned `claude -p` subprocess; the agent's test code calls `wrapFetch` against them. Agent decisions become reproducible across iterations.
+- **Avoid burning paid API quota during development.** A real run records once; everything afterward replays.
+
+## What's inside
+
+### Modes
+
+- **`record`** — wraps real `fetch`; persists each request/response pair to `recordingsDir` as one JSON file per interaction.
+- **`replay`** — matches incoming requests against existing recordings via the stable hash. Miss → throws `TwinNoMatchError`. The real network is never touched.
+- **`off`** — no-op pass-through (uses real `fetch`; no recording).
+
+`auto`, `passthrough`, and `synthesize` modes are deferred past v0.1.0.
+
+### Public API
+
+```ts
+import { wrapFetch, hashRequest,
+         readRecordings, writeRecording, listRecordings, pruneRecordings,
+         TwinNoMatchError, TwinReplayError } from '@wifo/factory-twin';
+
+import type {
+  WrapFetchOptions, TwinMode,
+  HashRequestInput, HashRequestOptions,
+  Recording, RecordedRequest, RecordedResponse, PruneResult,
+} from '@wifo/factory-twin';
+```
+
+### Runtime integration (env vars)
+
+The runtime's `implementPhase` reads two env vars and threads them to the spawned `claude -p` subprocess:
+
+```
+WIFO_TWIN_MODE=record|replay|off       # default: record
+WIFO_TWIN_RECORDINGS_DIR=<path>         # default: <cwd>/.factory/twin-recordings
+```
+
+User code in tests does `wrapFetch(globalThis.fetch, { mode: process.env.WIFO_TWIN_MODE, recordingsDir: process.env.WIFO_TWIN_RECORDINGS_DIR })` — the env-var-driven config means the agent's test setup picks up the runtime's mode automatically.
+
+CLI flags `--twin-mode <mode>` and `--twin-recordings-dir <path>` on `factory-runtime run` set these env vars.
+
+### Concepts
+
+**Stable request hash.** A 16-char hex SHA-256 of canonicalized `{ method, url, body, selectedHeaders }`. The selected-headers list excludes volatile fields (`User-Agent`, `Date`, `Authorization`) so recordings replay across machines.
+
+**One file per interaction.** Each recording is a JSON file at `<recordingsDir>/<hash>.json` containing `{ request, response }`. Diffable, gittable, byte-stable. Pruning unused recordings happens via `pruneRecordings({ dir, usedHashes })`.
+
+**Failure modes.** `TwinNoMatchError` (replay mode, request hash not found) and `TwinReplayError` (replay mode, file present but malformed). Both extend `Error`; check via `instanceof`.
+
+## Worked example
+
+Record once:
 
 ```ts
 import { wrapFetch } from '@wifo/factory-twin';
 
-const recordedFetch = wrapFetch(fetch, {
+const fetch = wrapFetch(globalThis.fetch, {
   mode: 'record',
-  recordingsDir: './recordings',
+  recordingsDir: './.twin-recordings',
 });
 
-const res = await recordedFetch('https://api.example.com/users/42');
-// → real fetch is called, response is persisted to ./recordings/<hash>.json,
-//   res is a freshly-constructed Response identical to the real one.
+const r = await fetch('https://api.example.com/users/123');
+const data = await r.json();
+// → recording written to ./.twin-recordings/<hash>.json
 ```
 
-In tests / agent iteration, swap `mode: 'replay'` and the same code reads from disk:
+Replay in tests:
 
 ```ts
-const replayFetch = wrapFetch(fetch, {
+import { test, expect } from 'bun:test';
+import { wrapFetch, TwinNoMatchError } from '@wifo/factory-twin';
+
+const fetch = wrapFetch(globalThis.fetch, {
   mode: 'replay',
-  recordingsDir: './recordings',
+  recordingsDir: './.twin-recordings',
 });
 
-const res = await replayFetch('https://api.example.com/users/42');
-// → no network call, response served from ./recordings/<hash>.json.
-//   On a miss: throws TwinNoMatchError.
-```
+test('user lookup', async () => {
+  const r = await fetch('https://api.example.com/users/123');
+  expect((await r.json()).id).toBe(123);
+});
 
-## `hashHeaders` — and the bearer-token footgun
-
-By default, **no** request headers participate in the hash. Two requests differing only in their `Authorization` header collide on disk and will replay the same response. That's a footgun: a request signed with one bearer token will happily replay a recording made with a different one — and you won't notice unless the response itself encodes the identity.
-
-If your traffic is auth-bearing, list the headers that affect identity:
-
-```ts
-const recordedFetch = wrapFetch(fetch, {
-  mode: 'record',
-  recordingsDir: './recordings',
-  hashHeaders: ['authorization', 'x-tenant-id'],
+test('unknown call → TwinNoMatchError', async () => {
+  await expect(fetch('https://api.example.com/users/999'))
+    .rejects.toBeInstanceOf(TwinNoMatchError);
 });
 ```
 
-`hashHeaders` entries are matched case-insensitively against incoming headers. Only the listed headers are persisted in the recording's `request.headers` (auditable: you can tell what was hashed by reading the file).
+In a factory-runtime run:
 
-## Request body shapes
+```sh
+# First run records:
+pnpm exec factory-runtime run docs/specs/api-feature.md \
+  --twin-mode record --twin-recordings-dir ./.factory/twin-recordings
 
-v0.0.1 accepts `string`, `URLSearchParams`, `null`, and `undefined` as request bodies. Anything else (`FormData`, `Blob`, `ReadableStream`, typed arrays) throws `TwinReplayError({ code: 'twin/unsupported-body' })`. Lift this in a later version once we settle on serialization for those shapes.
-
-Response bodies of any byte content are supported. Bytes that round-trip through UTF-8 decoding are stored as `bodyEncoding: 'utf8'`; otherwise they're base64-encoded for byte-exact fidelity (PNGs, gzip, protobuf, etc.).
-
-## URL canonicalization
-
-URLs are canonicalized via `new URL(input).toString()`. Query order is **significant**: `?a=1&b=2` and `?b=2&a=1` produce different hashes. Sort your query strings if you want them to collapse to one recording.
-
-## Recording schema
-
-```jsonc
-{
-  "version": 1,
-  "hash": "8f3a…",                  // 16 hex chars; equals the filename stem
-  "recordedAt": "2026-04-28T…Z",
-  "request": {
-    "method": "POST",
-    "url": "https://api.x/y",
-    "headers": { "authorization": "…" },  // ONLY hashed headers
-    "body": "raw string" | null
-  },
-  "response": {
-    "status": 200,
-    "statusText": "OK",
-    "headers": { "content-type": "…" },
-    "body": "…" | null,
-    "bodyEncoding": "utf8" | "base64"
-  }
-}
+# Subsequent runs replay (no real HTTP):
+pnpm exec factory-runtime run docs/specs/api-feature.md \
+  --twin-mode replay
 ```
 
-Files are written atomically (tmp + rename). Concurrent writes for the same hash are last-writer-wins; partial JSON files never appear.
+## See also
 
-## Hash collisions
+- **[`AGENTS.md`](../../AGENTS.md)** — single doc for AI agents using the toolchain.
+- **[`packages/runtime/README.md`](../runtime/README.md)** — `implementPhase` threads the env vars.
+- **[`packages/harness/README.md`](../harness/README.md)** — the harness's `bun test` invocations pick up env vars from the runtime.
+- **[`CHANGELOG.md`](../../CHANGELOG.md)** — every release's deltas.
 
-The 16-char filename is the first 16 hex chars (64 bits) of SHA-256. At 100k recordings the collision probability is ~1 in 4 billion. Fine for agent iteration; not designed for adversarial inputs.
+## Status
 
-## CLI
-
-```
-factory-twin list                     [--dir <path>]
-factory-twin inspect <hash>           [--dir <path>]
-factory-twin prune --older-than <n>   [--dir <path>] [--dry-run]
-```
-
-Default `--dir` is `./recordings`.
-
-- `list`: tab-separated `<hash>\t<method>\t<url>\t<recordedAt>`, sorted by `recordedAt` ascending. Corrupt files reported on stderr; exits 0 either way.
-- `inspect`: pretty-prints the recording. Missing hash → exit 3 with `twin/recording-not-found <hash>` on stderr.
-- `prune`: deletes recordings older than N×24h ago (UTC). `--dry-run` prints `would-prune` lines without unlinking. Corrupt neighbor files are reported on stderr but don't change the exit code — the deletion work is what matters.
-
-Exit codes: `0` ok, `2` usage error, `3` operational error (target dir missing, `inspect` hash not found).
-
-## Public API
-
-```ts
-import {
-  wrapFetch,
-  hashRequest,
-  listRecordings,
-  pruneRecordings,
-  readRecording,
-  writeRecording,
-  TwinNoMatchError,
-  TwinReplayError,
-} from '@wifo/factory-twin';
-
-import type {
-  WrapFetchOptions,
-  TwinMode,
-  HashRequestInput,
-  HashRequestOptions,
-  PruneResult,
-  Recording,
-  RecordedRequest,
-  RecordedResponse,
-} from '@wifo/factory-twin';
-```
-
-## Errors
-
-Both error classes expose a stable `code: string` for matching in user code:
-
-| Class | `code` values |
-|---|---|
-| `TwinNoMatchError` | `'twin/no-match'` |
-| `TwinReplayError` | `'twin/unsupported-body'`, `'twin/recording-not-found'`, `'twin/parse-error'`, `'twin/io-error'` |
+Pre-alpha. APIs may break in point releases until v0.1.0.

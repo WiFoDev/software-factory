@@ -1,37 +1,145 @@
 # @wifo/factory-core
 
-Universal primitives for software factory specs.
+> The format and the front door. Spec parser, lint, scaffold, slash commands, and the unified `factory` CLI dispatch.
 
-- Frontmatter schema (zod)
-- Markdown + YAML parser
-- Scenario / Given-When-Then parser
-- `factory init` — bootstrap a new factory project (v0.0.4+)
-- `factory spec lint` CLI
-- `factory spec review` — LLM-judged spec quality (v0.0.4+, requires `@wifo/factory-spec-review`)
-- `factory spec schema` — JSON Schema export for editor intellisense
+`@wifo/factory-core` is the package every agent and every other package depends on. It defines the canonical spec format (Zod schemas + parser), provides the format-floor lint, scaffolds new projects via `factory init`, ships the `/scope-project` slash command bundled in the npm tarball, and dispatches the `factory spec review` and `factory spec watch` subcommands. If you've used `factory <anything>`, you've used this package.
 
-Project-agnostic. Domain specifics live in `@wifo/factory-pack-*`.
+> **For AI agents:** start at **[`AGENTS.md`](../../AGENTS.md)** (top-level). This README is detailed reference for once you have the mental model.
 
-## Bootstrap a new project (v0.0.4+)
+## Install
 
 ```sh
-mkdir my-thing && cd my-thing
-pnpm exec factory init                    # uses basename(cwd) as the package name
-# or
-pnpm exec factory init --name my-thing
+pnpm add -D @wifo/factory-core
 ```
 
-Drops a minimal scaffold: `package.json` (semver deps), self-contained `tsconfig.json`, `.gitignore`, `README.md`, and the `docs/specs/done/`, `docs/technical-plans/done/`, `src/` directories with `.gitkeep`s.
+Or use without installing via `npx`:
 
-Idempotent and safe by default: if any target file or directory already exists, exits `2` with a list of conflicts and does NOT write anything (no `--force` flag).
+```sh
+npx -y @wifo/factory-core init --name my-project
+```
 
-The scaffold's `package.json` pins `@wifo/factory-*` deps to `^0.0.10` — `pnpm install` resolves them from the public npm registry.
+`factory init` is the recommended bootstrap path — see the canonical workflow below.
 
-The scaffolded `README.md` includes a `## Multi-spec products` section documenting the canonical v0.0.7+ flow (`/scope-project` → `factory spec lint` → `factory-runtime run-sequence`) so a maintainer reading the generated project knows which command to reach for. The slash command source at `<cwd>/.claude/commands/scope-project.md` is dropped automatically — no manual `cp` step needed.
+## When to reach for it
 
-### factory.config.json (v0.0.5.1+)
+- **Bootstrap a new factory project.** `factory init` drops a complete scaffold (`package.json` with deps + scripts pinned, `tsconfig.json`, `tsconfig.build.json`, `.gitignore`, `biome.json`, `factory.config.json`, `README.md`, `.claude/commands/scope-project.md`, and the `docs/{specs,technical-plans}/done/` skeleton). Idempotent + safe — exits 2 with a list of conflicts if any target file exists; never overwrites without consent.
+- **Lint a spec.** `factory spec lint <path>` runs the format-floor check (frontmatter shape, scenario structure, satisfaction-line syntax, `depends-on` validation, wide-blast-radius warning). Fast, free, deterministic.
+- **Review spec quality.** `factory spec review <path>` dispatches into `@wifo/factory-spec-review` to run 8 LLM judges scoring spec **quality** beyond format. Cache-backed; subscription-paid via `claude -p`.
+- **Watch a directory tree continuously** (v0.0.10+). `factory spec watch <path>` re-runs lint (+ optionally review) on every `*.md` change. Companion to the PostToolUse hook recipe.
+- **Programmatically parse / lint / watch specs.** Import `parseSpec`, `lintSpec`, `lintSpecFile`, `parseDodBullets`, `watchSpecs` directly.
 
-`factory init` writes a `factory.config.json` at the repo root with the documented runtime defaults:
+## What's inside
+
+### CLI commands
+
+The `factory` binary dispatches into subcommands:
+
+```
+factory init [--name <pkg>]                   # Scaffold a new factory project
+factory spec lint <path>                      # Format-floor lint (recurses on dirs)
+factory spec review <path> [flags]            # Quality review (8 LLM judges)
+factory spec watch <path> [--review] [...]    # Continuous lint+review on save (v0.0.10+)
+factory spec schema                           # Emit JSON Schema for editor intellisense
+```
+
+Key flags (`spec review`):
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--cache-dir <path>` | `.factory-spec-review-cache` | Per-spec-bytes cache so unchanged specs are free to re-run. |
+| `--no-cache` | off | Disable cache layer. |
+| `--judges <a,b,c>` | all 8 | Comma-separated subset. |
+| `--claude-bin <path>` | `claude` on PATH | Override (test injection). |
+| `--technical-plan <path>` | auto-resolved | Override path to paired technical-plan. |
+| `--timeout-ms <n>` | 60000 | Per-judge timeout. |
+
+Key flags (`spec watch`, v0.0.10+):
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--review` | off | Also run `factory spec review --no-cache` per change. |
+| `--debounce-ms <n>` | 200 | Per-file debounce window. |
+| `--claude-bin <path>` | `claude` | Forwarded to review subprocess. |
+
+### Public API (33 exports as of v0.0.10)
+
+```ts
+// Schema (Zod)
+import {
+  KEBAB_ID_REGEX,
+  SpecFrontmatterSchema, SpecExemplarSchema, SpecClassificationSchema,
+  SpecScenarioKindSchema, SpecScenarioSatisfactionKindSchema, SpecScenarioSatisfactionSchema,
+  SpecStatusSchema, SpecTypeSchema,
+} from '@wifo/factory-core';
+
+import type {
+  Spec, SpecFrontmatter, SpecExemplar,
+  Scenario, ScenarioSatisfaction,
+  SpecClassification, SpecScenarioKind, SpecScenarioSatisfactionKind,
+  SpecStatus, SpecType,
+} from '@wifo/factory-core';
+
+// Parser
+import { parseSpec, parseDodBullets, SpecParseError, splitFrontmatter } from '@wifo/factory-core';
+import type { ParseSpecOptions, ParseIssue, DodBullet, FrontmatterSplit } from '@wifo/factory-core';
+
+// Section slicer + scenario walker
+import { findSection, parseScenarios } from '@wifo/factory-core';
+import type { SectionExtract } from '@wifo/factory-core';
+
+// Lint
+import { lintSpec, lintSpecFile } from '@wifo/factory-core';
+import type { LintError, LintOptions, LintSeverity } from '@wifo/factory-core';
+
+// JSON Schema (editor intellisense)
+import { getFrontmatterJsonSchema, SPEC_FRONTMATTER_SCHEMA_ID } from '@wifo/factory-core';
+
+// Watch helper (v0.0.10+)
+import { watchSpecs } from '@wifo/factory-core';
+import type { WatchSpecsOptions } from '@wifo/factory-core';
+
+// Errors
+import { FrontmatterError } from '@wifo/factory-core';
+```
+
+### Concepts
+
+**Spec format.** YAML frontmatter (`id`, `classification`, `type`, `status`, `exemplars`, `depends-on`, `agent-timeout-ms`) + Markdown body sections (`## Intent`, `## Scenarios`, `## Constraints / Decisions`, `## Subtasks`, `## Definition of Done`, optionally `## Holdout Scenarios`). Strict — unknown frontmatter fields surface as warnings. See `docs/SPEC_TEMPLATE.md` for the canonical skeleton.
+
+**`parseDodBullets` (v0.0.10+).** Walks a `## Definition of Done` section and classifies each bullet as `kind: 'shell'` (executable Bash from a locked allowlist) or `kind: 'judge'` (LLM-evaluated criterion). Powers the runtime's `dodPhase`. **The shell allowlist is closed:** `pnpm`, `bun`, `npm`, `node`, `tsc`, `git`, `npx`, `bash`, `sh`, `make`, `pwd`, `ls`, plus `./` and `../` paths.
+
+**`watchSpecs` (v0.0.10+).** Long-running watcher returning `{ stop }`. Re-runs lint (+ optionally review) per-file with a 200ms debounce. SIGINT-aware in the CLI wrapper.
+
+**Lint codes + NOQA.** Format-level errors block; quality-level warnings inform. Suppress warnings via `<!-- NOQA: spec/<code> -->` HTML comment anywhere in the spec body (v0.0.10+; warnings only — errors cannot be suppressed). See [`AGENTS.md` § 6](../../AGENTS.md#6-the-full-primitives-reference) for the full code table.
+
+## Slash commands
+
+### `/scope-project` (v0.0.7+; auto-installed by `factory init` since v0.0.8)
+
+Decompose a natural-language product description into 4-6 ordered LIGHT specs. Canonical source: [`packages/core/commands/scope-project.md`](./commands/scope-project.md). `factory init` writes the bundled file to `<cwd>/.claude/commands/scope-project.md` automatically.
+
+For Claude Code sessions across all projects (user-level install):
+
+```sh
+cp node_modules/@wifo/factory-core/commands/scope-project.md ~/.claude/commands/scope-project.md
+```
+
+Invoke from any Claude Code session in a factory-bootstrapped project:
+
+```text
+/scope-project A URL shortener with click tracking and JSON stats.
+               JSON-over-HTTP, in-memory storage, no auth.
+```
+
+Output: 4-6 spec files under `docs/specs/`, first `status: ready`, rest `status: drafting`, every spec populates `depends-on`. Worked-example output: [`docs/baselines/scope-project-fixtures/url-shortener/`](../../docs/baselines/scope-project-fixtures/url-shortener/).
+
+### `/scope-task`
+
+Single-task analog. Lives at `~/.claude/commands/scope-task.md` (predates the "ship in repo" convention).
+
+## `factory.config.json`
+
+Written by `factory init` at the scaffold root. Defaults the canonical run flags so `factory-runtime run` collapses to a flagless invocation:
 
 ```json
 {
@@ -39,57 +147,20 @@ The scaffolded `README.md` includes a `## Multi-spec products` section documenti
     "maxIterations": 5,
     "maxTotalTokens": 1000000,
     "maxPromptTokens": 100000,
-    "noJudge": false
+    "noJudge": false,
+    "maxSequenceTokens": 5000000,
+    "continueOnFail": false,
+    "includeDrafting": false,
+    "skipDodPhase": false
   }
 }
 ```
 
-`factory-runtime run` reads this file from `cwd` if present and applies any subset of the `runtime.*` keys as defaults. Precedence is **CLI flag > config file > built-in default** — the canonical `--max-iterations 5 --max-total-tokens 1000000 --no-judge --max-prompt-tokens 100000` invocation collapses to a flagless `factory-runtime run <spec>`. Edit the file to taste; absent or malformed files are ignored silently (the file is OPTIONAL by design). Unknown keys are tolerated for forward-compatibility.
+Precedence: **CLI flag > config file > built-in default**. Unknown keys are tolerated for forward-compatibility. Edit to taste; absent or malformed files are ignored silently.
 
-v0.0.7 adds two new optional keys:
+## Harness-enforced spec linting + review (Claude Code hook recipe)
 
-| Key | Type | Default | Effect |
-|---|---|---|---|
-| `runtime.maxSequenceTokens` | number | unbounded | Whole-sequence cap on summed agent tokens for `factory-runtime run-sequence`. |
-| `runtime.continueOnFail` | boolean | false | Continue running independent specs after a failure (transitive dependents still skip). |
-
-## Slash commands
-
-### `/scope-project` (v0.0.7)
-
-A Claude Code slash command that takes a natural-language product description and writes 4-6 LIGHT specs in dependency order under `docs/specs/`. The first generated spec ships `status: ready`; the rest ship `status: drafting` so the maintainer flips them one at a time as each prior spec converges. Every generated spec populates the new `depends-on:` frontmatter field so `factory-runtime run-sequence` can walk the DAG.
-
-**Install:**
-
-`factory init` (v0.0.8+) drops the canonical `/scope-project` source at the project's `.claude/commands/scope-project.md` automatically — every fresh `factory init` picks up the slash command zero-config. The bundled source ships with `@wifo/factory-core` at `node_modules/@wifo/factory-core/commands/scope-project.md`.
-
-For users who want the command available across all projects (user-level), copy it into your dotfiles:
-
-```sh
-# Copy the bundled source into your dotfiles. Symlink works too.
-cp node_modules/@wifo/factory-core/commands/scope-project.md ~/.claude/commands/scope-project.md
-```
-
-**Invoke (inside a project repo, after `factory init`):**
-
-```text
-/scope-project A URL shortener with click tracking and a JSON stats endpoint.
-               JSON-over-HTTP, in-memory storage, no auth.
-```
-
-The slash command writes 4-6 spec files under `docs/specs/`. Run `factory spec lint docs/specs/` (and `factory spec review docs/specs/<first-id>.md` on the first spec) before kicking off the runtime. See `docs/baselines/scope-project-fixtures/url-shortener/` for a worked-example output set against the canonical URL-shortener prompt.
-
-### `/scope-task`
-
-The single-task analog of `/scope-project`. Lives under `~/.claude/commands/scope-task.md` (predates v0.0.7's "ship in repo" pattern). Documents the canonical spec skeleton + tier classification (LIGHT vs DEEP).
-
-## Harness-enforced spec linting + review
-
-Both `factory spec lint` and `factory spec review` are most valuable when they run on every save — but agents forget to run them, and so do humans. v0.0.10 ships **two complementary enforcement paths**: a Claude Code `PostToolUse` hook for the agent path, and `factory spec watch` for the terminal path. Use either; use both.
-
-### Path A — Claude Code `PostToolUse` hook (agent path)
-
-A [Claude Code `PostToolUse` hook](https://docs.claude.com/en/docs/claude-code/hooks) runs both checkers automatically whenever the agent writes a spec file. The hook fires regardless of whether the agent remembered to run the linter — drop this into your settings to make the agent literally unable to forget.
+`factory spec lint` and `factory spec review` are most valuable when they run on every save — but agents forget. The fix is harness-enforced: a [`PostToolUse` hook](https://docs.claude.com/en/docs/claude-code/hooks) runs both whenever the agent writes a spec file.
 
 Add to `~/.claude/settings.json`:
 
@@ -99,58 +170,43 @@ Add to `~/.claude/settings.json`:
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
-        "command": "if [ \"${CLAUDE_PROJECT_DIR}/${CLAUDE_FILE_PATH}\" = *docs/specs/*.md ]; then pnpm exec factory spec lint \"$CLAUDE_FILE_PATH\" && pnpm exec factory spec review --no-cache \"$CLAUDE_FILE_PATH\"; fi"
+        "command": "if [ \"${CLAUDE_PROJECT_DIR}/${CLAUDE_FILE_PATH}\" = *docs/specs/*.md ]; then pnpm exec factory spec lint \"$CLAUDE_FILE_PATH\" && pnpm exec factory spec review \"$CLAUDE_FILE_PATH\" --no-cache; fi"
       }
     ]
   }
 }
 ```
 
-The shell guard ensures the hook only fires for writes under `docs/specs/*.md` — every other `Write`/`Edit` is a no-op. Bash/zsh-portable.
+The shell guard fires only for `docs/specs/*.md` writes. Bash/zsh-portable. This recipe is intentionally **opt-in** — `factory init` does not touch `~/.claude/`, and there is no `factory hook install` command. The Claude-Code-independent companion is `factory spec watch` (v0.0.10+) — runs in a terminal, no hook needed.
 
-**Failure mode.** `PostToolUse` fires AFTER the write completes, so a failing review surfaces as a notification the agent sees on its next turn — it is not a blocked write. If the agent shipped a bad spec, the hook tells the user (and the agent), and the user can revert or trigger a fix on the next turn. The window between a bad write and the next agent turn is the only exposure.
-
-This recipe is intentionally **opt-in** — `factory init` does not touch `~/.claude/`, and there is no `factory hook install` command. Drop the block in by hand if you want it; leave it out if you don't.
-
-### Path B — `factory spec watch <path>` (terminal path)
-
-For users who don't run Claude Code, or who want the same enforcement when editing specs by hand in their editor: run `factory spec watch <path>` in another terminal. It watches the directory tree for `*.md` changes and re-runs `factory spec lint` (and optionally `factory spec review --no-cache`) on every save.
+## Worked example
 
 ```sh
-# Lint on every save:
-pnpm exec factory spec watch docs/specs/
+mkdir my-app && cd my-app && git init -q
+npx -y @wifo/factory-core init --name my-app
+pnpm install
 
-# Lint + review on every save (review is cache-bypassed in watch mode):
+# Author a single spec (one-off feature)
+echo "..." > docs/specs/my-feature.md   # or use /scope-task
+
+pnpm exec factory spec lint docs/specs/
+# → docs/specs/my-feature.md: OK
+
+pnpm exec factory spec review docs/specs/my-feature.md
+
+# Continuous watch in another terminal
 pnpm exec factory spec watch docs/specs/ --review
-
-# Override the claude binary path (test/CI injection):
-pnpm exec factory spec watch docs/specs/ --review --claude-bin /path/to/claude
-
-# Tune the per-file debounce window (default 200ms):
-pnpm exec factory spec watch docs/specs/ --debounce-ms 500
 ```
 
-Per-file debouncing collapses editor batch-saves into a single lint invocation per save burst (default 200ms window). Non-`*.md` files are ignored. SIGINT (Ctrl-C) exits cleanly with code 0.
+## See also
 
-The hook (Path A) and the watcher (Path B) are independent — pick whichever matches your workflow, or run both. Both are opt-in; neither is installed by `factory init`.
-
-### Lint codes — threshold + NOQA suppression (v0.0.10)
-
-`spec/wide-blast-radius` fires when `## Subtasks` references `>= 12` distinct file paths (raised from `8` in v0.0.10 — the v0.0.8 self-build's actual implement-phase timeout case touched 12 files). Specs touching 8-11 paths no longer warn.
-
-Intentionally-wide chore-coordinator specs can suppress the warning per-spec with an HTML-comment NOQA directive placed anywhere in the spec body (NOT in the YAML frontmatter — frontmatter rejects unknown keys):
-
-```markdown
-<!-- NOQA: spec/wide-blast-radius -->
-```
-
-Forms recognized:
-- `<!-- NOQA: spec/wide-blast-radius -->` — suppress one specific code.
-- `<!-- NOQA: spec/wide-blast-radius, spec/depends-on-missing -->` — comma-separated list.
-- `<!-- NOQA -->` or `<!-- NOQA: -->` — blanket suppression for every `spec/*` warning on this spec.
-
-Scope is per-spec (whole-document), NOT per-line. Severity-`error` codes (e.g., `spec/invalid-depends-on`) are NEVER suppressed by NOQA — only warnings.
+- **[`AGENTS.md`](../../AGENTS.md)** — single doc for AI agents using the toolchain.
+- **[`README.md`](../../README.md)** (top-level) — project overview + worked examples.
+- **[`docs/SPEC_TEMPLATE.md`](../../docs/SPEC_TEMPLATE.md)** — canonical spec skeleton.
+- **[`packages/runtime/README.md`](../runtime/README.md)** — the runtime that ships specs into code.
+- **[`packages/spec-review/README.md`](../spec-review/README.md)** — the LLM judges `factory spec review` dispatches into.
+- **[`CHANGELOG.md`](../../CHANGELOG.md)** — every release's deltas.
 
 ## Status
 
-Pre-alpha — schema is being shaped against real specs. APIs will break.
+Pre-alpha. APIs may break in point releases until v0.1.0.
