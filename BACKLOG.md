@@ -208,6 +208,65 @@ Lean: (a). `--context-dir` is the more descriptive name; `factory.config.json`'s
 
 ---
 
+## Harness `bun test -t <pattern>` should normalize quote chars when matching test names *(NEW, surfaced by v0.0.11 ship — first run-sequence attempt blocked for 23 min)*
+
+**What:** The first v0.0.11 run-sequence invocation hit no-converge on `dod-precision-calibration-v0-0-11` for 5 iterations (~23 min wall-clock wasted). Root cause: the spec's `test:` line referenced `"v0.0.10's hash"` (with apostrophe); the agent wrote the test as `"v0.0.10s hash"` (without apostrophe — likely auto-stylized during implementation). The harness's `bun test -t <pattern>` substring match doesn't tolerate quote-character differences → no test matched → reported as fail every iteration. The agent's actual implementation was correct; the apostrophe drop alone caused the validate phase to block.
+
+**Why:** Apostrophes, smart quotes (`'` vs `'`), and other Unicode-vs-ASCII variants are common stylistic auto-corrections agents (and humans) make when transcribing test names. The harness should be more forgiving than strict-substring-equal — the cost of false negatives (agent's correct work blocked) far exceeds the cost of false positives (harness matches loosely).
+
+**Shape options:**
+- (a) **Normalize both sides to ASCII** before substring match: strip/replace `'` `'` `"` `"` `` ` `` (curly + back) → `'` `"` `` ` ``. Strip leading/trailing whitespace from each. Substring match operates on normalized strings. ~10 LOC in `parseTestLine` + the bun test invocation.
+- (b) **`factory spec lint` warns on apostrophes / smart quotes in `test:` line names.** Catches the bomb at scoping time, not run time. Agent fixes the spec OR rewrites without apostrophes. ~30 LOC + a new `spec/test-name-quote-chars` lint code.
+- (c) Both (a) and (b). Belt + suspenders.
+
+Lean: (c). The lint catches at scoping time (cheap signal); the harness normalizes as a runtime safety net (no agent work lost to a stylistic difference).
+
+**Touches:** `packages/harness/src/parse-test-line.ts` (normalize the pattern string before passing to bun); `packages/harness/src/runners/test.ts` (apply the same normalization to the test name harvested from `bun test --json`); `packages/core/src/lint.ts` (new warning); tests. ~80 LOC.
+
+**Phasing suggestion:** v0.0.12 lead candidate. Saves real wall-clock on every future agent-driven run.
+
+---
+
+## `factory-run` already-converged dedup must verify actual convergence status *(NEW, surfaced by v0.0.11 ship — bug in v0.0.10's `run-sequence-polish-v0-0-10`)*
+
+**What:** v0.0.10's run-sequence-polish-v0-0-10 added a "skip already-converged spec" dedup that checks: (a) a `factory-run` record exists for this `specId`; (b) its `parents[]` includes a `factory-sequence` whose `payload.specsDir` matches. **Crucially, the check does NOT verify that the run's actual convergence status was `'converged'`.** The variable name `convergedBySpecId` (in `sequence.ts`) is misleading — it stores ANY prior factory-run, regardless of whether the run succeeded.
+
+This is a real bug, not just polish: in v0.0.11's first run-sequence attempt, dod-precision hit no-converge. On the retry, dod-precision was incorrectly skipped via dedup — the runtime treated its prior NO-CONVERGE record as if it had converged. (For v0.0.11 this was benign because we'd manually fixed the apostrophe; in general, re-running a failed sequence would silently skip the spec that needed retrying.)
+
+**Why:** The runtime persists `factory-run` records at run START with metadata only; the run's final status (`'converged'` / `'no-converge'` / `'error'`) lives in `RunReport` (in-memory) and is reconstructed from `factory-phase` aggregation. The dedup logic doesn't reconstruct or check status — it just trusts that the record's existence implies convergence.
+
+**Shape options:**
+- (a) **Persist run status on the `factory-run` record** post-run. Schema-level fix; future-compatible. The runtime updates the record after `RunReport` is computed. Requires the context store to support record mutation OR a separate `factory-run-status` record. Since the existing context store is content-addressable + immutable, the second is cleaner.
+- (b) **Aggregate status from `factory-phase` records on dedup-check.** For each candidate factory-run, list its descendant factory-phase records, check that every iteration's last phase is `'pass'`. Read-only; no schema change. More expensive (per-spec context-store walk).
+- (c) **Walk the run's `iterations[]` from a derivative record** if any. Requires designing a "factory-run-summary" record persisted post-run (different from the existing factory-run which is metadata-only).
+
+Lean: (b). Read-only check using existing factory-phase records; no schema migration. The cost is ~one extra `contextStore.list` call per dedup candidate; acceptable.
+
+**Touches:** `packages/runtime/src/sequence.ts` (the `convergedBySpecId` builder — verify status before adding to map). Tests pin the no-converge → don't-skip path. ~40 LOC.
+
+**Phasing suggestion:** v0.0.12 alongside the harness quote-normalization fix. Both are correctness bugs in v0.0.10 / v0.0.11 that surfaced together in v0.0.11's ship cycle.
+
+---
+
+## Investigate `agent-exit-nonzero (code=1)` at end of iteration *(NEW, surfaced by v0.0.11 ship — worktree-sandbox spec hit it after work landed)*
+
+**What:** During v0.0.11's worktree-sandbox-v0-0-11 implementation, the implement phase hit `runtime/agent-failed: agent-exit-nonzero (code=1)` at the END of iteration 1 — AFTER the entire spec's work had landed (worktree.ts + worktree.test.ts + version bumps + CHANGELOG/ROADMAP/README updates all on disk). The runtime classified the spec as `'error'`, but the work was correct (verified post-hoc: 228 runtime tests pass, biome clean, spec lint clean).
+
+**Why:** Distinct from `runtime/agent-failed: agent-timeout` (which fires when the wall-clock budget elapses). `agent-exit-nonzero` is `claude -p` itself returning a non-zero exit code. Possible causes: Claude Code internal error / OOM / message-too-long / API rate limit / final-output edge case. Worth an investigation pass to identify the exact cause and either fix the upstream issue or recover gracefully (treat exit-code-1-with-output as a fail rather than error so iteration retries).
+
+**Shape options:**
+- (a) **Investigate root cause via the persisted `factory-implement-report.payload.result` and `failureDetail`.** Capture stdout/stderr-tail when claude exits non-zero (already partially captured today via `failureDetail`). Add a v0.0.12 telemetry-only step: when this fires, persist the LAST 10 KB of agent stdout for forensic inspection.
+- (b) **Treat `agent-exit-nonzero` as `'fail'` (retry-able) instead of `'error'` (abort).** If the agent's work landed, validate phase will catch up — the next iteration's prompt sees the prior validate report and the agent fixes whatever was missing. Risk: infinite retry loop if the failure is deterministic (e.g., always blow up at the last line). Mitigation: the existing `--max-iterations` cap.
+- (c) **Both.** Capture telemetry first; once we know the cause, decide whether to retry or abort.
+
+Lean: (c). One spec for telemetry capture (cheap; adds value regardless), one (deferred) spec for the retry-vs-abort decision once we know more.
+
+**Touches:** `packages/runtime/src/phases/implement.ts` (capture more stderr context on exit-nonzero); `packages/runtime/README.md` (document the failure mode); tests. ~50 LOC for telemetry capture; the retry-vs-abort change is data-dependent.
+
+**Phasing suggestion:** v0.0.12 alongside the other two findings. The telemetry capture is cheap and unlocks future investigation.
+
+---
+
 ## `run-sequence` walks the DAG dynamically (auto-promote dependents on convergence) *(NEW, surfaced by v0.0.10 BASELINE — friction #1, lead candidate for v0.0.11)*
 
 **What:** When a spec converges within a `run-sequence` invocation, the runtime should detect any direct dependent whose deps are now ALL converged AND in-memory promote it from `status: drafting` → `status: ready` AND continue walking — all in the same invocation. The maintainer should not need to flip statuses by hand or re-invoke `run-sequence` per spec. The v0.0.10 BASELINE measured the gap empirically: 4 specs in a linear chain required 4 separate `run-sequence` invocations + 3 manual `drafting → ready` flips between them.
@@ -383,6 +442,21 @@ Lean: ship (b) + (c) together in v0.0.9. (a) is too crude. (d) is v0.1.0+ territ
 **Touches:** `packages/core/commands/scope-project.md` (move from `docs/commands/`), `packages/core/package.json` (add to `files` glob), `packages/core/src/init.ts` + `init-templates.ts` (planFiles for `.claude/commands/scope-project.md`), tests, README updates. Optional: a `factory commands install` subcommand for retrofitting existing projects.
 
 **Phasing suggestion:** v0.0.8 candidate. Pairs naturally with the PostToolUse hook recipe (also deferred to v0.0.8) — both are "make Claude Code aware of factory tooling" workflow polish.
+
+---
+
+## Shipped in v0.0.11 (kept here briefly for history)
+
+The "trust → isolation + trust-layer calibration" cluster shipped in v0.0.11 (commit `<TBD>`). Six specs (5 LIGHT + 1 DEEP) scoped via `/scope-project` (fourth dogfood) + run via `factory-runtime run-sequence` with `--include-drafting --max-agent-timeout-ms 2400000` (40min budget — first production test of v0.0.9's per-spec frontmatter timeout override field, declared on worktree-sandbox-v0-0-11):
+
+- ✅ **CI publish workflow** — `.github/workflows/publish.yml` + RELEASING.md.
+- ✅ **`dod-precision` calibration** — recognizes `<command> green` / `<command> clean` as canonical idioms.
+- ✅ **`run-sequence` walks the DAG dynamically** — auto-promotes drafting dependents on convergence. Closes v0.0.10 BASELINE friction #1.
+- ✅ **Holdout-aware convergence** — `--check-holdouts` flag; both visible AND holdouts must pass; failed-holdout IDs surfaced in iter N+1's prompt (criteria stay hidden).
+- ✅ **`tokens.charged` field split** — budget-relevant total separate from cache-aware total.
+- ✅ **Worktree sandbox** — `factory-runtime run --worktree` materializes `<projectRoot>/.factory/worktrees/<runId>/` on a throwaway branch; phases run inside; main tree never touched. New `factory-worktree` context record. New `factory-runtime worktree { list | clean }` subcommand. **First DEEP spec to declare `agent-timeout-ms: 2400000` in frontmatter — the v0.0.9 per-spec timeout override survived its first production test.**
+
+**v0.0.11 dogfood summary:** Required 2 run-sequence invocations to ship cleanly (the first stopped on a 1-character apostrophe mismatch in dod-precision's test name; one-char fix unstuck it). Total wall-clock ~95 minutes across both attempts. The retry's `factory-runtime: <id> already converged in run <runId> — skipping` log line FIRED for ci-publish (correctly) AND for dod-precision (incorrectly — exposed v0.0.10's dedup bug above). Public API surface: factory-runtime 23 → 26 (+3 worktree exports). Workspace tests grew from ~640 to ~700+. THREE concrete v0.0.12 candidates surfaced from this ship cycle (entries above).
 
 ---
 
