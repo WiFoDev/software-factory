@@ -914,3 +914,103 @@ describe('runSequence — v0.0.11 dynamic DAG walk', () => {
     expect(runRecs).toHaveLength(3); // 1 seed (a) + 2 new (b, c)
   });
 });
+
+// ----- v0.0.12: dedup verifies actual convergence (S-1) -----------------
+
+describe('runSequence — v0.0.12 dedup verifies actual convergence', () => {
+  test('dedup re-runs spec when prior factory-run terminal phase status is fail/error', async () => {
+    // v0.0.11 ship bug: the dedup keyed only on factory-run record existence
+    // and silently skipped prior NO-CONVERGE runs. v0.0.12 verifies the run's
+    // descendant factory-phase records and re-runs when terminal phases are
+    // anything other than 'pass'.
+    writeSpec('a');
+    const store = createContextStore({ dir: ctxDir });
+
+    // Seed: run 'a' under a graph that fails — produces a factory-run record
+    // BUT the run never converged (terminal phase status: 'fail').
+    const failingPhase = definePhase(
+      'validate',
+      async (): Promise<PhaseResult> => ({ status: 'fail', records: [] }),
+    );
+    const failingGraph = definePhaseGraph([failingPhase], []);
+    const seed = await runSequence({
+      specsDir,
+      graph: failingGraph,
+      contextStore: store,
+      options: { maxIterations: 1 },
+    });
+    expect(seed.specs[0]?.status).toBe('no-converge');
+
+    // Re-invoke against the same specsDir + same context dir + a NOW-PASSING
+    // graph. Without the fix, dedup would skip 'a' and report a synthetic
+    // converged result. With the fix, the prior run is detected as
+    // non-converged → 'a' runs fresh.
+    const skips: string[] = [];
+    const second = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: store,
+      options: { maxIterations: 1, skipLog: (line) => skips.push(line) },
+    });
+    expect(second.status).toBe('converged');
+    expect(second.specs).toHaveLength(1);
+    expect(second.specs[0]?.specId).toBe('a');
+    expect(second.specs[0]?.status).toBe('converged');
+    // The dedup-omission log line is emitted, replacing silent-skip.
+    expect(
+      skips.some((line) =>
+        line.includes('a prior factory-run found but status=no-converge — re-running'),
+      ),
+    ).toBe(true);
+    // No "already converged" skip notice for 'a' on this re-invocation.
+    expect(skips.some((line) => line.includes('already converged'))).toBe(false);
+    // Two factory-run records exist for 'a': the seed (no-converge) + the new fresh run.
+    const all: ContextRecord[] = (await listRecords(ctxDir)).records;
+    const runsForA = all.filter(
+      (r) => r.type === 'factory-run' && (r.payload as { specId?: string }).specId === 'a',
+    );
+    expect(runsForA).toHaveLength(2);
+  });
+
+  test('dedup preserves skip when prior factory-run actually converged', async () => {
+    // Inverse case: a genuine prior convergence (terminal phases all pass)
+    // continues to be skipped on re-invocation — preserves the v0.0.10 dedup
+    // behavior for converged runs.
+    writeSpec('a');
+    const store = createContextStore({ dir: ctxDir });
+
+    // Seed: run 'a' under a passing graph — terminal phase status: 'pass'.
+    await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: store,
+      options: { maxIterations: 1 },
+    });
+    const seedAll: ContextRecord[] = (await listRecords(ctxDir)).records;
+    const seedRunA = seedAll.find(
+      (r) => r.type === 'factory-run' && (r.payload as { specId?: string }).specId === 'a',
+    );
+    expect(seedRunA).toBeDefined();
+    const seedRunAId = seedRunA?.id;
+
+    // Re-invoke. 'a' is detected as already-converged → skipped.
+    const skips: string[] = [];
+    const second = await runSequence({
+      specsDir,
+      graph: makeSyntheticGraph({ status: 'pass' }),
+      contextStore: store,
+      options: { maxIterations: 1, skipLog: (line) => skips.push(line) },
+    });
+    expect(second.status).toBe('converged');
+    expect(second.specs[0]?.runReport?.runId).toBe(seedRunAId);
+    expect(skips).toContain(`factory-runtime: a already converged in run ${seedRunAId} — skipping`);
+    // No no-converge re-run notice — the prior run actually converged.
+    expect(skips.some((line) => line.includes('no-converge — re-running'))).toBe(false);
+    // Only one factory-run record for 'a' (the seed; second invocation reused it).
+    const all: ContextRecord[] = (await listRecords(ctxDir)).records;
+    const runsForA = all.filter(
+      (r) => r.type === 'factory-run' && (r.payload as { specId?: string }).specId === 'a',
+    );
+    expect(runsForA).toHaveLength(1);
+  });
+});

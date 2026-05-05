@@ -585,8 +585,8 @@ describe('implementPhase — operational failures (S-3)', () => {
     expect(records.length).toBe(0);
   });
 
-  test('(b) exit-nonzero: claude exits 1 with stderr → runtime/agent-failed with agent-exit-nonzero prefix and stderr tail', async () => {
-    const { ctx } = await setupCtx();
+  test('(b) exit-nonzero: claude exits 1 with stderr → runtime/agent-failed with agent-exit-nonzero prefix; v0.0.12 persists implement-report with status=error + stderrTail before throwing', async () => {
+    const { ctx, runId } = await setupCtx();
     const phase = implementPhase({
       cwd: workDir,
       claudePath: FAKE_CLAUDE,
@@ -607,10 +607,23 @@ describe('implementPhase — operational failures (S-3)', () => {
       expect(re.message).toContain('agent-exit-nonzero (code=1):');
       expect(re.message).toContain('authentication failed');
 
+      // v0.0.12 telemetry — the report is persisted before the throw so the
+      // last 10 KB of stderr is recoverable via the context store.
       const store = createContextStore({ dir: storeDir });
       tryRegister(store, 'factory-implement-report', FactoryImplementReportSchema);
       const records = await store.list({ type: 'factory-implement-report' });
-      expect(records.length).toBe(0);
+      expect(records.length).toBe(1);
+      const rec = records[0];
+      expect(rec?.parents).toEqual([runId]);
+      const payload = rec?.payload as {
+        status: string;
+        exitCode: number | null;
+        failureDetail: { message: string; stderrTail?: string };
+      };
+      expect(payload.status).toBe('error');
+      expect(payload.exitCode).toBe(1);
+      expect(payload.failureDetail.message).toContain('agent-exit-nonzero (code=1):');
+      expect(payload.failureDetail.stderrTail).toContain('authentication failed');
     } finally {
       Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
       Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EXIT_CODE');
@@ -1801,6 +1814,127 @@ describe('implementPhase — v0.0.11 Prior holdout fail section (S-2)', () => {
       Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
       Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
       Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+});
+
+// ----- v0.0.12: filesChangedDebug telemetry (S-2) -----------------------
+
+describe('implementPhase — v0.0.12 filesChangedDebug telemetry (S-2)', () => {
+  test('factory-implement-report.payload.filesChangedDebug captures raw pre + post snapshots', async () => {
+    const { ctx } = await setupCtx();
+    const phase = implementPhase({ cwd: workDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    process.env.FAKE_CLAUDE_TOKENS = '1000';
+    process.env.FAKE_CLAUDE_EDIT_FILE = join(workDir, 'src/needs-impl.ts');
+    process.env.FAKE_CLAUDE_EDIT_CONTENT = 'export function impl() { return 42; }\n';
+    try {
+      const result = await phase.run(ctx);
+      expect(result.status).toBe('pass');
+      const payload = result.records[0]?.payload as {
+        filesChanged: { path: string }[];
+        filesChangedDebug: { preSnapshot: string[]; postSnapshot: string[] };
+      };
+      expect(payload.filesChangedDebug).toBeDefined();
+      expect(Array.isArray(payload.filesChangedDebug.preSnapshot)).toBe(true);
+      expect(Array.isArray(payload.filesChangedDebug.postSnapshot)).toBe(true);
+      // pre-snapshot lists at least the seed fixtures the test setup wrote
+      // (needs-impl.md + needs-impl.test.ts).
+      expect(payload.filesChangedDebug.preSnapshot).toContain('needs-impl.md');
+      expect(payload.filesChangedDebug.preSnapshot).toContain('needs-impl.test.ts');
+      // post-snapshot includes the agent's edit AND every pre-snapshot path
+      // (no deletions in this case).
+      expect(payload.filesChangedDebug.postSnapshot).toContain('src/needs-impl.ts');
+      for (const p of payload.filesChangedDebug.preSnapshot) {
+        expect(payload.filesChangedDebug.postSnapshot).toContain(p);
+      }
+      // Sorted ascending — locked layout for diff stability.
+      const preSorted = [...payload.filesChangedDebug.preSnapshot].sort();
+      const postSorted = [...payload.filesChangedDebug.postSnapshot].sort();
+      expect(payload.filesChangedDebug.preSnapshot).toEqual(preSorted);
+      expect(payload.filesChangedDebug.postSnapshot).toEqual(postSorted);
+      // The new field is purely a side-channel — `filesChanged` is unchanged.
+      expect(payload.filesChanged.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_TOKENS');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_FILE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EDIT_CONTENT');
+    }
+  });
+});
+
+// ----- v0.0.12: agent-exit-nonzero stderrTail telemetry (S-3) ----------
+
+describe('implementPhase — v0.0.12 agent-exit-nonzero stderrTail telemetry (S-3)', () => {
+  test('agent-exit-nonzero captures last 10KB of stderr in failureDetail.stderrTail', async () => {
+    const { ctx } = await setupCtx();
+    const phase = implementPhase({ cwd: workDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+    process.env.FAKE_CLAUDE_MODE = 'exit-nonzero';
+    process.env.FAKE_CLAUDE_EXIT_CODE = '1';
+    // Pad beyond 10 KB so the byte-truncation marker fires.
+    process.env.FAKE_CLAUDE_STDERR_PAD_BYTES = String(15 * 1024);
+    try {
+      let thrown: unknown;
+      try {
+        await phase.run(ctx);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(RuntimeError);
+
+      const store = createContextStore({ dir: storeDir });
+      tryRegister(store, 'factory-implement-report', FactoryImplementReportSchema);
+      const records = await store.list({ type: 'factory-implement-report' });
+      expect(records.length).toBe(1);
+      const payload = records[0]?.payload as {
+        failureDetail: { message: string; stderrTail: string };
+      };
+      const tail = payload.failureDetail.stderrTail;
+      expect(tail).toBeDefined();
+      // Truncation marker present + names the original byte count.
+      expect(tail).toMatch(/^… \[truncated, original size \d+ bytes\]\n/);
+      // Tail body bounded by 10 KB + the marker overhead.
+      expect(Buffer.byteLength(tail, 'utf8')).toBeLessThanOrEqual(10 * 1024 + 200);
+      // The "authentication failed" line was at the START of stderr → after
+      // 15 KB of padding it must be truncated out (not in the tail).
+      expect(tail).not.toContain('authentication failed');
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EXIT_CODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_STDERR_PAD_BYTES');
+    }
+  });
+
+  test('stderr smaller than 10KB stored in full', async () => {
+    const { ctx } = await setupCtx();
+    const phase = implementPhase({ cwd: workDir, claudePath: FAKE_CLAUDE, twin: 'off' });
+    process.env.FAKE_CLAUDE_MODE = 'exit-nonzero';
+    process.env.FAKE_CLAUDE_EXIT_CODE = '1';
+    // No padding — fake-claude emits "claude: authentication failed\n".
+    try {
+      let thrown: unknown;
+      try {
+        await phase.run(ctx);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(RuntimeError);
+
+      const store = createContextStore({ dir: storeDir });
+      tryRegister(store, 'factory-implement-report', FactoryImplementReportSchema);
+      const records = await store.list({ type: 'factory-implement-report' });
+      expect(records.length).toBe(1);
+      const payload = records[0]?.payload as {
+        failureDetail: { message: string; stderrTail: string };
+      };
+      const tail = payload.failureDetail.stderrTail;
+      // No truncation marker — full stderr stored verbatim.
+      expect(tail).not.toMatch(/^… \[truncated/);
+      expect(tail).toBe('claude: authentication failed\n');
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_MODE');
+      Reflect.deleteProperty(process.env, 'FAKE_CLAUDE_EXIT_CODE');
     }
   });
 });

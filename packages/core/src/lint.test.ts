@@ -635,6 +635,116 @@ describe('lintSpec', () => {
     expect(errs.filter((e) => e.code === 'spec/wide-blast-radius')).toHaveLength(0);
   });
 
+  test('spec/test-name-quote-chars fires on curly apostrophes in test: pattern', () => {
+    const sample = [
+      '---',
+      'id: demo-quote-chars',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts "user’s flow"',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    const warnings = errs.filter((e) => e.code === 'spec/test-name-quote-chars');
+    expect(warnings).toHaveLength(1);
+    const w = warnings[0];
+    if (!w) return;
+    expect(w.severity).toBe('warning');
+    expect(w.message).toContain('non-ASCII quote');
+    expect(typeof w.line).toBe('number');
+  });
+
+  test('spec/test-name-quote-chars does not fire on plain ASCII apostrophe', () => {
+    const sample = [
+      '---',
+      'id: demo-ascii-apostrophe',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts "user\'s flow"',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    expect(errs.filter((e) => e.code === 'spec/test-name-quote-chars')).toHaveLength(0);
+  });
+
+  test('spec/dod-needs-explicit-command fires on DoD bullet missing literal backtick command', () => {
+    const sample = [
+      '---',
+      'id: demo-dod-no-cmd',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+      '## Definition of Done',
+      '- typecheck + lint + tests green',
+      '- Public API surface unchanged.',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    const warnings = errs.filter((e) => e.code === 'spec/dod-needs-explicit-command');
+    expect(warnings).toHaveLength(1);
+    const w = warnings[0];
+    if (!w) return;
+    expect(w.severity).toBe('warning');
+    expect(w.message).toContain("doesn't embed a backtick-wrapped shell command");
+    expect(w.message).toContain('typecheck clean (`pnpm typecheck`)');
+    expect(typeof w.line).toBe('number');
+  });
+
+  test('spec/dod-needs-explicit-command does not fire when bullet contains backtick command', () => {
+    const sample = [
+      '---',
+      'id: demo-dod-with-cmd',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+      '## Definition of Done',
+      '- typecheck clean (`pnpm typecheck`)',
+      '- tests green (`pnpm test`)',
+      '- Public API surface unchanged.',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    expect(errs.filter((e) => e.code === 'spec/dod-needs-explicit-command')).toHaveLength(0);
+  });
+
   test('lintSpec skips file existence check for entries that fail id-format', () => {
     const dir = mkdtempSync(join(tmpdir(), 'lint-deps-'));
     try {
@@ -720,7 +830,7 @@ describe('lintSpec — SPEC_TEMPLATE remains canonical', () => {
       '    - test: src/foo.test.ts',
       '',
       '## Definition of Done',
-      '- tests green',
+      '- tests green (`pnpm test`)',
       '',
     ].join('\n');
     expect(lintSpec(sample)).toEqual([]);

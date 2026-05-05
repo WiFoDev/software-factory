@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type CliIo, runCli } from './cli';
@@ -205,6 +205,208 @@ describe('runCli — top-level dispatch', () => {
     expect(io.exitCode()).toBe(2);
     expect(io.stderr()).toContain('factory init');
     expect(io.stderr()).toContain('spec review');
+  });
+});
+
+describe('runCli — v0.0.12 spec review hard-dep resolution (S-2)', () => {
+  test('factory-cores package.json declares @wifo/factory-spec-review in dependencies (not optionalDependencies)', () => {
+    const pkgPath = resolve(import.meta.dir, '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    expect(pkg.dependencies['@wifo/factory-spec-review']).toBeDefined();
+    expect(pkg.optionalDependencies?.['@wifo/factory-spec-review']).toBeUndefined();
+  });
+
+  test('factory spec review resolves @wifo/factory-spec-review without optional-dep fallback', async () => {
+    // The dispatcher imports `@wifo/factory-spec-review/cli` through the
+    // standard package resolver — if this ESM import succeeds, factory-core's
+    // resolution works zero-config. The legacy 'spec/review-unavailable' code
+    // path was removed; the source must not reference it.
+    const mod = await import('@wifo/factory-spec-review/cli');
+    expect(typeof mod.runReviewCli).toBe('function');
+
+    const cliSource = readFileSync(resolve(import.meta.dir, 'cli.ts'), 'utf8');
+    expect(cliSource).not.toContain('spec/review-unavailable');
+    expect(cliSource).not.toContain('function findPackageRoot');
+  });
+});
+
+describe('runCli — v0.0.12 factory finish-task (S-3)', () => {
+  // The CLI subcommand `factory finish-task <id>` calls the library helper
+  // `finishTask({ specId, dir, contextDir })` (exported from
+  // `packages/core/src/index.ts`). These tests exercise that helper directly —
+  // the CLI's only job above it is `parseArgs` + `io.exit` formatting.
+  function tmpCtxAndDir(): { ctxDir: string; specsDir: string } {
+    return {
+      ctxDir: mkdtempSync(join(tmpdir(), 'factory-finish-ctx-')),
+      specsDir: mkdtempSync(join(tmpdir(), 'factory-finish-specs-')),
+    };
+  }
+
+  function writeRecord(
+    ctxDir: string,
+    record: {
+      version: 1;
+      id: string;
+      type: string;
+      recordedAt: string;
+      parents: string[];
+      payload: unknown;
+    },
+  ): void {
+    writeFileSync(join(ctxDir, `${record.id}.json`), `${JSON.stringify(record, null, 2)}\n`);
+  }
+
+  function makeConvergedRunFixture(
+    ctxDir: string,
+    specId: string,
+    runId = '0123456789abcdef',
+  ): string {
+    writeRecord(ctxDir, {
+      version: 1,
+      id: runId,
+      type: 'factory-run',
+      recordedAt: '2026-05-05T00:00:00.000Z',
+      parents: [],
+      payload: {
+        specId,
+        graphPhases: ['validate'],
+        maxIterations: 5,
+        startedAt: '2026-05-05T00:00:00.000Z',
+      },
+    });
+    writeRecord(ctxDir, {
+      version: 1,
+      id: `${runId.slice(0, 8)}fedcba98`.slice(0, 16),
+      type: 'factory-phase',
+      recordedAt: '2026-05-05T00:00:01.000Z',
+      parents: [runId],
+      payload: {
+        phaseName: 'validate',
+        iteration: 1,
+        status: 'pass',
+        durationMs: 10,
+        outputRecordIds: [],
+      },
+    });
+    return runId;
+  }
+
+  test('factory finish-task <id> moves spec file to done/ and emits factory-spec-shipped record', async () => {
+    const { finishTask } = await import('./finish-task.js');
+    const { ctxDir, specsDir } = tmpCtxAndDir();
+    const specId = 'core-store-and-slug';
+    const runId = makeConvergedRunFixture(ctxDir, specId);
+    const fromPath = join(specsDir, `${specId}.md`);
+    writeFileSync(fromPath, '---\nid: core-store-and-slug\n---\n# spec\n');
+
+    const result = await finishTask({ specId, dir: specsDir, contextDir: ctxDir });
+
+    expect(result.runId).toBe(runId);
+    expect(result.fromPath).toBe(fromPath);
+    expect(result.toPath).toBe(join(specsDir, 'done', `${specId}.md`));
+    expect(existsSync(fromPath)).toBe(false);
+    expect(existsSync(result.toPath)).toBe(true);
+
+    // Persisted factory-spec-shipped record references the run as parent.
+    const fs = require('node:fs') as typeof import('node:fs');
+    const ctxEntries = fs.readdirSync(ctxDir).filter((f) => f.endsWith('.json'));
+    let shippedRecord:
+      | {
+          type: string;
+          parents: string[];
+          payload: { specId: string; fromPath: string; toPath: string; shippedAt: string };
+        }
+      | undefined;
+    for (const f of ctxEntries) {
+      const rec = JSON.parse(fs.readFileSync(join(ctxDir, f), 'utf8'));
+      if (rec.type === 'factory-spec-shipped') shippedRecord = rec;
+    }
+    expect(shippedRecord).toBeDefined();
+    if (shippedRecord === undefined) return;
+    expect(shippedRecord.parents).toEqual([runId]);
+    expect(shippedRecord.payload.specId).toBe(specId);
+    expect(shippedRecord.payload.fromPath).toBe(fromPath);
+    expect(shippedRecord.payload.toPath).toBe(result.toPath);
+    expect(shippedRecord.payload.shippedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  test('factory finish-task refuses to move when no converged factory-run exists', async () => {
+    const { finishTask } = await import('./finish-task.js');
+    const { ctxDir, specsDir } = tmpCtxAndDir();
+    const specId = 'never-ran';
+    const fromPath = join(specsDir, `${specId}.md`);
+    writeFileSync(fromPath, '---\nid: never-ran\n---\n');
+
+    let caught: unknown;
+    try {
+      await finishTask({ specId, dir: specsDir, contextDir: ctxDir });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain(
+      `factory: no converged factory-run found for spec id ${specId}; refusing to move`,
+    );
+    // Spec was NOT moved.
+    expect(existsSync(fromPath)).toBe(true);
+    expect(existsSync(join(specsDir, 'done', `${specId}.md`))).toBe(false);
+  });
+
+  test('factory finish-task creates done/ dir when missing', async () => {
+    const { finishTask } = await import('./finish-task.js');
+    const { ctxDir, specsDir } = tmpCtxAndDir();
+    const specId = 'fresh-dir';
+    makeConvergedRunFixture(ctxDir, specId);
+    writeFileSync(join(specsDir, `${specId}.md`), '---\nid: fresh-dir\n---\n');
+
+    expect(existsSync(join(specsDir, 'done'))).toBe(false);
+    const result = await finishTask({ specId, dir: specsDir, contextDir: ctxDir });
+    expect(existsSync(result.toPath)).toBe(true);
+  });
+
+  test('factory finish-task refuses when only a no-converge factory-run exists for the spec', async () => {
+    const { finishTask } = await import('./finish-task.js');
+    const { ctxDir, specsDir } = tmpCtxAndDir();
+    const specId = 'flaky-spec';
+    const runId = '0011223344556677';
+    writeRecord(ctxDir, {
+      version: 1,
+      id: runId,
+      type: 'factory-run',
+      recordedAt: '2026-05-05T00:00:00.000Z',
+      parents: [],
+      payload: {
+        specId,
+        graphPhases: ['validate'],
+        maxIterations: 5,
+        startedAt: '2026-05-05T00:00:00.000Z',
+      },
+    });
+    // Terminal phase status='fail' → not converged.
+    writeRecord(ctxDir, {
+      version: 1,
+      id: 'aabbccddeeff0011',
+      type: 'factory-phase',
+      recordedAt: '2026-05-05T00:00:01.000Z',
+      parents: [runId],
+      payload: {
+        phaseName: 'validate',
+        iteration: 1,
+        status: 'fail',
+        durationMs: 10,
+        outputRecordIds: [],
+      },
+    });
+    writeFileSync(join(specsDir, `${specId}.md`), '---\nid: flaky-spec\n---\n');
+
+    let caught: unknown;
+    try {
+      await finishTask({ specId, dir: specsDir, contextDir: ctxDir });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain('refusing to move');
   });
 });
 

@@ -35,13 +35,21 @@ export interface DodPhaseOptions {
 interface BulletResult {
   kind: 'shell' | 'judge';
   bullet: string;
-  status: 'pass' | 'fail' | 'error';
+  status: 'pass' | 'fail' | 'error' | 'skipped';
   command?: string;
   exitCode?: number | null;
   stderrTail?: string;
   judgeReasoning?: string;
+  reason?: string;
   durationMs: number;
 }
+
+// v0.0.12 — gate-shaped keywords (case-insensitive). A judge bullet whose
+// body matches one of these AND has no backtick code-span is reported as
+// `status: 'skipped'` rather than dispatched to the LLM judge — the literal
+// command is the source of truth for runtime gates.
+const DOD_GATE_KEYWORDS_RE = /\b(typecheck|tests?|lint|check|build|green|clean|passes?)\b/i;
+const DOD_BACKTICK_SPAN_RE = /`[^`]+`/;
 
 interface ShellRunResult {
   exitCode: number | null;
@@ -236,6 +244,26 @@ export function dodPhase(opts: DodPhaseOptions = {}): Phase {
       }
 
       // judge bullet
+      // v0.0.12 — gate-shaped prose without a backtick command is skipped
+      // (instead of dispatched to the LLM judge). The trust contract is
+      // "spec ships only when DoD passes" — runtime gates are only honored
+      // when the spec author embeds a literal command. Plain-prose criteria
+      // ("Public API surface unchanged") still go to the judge.
+      if (
+        DOD_GATE_KEYWORDS_RE.test(bullet.criterion) &&
+        !DOD_BACKTICK_SPAN_RE.test(bullet.criterion)
+      ) {
+        const durationMs = Math.round(performance.now() - bulletT0);
+        results.push({
+          kind: 'judge',
+          bullet: bullet.raw,
+          status: 'skipped',
+          durationMs,
+          reason: 'dod-gate-no-command-found',
+        });
+        summary.skipped++;
+        continue;
+      }
       if (opts.noJudge === true) {
         const durationMs = Math.round(performance.now() - bulletT0);
         results.push({

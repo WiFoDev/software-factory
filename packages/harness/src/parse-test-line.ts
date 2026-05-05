@@ -7,6 +7,23 @@ export interface ParsedTestLine {
 
 const TEST_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.cjs', '.mjs'] as const;
 
+// v0.0.12: stylistic apostrophes drift between a spec's `test:` line and the
+// test's actual `it()` name (curly vs ASCII; with vs without). Strip every
+// quote-like character on BOTH sides of the substring comparison so the match
+// is robust to that drift. Locked set: ASCII apostrophe + double-quote, curly
+// singles + doubles (U+2018/U+2019/U+201C/U+201D), and backticks.
+const QUOTE_CHARS_RE = /['"`‘’“”]/g;
+
+/**
+ * Normalize a test-name pattern for substring comparison: strips quote-like
+ * characters (apostrophes, smart quotes, backticks) so a stylistic drop
+ * between spec and code doesn't cause a no-match. Apply to BOTH the pattern
+ * and the candidate test name before comparing.
+ */
+export function normalizeTestNamePattern(s: string): string {
+  return s.replace(QUOTE_CHARS_RE, '');
+}
+
 function looksLikeFile(token: string): boolean {
   if (token.includes('/') || token.includes('\\')) return true;
   return TEST_EXTENSIONS.some((ext) => token.endsWith(ext));

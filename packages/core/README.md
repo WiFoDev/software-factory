@@ -35,12 +35,17 @@ npx -y @wifo/factory-core init --name my-project
 The `factory` binary dispatches into subcommands:
 
 ```
-factory init [--name <pkg>]                   # Scaffold a new factory project
+factory init [--name <pkg>] [--adopt]         # Scaffold a new factory project (--adopt: additive, for existing repos)
 factory spec lint <path>                      # Format-floor lint (recurses on dirs)
 factory spec review <path> [flags]            # Quality review (8 LLM judges)
 factory spec watch <path> [--review] [...]    # Continuous lint+review on save (v0.0.10+)
 factory spec schema                           # Emit JSON Schema for editor intellisense
+factory finish-task <id> [--dir <p>] [--context-dir <p>]   # Move converged spec to done/ + emit factory-spec-shipped (v0.0.12+)
 ```
+
+`factory init --adopt` (v0.0.12+) is the brownfield-adopter onramp: walks the same template plan as `factory init` but **skips** files in `IGNORE_IF_PRESENT` (`package.json`, `tsconfig.json`, `biome.json`, `bunfig.toml`, `README.md`) when they already exist, **appends** factory entries (`.factory`, `.factory-spec-review-cache`) to a pre-existing `.gitignore`, and **creates** only the factory-specific bits (`docs/specs/done/`, `docs/technical-plans/done/`, `factory.config.json`, `.claude/commands/scope-project.md`). Idempotent — running twice never duplicates `.gitignore` entries. Does NOT mutate your `package.json` (a future `--write-deps` will opt-in to that).
+
+`factory finish-task <id>` (v0.0.12+) ships a converged spec: moves `<dir>/<id>.md` to `<dir>/done/<id>.md` (creating `done/` if missing) and emits a `factory-spec-shipped` context record parented on the converged `factory-run` so the lifecycle is reconstructible from the store alone. Refuses to run if no converged `factory-run` exists for the given spec id. The runtime emits a `factory-runtime: <id> converged → ship via 'factory finish-task <id>'` hint on stdout when a spec converges.
 
 Key flags (`spec review`):
 
@@ -61,7 +66,7 @@ Key flags (`spec watch`, v0.0.10+):
 | `--debounce-ms <n>` | 200 | Per-file debounce window. |
 | `--claude-bin <path>` | `claude` | Forwarded to review subprocess. |
 
-### Public API (33 exports as of v0.0.10)
+### Public API (34 exports as of v0.0.12)
 
 ```ts
 // Schema (Zod)
@@ -98,6 +103,10 @@ import { getFrontmatterJsonSchema, SPEC_FRONTMATTER_SCHEMA_ID } from '@wifo/fact
 import { watchSpecs } from '@wifo/factory-core';
 import type { WatchSpecsOptions } from '@wifo/factory-core';
 
+// Spec lifecycle (v0.0.12+) — programmatic counterpart to `factory finish-task <id>`
+import { finishTask } from '@wifo/factory-core';
+import type { FinishTaskOptions, FinishTaskResult } from '@wifo/factory-core';
+
 // Errors
 import { FrontmatterError } from '@wifo/factory-core';
 ```
@@ -110,7 +119,7 @@ import { FrontmatterError } from '@wifo/factory-core';
 
 **`watchSpecs` (v0.0.10+).** Long-running watcher returning `{ stop }`. Re-runs lint (+ optionally review) per-file with a 200ms debounce. SIGINT-aware in the CLI wrapper.
 
-**Lint codes + NOQA.** Format-level errors block; quality-level warnings inform. Suppress warnings via `<!-- NOQA: spec/<code> -->` HTML comment anywhere in the spec body (v0.0.10+; warnings only — errors cannot be suppressed). See [`AGENTS.md` § 6](../../AGENTS.md#6-the-full-primitives-reference) for the full code table.
+**Lint codes + NOQA.** Format-level errors block; quality-level warnings inform. Codes include `frontmatter/*`, `scenario/*`, `scenarios/*`, `spec/invalid-depends-on`, `spec/depends-on-missing`, `spec/wide-blast-radius`, `spec/test-name-quote-chars` (v0.0.12+ — `test:` patterns using curly `‘ ’ “ ”` get rewritten ASCII-clean before run-time), and `spec/dod-needs-explicit-command` (v0.0.12+ — DoD bullets that look like runtime gates but don't embed a backtick-wrapped shell command; pairs with the runtime's literal-command DoD contract). Suppress warnings via `<!-- NOQA: spec/<code> -->` HTML comment anywhere in the spec body (v0.0.10+; warnings only — errors cannot be suppressed). See [`AGENTS.md` § 6](../../AGENTS.md#6-the-full-primitives-reference) for the full code table.
 
 ## Slash commands
 
@@ -132,6 +141,8 @@ Invoke from any Claude Code session in a factory-bootstrapped project:
 ```
 
 Output: 4-6 spec files under `docs/specs/`, first `status: ready`, rest `status: drafting`, every spec populates `depends-on`. Worked-example output: [`docs/baselines/scope-project-fixtures/url-shortener/`](../../docs/baselines/scope-project-fixtures/url-shortener/).
+
+**Smoke-boot extension (v0.0.12+).** When a generated spec mentions an HTTP entrypoint pattern (`createServer`, `listen(<port>)`, `app.listen`, `http.createServer`, `Bun.serve`, `serve(`), `/scope-project` appends a smoke-boot scenario that spawns `bun src/main.ts`, probes a route, and kills the process. The smoke-boot test forces the production entrypoint into existence — closing the v0.0.11 BASELINE gap where library code shipped but `bun src/main.ts` 404'd because no `test:` line ever forced the entrypoint to be written.
 
 ### `/scope-task`
 

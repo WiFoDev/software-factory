@@ -38,3 +38,6 @@ export { SPEC_FRONTMATTER_SCHEMA_ID, getFrontmatterJsonSchema } from './json-sch
 
 export { watchSpecs } from './watch.js';
 export type { WatchSpecsOptions } from './watch.js';
+
+export { finishTask } from './finish-task.js';
+export type { FinishTaskOptions, FinishTaskResult } from './finish-task.js';

@@ -191,6 +191,62 @@ describe('dodPhase — happy path (S-2)', () => {
   });
 });
 
+describe('dodPhase — v0.0.12 literal-command contract (S-2)', () => {
+  test('dodPhase shells out the literal backtick-extracted command verbatim', async () => {
+    const sentinel = join(workDir, 'literal-cmd-sentinel');
+    const spec = makeSpec({
+      dodLines: [`- tests green (\`bash -c "echo hello > ${sentinel}"\`)`],
+    });
+    const { ctx } = await setupCtx(spec);
+    const phase = dodPhase({ cwd: workDir });
+    const result = await phase.run(ctx);
+    expect(result.status).toBe('pass');
+    const payload = result.records[0]?.payload as {
+      bullets: Array<{
+        kind: string;
+        status: string;
+        command?: string;
+        exitCode?: number | null;
+      }>;
+    };
+    expect(payload.bullets).toHaveLength(1);
+    expect(payload.bullets[0]?.kind).toBe('shell');
+    expect(payload.bullets[0]?.status).toBe('pass');
+    expect(payload.bullets[0]?.command).toBe(`bash -c "echo hello > ${sentinel}"`);
+    expect(payload.bullets[0]?.exitCode).toBe(0);
+    // The literal command ran — sentinel file written via shell.
+    expect((await Bun.file(sentinel).text()).trim()).toBe('hello');
+  });
+
+  test('dodPhase skips DoD bullets without backtick commands; gate.status === skipped', async () => {
+    const spec = makeSpec({
+      dodLines: ['- typecheck + test green'],
+    });
+    const { ctx } = await setupCtx(spec);
+    // No judgeClient passed — skipped bullets must NOT dispatch to a judge.
+    const phase = dodPhase({ cwd: workDir });
+    const result = await phase.run(ctx);
+    expect(result.status).toBe('pass');
+    const payload = result.records[0]?.payload as {
+      status: string;
+      bullets: Array<{
+        kind: string;
+        status: string;
+        reason?: string;
+      }>;
+      summary: { pass: number; fail: number; error: number; skipped: number };
+    };
+    expect(payload.bullets).toHaveLength(1);
+    expect(payload.bullets[0]?.status).toBe('skipped');
+    expect(payload.bullets[0]?.reason).toBe('dod-gate-no-command-found');
+    expect(payload.summary.skipped).toBe(1);
+    expect(payload.summary.pass).toBe(0);
+    expect(payload.summary.fail).toBe(0);
+    expect(payload.summary.error).toBe(0);
+    expect(payload.status).toBe('pass');
+  });
+});
+
 describe('dodPhase — H-1 shell allowlist', () => {
   test('non-allowlisted commands route to judge (rm -rf is NOT executed)', async () => {
     // The bullet contains `rm -rf /tmp/should-not-exist-xyz` which would be

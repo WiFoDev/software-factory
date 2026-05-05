@@ -65,6 +65,41 @@ describe('/scope-project slash command source', () => {
     expect(source).toMatch(/50.*200 LOC/);
     expect(source).toMatch(/dependency boundar/);
   });
+
+  test('scope-project source contains HTTP entrypoint smoke-boot guidance subsection', () => {
+    const source = readFileSync(SLASH_COMMAND, 'utf8');
+    expect(source).toContain('### HTTP entrypoint smoke-boot scenarios');
+    // The subsection lives inside Step 2 (Generate specs).
+    const step2Index = source.indexOf('## Step 2: Generate specs');
+    const step3Index = source.indexOf('## Step 3:');
+    const subsectionIndex = source.indexOf('### HTTP entrypoint smoke-boot scenarios');
+    expect(step2Index).toBeGreaterThan(-1);
+    expect(step3Index).toBeGreaterThan(-1);
+    expect(subsectionIndex).toBeGreaterThan(step2Index);
+    expect(subsectionIndex).toBeLessThan(step3Index);
+  });
+
+  test('scope-project sources smoke-boot worked example references src/main.test.ts with verb-matching test title', () => {
+    const source = readFileSync(SLASH_COMMAND, 'utf8');
+    // The worked example scenario name + matching test title use the verb "boots".
+    expect(source).toContain('boots the production entrypoint on the configured port');
+    expect(source).toContain(
+      'test: src/main.test.ts "boots the production entrypoint on the configured port"',
+    );
+    // The worked example mentions the canonical entrypoint path.
+    expect(source).toMatch(/`bun src\/main\.ts`/);
+  });
+
+  test('scope-project source enumerates HTTP entrypoint trigger keywords', () => {
+    const source = readFileSync(SLASH_COMMAND, 'utf8');
+    // Each trigger keyword is shown in a backtick code-span for clarity.
+    expect(source).toContain('`createServer`');
+    expect(source).toContain('`listen(<port>)`');
+    expect(source).toContain('`app.listen`');
+    expect(source).toContain('`http.createServer`');
+    expect(source).toContain('`Bun.serve`');
+    expect(source).toContain('`serve(`');
+  });
 });
 
 describe('packages/core/README.md documents /scope-project', () => {

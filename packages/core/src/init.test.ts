@@ -91,7 +91,7 @@ describe('runInit — happy path', () => {
       .replace(/[^a-z0-9_-]+/g, '-')
       .replace(/^-+/, '');
     expect(pkg.name).toBe(expectedName);
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.11');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.12');
 
     // tsconfig.json is self-contained.
     const tsconfig = JSON.parse(readFileSync(join(dir, 'tsconfig.json'), 'utf8'));
@@ -163,7 +163,7 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     run(['--name', 'test'], io.io);
     expect(io.exitCode()).toBe(0);
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.11');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.12');
     // Existing devDep stays alongside.
     expect(pkg.devDependencies['@types/bun']).toBeDefined();
   });
@@ -218,15 +218,15 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     expect(stat.isFile()).toBe(true);
   });
 
-  test('scaffold dependencies pin @wifo/factory-* at ^0.0.11', () => {
+  test('scaffold dependencies pin @wifo/factory-* at ^0.0.12', () => {
     const io = makeIo();
     run(['--name', 'test'], io.io);
     expect(io.exitCode()).toBe(0);
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.11');
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.11');
-    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.11');
-    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.11');
+    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.12');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.12');
+    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.12');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.12');
   });
 
   test('scaffold README contains Multi-spec products section', () => {
@@ -276,7 +276,7 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     expect(biome.files.include).toContain('src/**/*.ts');
   });
 
-  test('scaffold is self-contained: README + slash command + config + deps all at v0.0.11', () => {
+  test('scaffold is self-contained: README + slash command + config + deps all at v0.0.12', () => {
     const io = makeIo();
     run(['--name', 'test'], io.io);
     expect(io.exitCode()).toBe(0);
@@ -293,12 +293,12 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     // factory.config.json provides defaults (v0.0.5.1+).
     expect(existsSync(join(dir, 'factory.config.json'))).toBe(true);
 
-    // package.json deps at ^0.0.11.
+    // package.json deps at ^0.0.12.
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.11');
-    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.11');
-    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.11');
-    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.11');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.12');
+    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.12');
+    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.12');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.12');
   });
 });
 
@@ -338,6 +338,90 @@ describe('runInit — fail-fast on preexisting targets', () => {
     expect(io.stderr()).toContain('package.json');
     expect(io.stderr()).toContain('tsconfig.json');
     expect(io.stderr()).toContain('README.md');
+  });
+});
+
+describe('runInit — v0.0.12 --adopt mode', () => {
+  test('factory init --adopt skips existing package.json/tsconfig.json/biome.json and logs skips', () => {
+    writeFileSync(join(dir, 'package.json'), '{"name":"existing","version":"1.0.0"}');
+    writeFileSync(join(dir, 'tsconfig.json'), '{"compilerOptions":{}}');
+    writeFileSync(join(dir, 'biome.json'), '{}');
+    const beforePkg = readFileSync(join(dir, 'package.json'), 'utf8');
+    const beforeTsc = readFileSync(join(dir, 'tsconfig.json'), 'utf8');
+    const beforeBiome = readFileSync(join(dir, 'biome.json'), 'utf8');
+
+    const io = makeIo();
+    run(['--adopt', '--name', 'custom-name'], io.io);
+    expect(io.exitCode()).toBe(0);
+
+    const out = io.stdout();
+    expect(out).toContain('skip: package.json (already present)');
+    expect(out).toContain('skip: tsconfig.json (already present)');
+    expect(out).toContain('skip: biome.json (already present)');
+
+    // Pre-existing files NOT mutated.
+    expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(beforePkg);
+    expect(readFileSync(join(dir, 'tsconfig.json'), 'utf8')).toBe(beforeTsc);
+    expect(readFileSync(join(dir, 'biome.json'), 'utf8')).toBe(beforeBiome);
+  });
+
+  test('factory init --adopt creates docs/specs/, docs/technical-plans/, factory.config.json, scope-project.md zero-config', () => {
+    const io = makeIo();
+    run(['--adopt', '--name', 'fresh'], io.io);
+    expect(io.exitCode()).toBe(0);
+
+    expect(existsSync(join(dir, 'docs/specs/done/.gitkeep'))).toBe(true);
+    expect(existsSync(join(dir, 'docs/technical-plans/done/.gitkeep'))).toBe(true);
+    expect(existsSync(join(dir, 'factory.config.json'))).toBe(true);
+    expect(existsSync(join(dir, '.claude/commands/scope-project.md'))).toBe(true);
+    // factory.config.json carries documented defaults.
+    const cfg = JSON.parse(readFileSync(join(dir, 'factory.config.json'), 'utf8'));
+    expect(cfg.runtime.maxIterations).toBe(5);
+  });
+
+  test('factory init --adopt preserves existing .gitignore and appends factory entries if missing', () => {
+    writeFileSync(join(dir, '.gitignore'), 'node_modules\n*.log\n');
+    const io = makeIo();
+    run(['--adopt'], io.io);
+    expect(io.exitCode()).toBe(0);
+
+    const after = readFileSync(join(dir, '.gitignore'), 'utf8');
+    // Original entries preserved.
+    expect(after).toContain('node_modules');
+    expect(after).toContain('*.log');
+    // Factory entries appended.
+    expect(after).toContain('.factory');
+    expect(after).toContain('.factory-spec-review-cache');
+  });
+
+  test('factory init --adopt is idempotent — running twice does not duplicate .gitignore appends', () => {
+    writeFileSync(join(dir, '.gitignore'), 'node_modules\n');
+
+    const io1 = makeIo();
+    run(['--adopt'], io1.io);
+    expect(io1.exitCode()).toBe(0);
+    const after1 = readFileSync(join(dir, '.gitignore'), 'utf8');
+
+    const io2 = makeIo();
+    run(['--adopt'], io2.io);
+    expect(io2.exitCode()).toBe(0);
+    const after2 = readFileSync(join(dir, '.gitignore'), 'utf8');
+
+    // Second run does not duplicate factory entries.
+    expect(after1).toBe(after2);
+    const factoryCount = (after2.match(/^\.factory$/gm) ?? []).length;
+    const cacheCount = (after2.match(/^\.factory-spec-review-cache$/gm) ?? []).length;
+    expect(factoryCount).toBe(1);
+    expect(cacheCount).toBe(1);
+  });
+
+  test('factory init --adopt skips pre-existing docs/specs/ and creates done/ subdir if missing', () => {
+    mkdirSync(join(dir, 'docs/specs'), { recursive: true });
+    const io = makeIo();
+    run(['--adopt'], io.io);
+    expect(io.exitCode()).toBe(0);
+    // done/ subdir IS created even though parent existed.
+    expect(existsSync(join(dir, 'docs/specs/done/.gitkeep'))).toBe(true);
   });
 });
 

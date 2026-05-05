@@ -16,14 +16,14 @@ export const PACKAGE_JSON_TEMPLATE = {
     build: 'tsc -p tsconfig.build.json',
   },
   dependencies: {
-    '@wifo/factory-context': '^0.0.11',
-    '@wifo/factory-core': '^0.0.11',
-    '@wifo/factory-runtime': '^0.0.11',
+    '@wifo/factory-context': '^0.0.12',
+    '@wifo/factory-core': '^0.0.12',
+    '@wifo/factory-runtime': '^0.0.12',
   },
   devDependencies: {
     '@biomejs/biome': '^2.4.4',
     '@types/bun': '^1.1.14',
-    '@wifo/factory-spec-review': '^0.0.11',
+    '@wifo/factory-spec-review': '^0.0.12',
     typescript: '^5.6.0',
   },
 } as const;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseTestLine } from './parse-test-line';
+import { normalizeTestNamePattern, parseTestLine } from './parse-test-line';
 
 describe('parseTestLine', () => {
   test('handles every accepted format', () => {
@@ -76,5 +76,22 @@ describe('parseTestLine', () => {
       file: 'src/foo.test.ts',
       pattern: 'match `inner` token',
     });
+  });
+});
+
+describe('normalizeTestNamePattern', () => {
+  test('normalizes apostrophes vs smart quotes in pattern', () => {
+    // ASCII apostrophe stripped — the ship-time friction case.
+    expect(normalizeTestNamePattern("v0.0.10's hash")).toBe('v0.0.10s hash');
+    // Curly right/left single quotes stripped to the same form.
+    expect(normalizeTestNamePattern('v0.0.10’s hash')).toBe('v0.0.10s hash');
+    expect(normalizeTestNamePattern('‘start’')).toBe('start');
+    // Curly + ASCII double quotes stripped.
+    expect(normalizeTestNamePattern('“hello”')).toBe('hello');
+    expect(normalizeTestNamePattern('"hello"')).toBe('hello');
+    // Backticks stripped.
+    expect(normalizeTestNamePattern('`hello`')).toBe('hello');
+    // Plain alphanumerics + spaces pass through unchanged.
+    expect(normalizeTestNamePattern('plain pattern 123')).toBe('plain pattern 123');
   });
 });

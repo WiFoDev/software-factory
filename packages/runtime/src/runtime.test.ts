@@ -1036,3 +1036,387 @@ describe('run() — v0.0.10 H-3 dod-report tree descent', () => {
     expect(dodReport?.parents).toContain(runRec.id);
   });
 });
+
+// ----- v0.0.12: observability — phase progress + cause-of-iteration + warning -
+
+describe('run() — v0.0.12 progress lines (S-1, S-2, S-3)', () => {
+  function captureLog(): { log: (line: string) => void; lines: string[] } {
+    const lines: string[] = [];
+    return { log: (line) => lines.push(line), lines };
+  }
+
+  function makeValidatePhase(opts: {
+    name?: string;
+    failedScenarios?: string[];
+    totalScenarios?: number;
+    iterByCall?: { failed: string[]; total: number }[];
+  }) {
+    let call = 0;
+    const phaseName = opts.name ?? 'validate';
+    return definePhase(phaseName, async (ctx) => {
+      try {
+        ctx.contextStore.register('factory-validate-report', z.unknown());
+      } catch {
+        // already registered
+      }
+      const conf = opts.iterByCall?.[call] ?? {
+        failed: opts.failedScenarios ?? [],
+        total: opts.totalScenarios ?? opts.failedScenarios?.length ?? 0,
+      };
+      call++;
+      const failed = conf.failed;
+      const total = conf.total;
+      const passCount = Math.max(0, total - failed.length);
+      const scenarios: { scenarioId: string; status: string }[] = [];
+      for (let i = 0; i < passCount; i++) {
+        scenarios.push({ scenarioId: `S-pass-${i}`, status: 'pass' });
+      }
+      for (const id of failed) scenarios.push({ scenarioId: id, status: 'fail' });
+      const status = failed.length === 0 ? 'pass' : 'fail';
+      const id = await ctx.contextStore.put(
+        'factory-validate-report',
+        {
+          specId: ctx.spec.frontmatter.id,
+          startedAt: new Date().toISOString(),
+          durationMs: 1,
+          scenarios,
+          summary: { pass: passCount, fail: failed.length, error: 0, skipped: 0 },
+          status,
+        },
+        { parents: [ctx.runId] },
+      );
+      const rec = await ctx.contextStore.get(id);
+      if (rec === null) throw new Error('vanished');
+      return { status, records: [rec] };
+    });
+  }
+
+  function makeDodPhase(opts: { status?: 'pass' | 'fail'; failedGates?: string[] }) {
+    return definePhase('dod', async (ctx) => {
+      try {
+        ctx.contextStore.register('factory-dod-report', z.unknown());
+      } catch {
+        // already registered
+      }
+      const failed = opts.failedGates ?? [];
+      const status: 'pass' | 'fail' = opts.status ?? (failed.length === 0 ? 'pass' : 'fail');
+      const bullets: {
+        kind: 'shell';
+        bullet: string;
+        status: 'pass' | 'fail';
+        command: string;
+        durationMs: number;
+      }[] = [];
+      if (status === 'pass' && failed.length === 0) {
+        bullets.push({
+          kind: 'shell',
+          bullet: '- `pass`',
+          status: 'pass',
+          command: 'pass',
+          durationMs: 1,
+        });
+      }
+      for (const cmd of failed) {
+        bullets.push({
+          kind: 'shell',
+          bullet: `- \`${cmd}\``,
+          status: 'fail',
+          command: cmd,
+          durationMs: 1,
+        });
+      }
+      const id = await ctx.contextStore.put(
+        'factory-dod-report',
+        {
+          specId: ctx.spec.frontmatter.id,
+          iteration: ctx.iteration,
+          startedAt: new Date().toISOString(),
+          durationMs: 1,
+          bullets,
+          summary: {
+            pass: bullets.filter((b) => b.status === 'pass').length,
+            fail: bullets.filter((b) => b.status === 'fail').length,
+            error: 0,
+            skipped: 0,
+          },
+          status,
+        },
+        { parents: [ctx.runId] },
+      );
+      const rec = await ctx.contextStore.get(id);
+      if (rec === null) throw new Error('vanished');
+      return { status, records: [rec] };
+    });
+  }
+
+  function makeImplementPhase() {
+    return definePhase('implement', async (ctx) => {
+      try {
+        ctx.contextStore.register('factory-implement-report', z.unknown());
+      } catch {
+        // already registered
+      }
+      const id = await ctx.contextStore.put(
+        'factory-implement-report',
+        {
+          specId: ctx.spec.frontmatter.id,
+          iteration: ctx.iteration,
+          startedAt: new Date().toISOString(),
+          durationMs: 1,
+          cwd: '/tmp',
+          prompt: 'p',
+          allowedTools: 'Read',
+          claudePath: 'claude',
+          status: 'pass',
+          exitCode: 0,
+          result: '',
+          filesChanged: [{ path: 'a.ts', diff: '+a' }],
+          toolsUsed: [],
+          tokens: { input: 100, output: 50, charged: 150, total: 150 },
+        },
+        { parents: [ctx.runId] },
+      );
+      const rec = await ctx.contextStore.get(id);
+      if (rec === null) throw new Error('vanished');
+      return { status: 'pass', records: [rec] };
+    });
+  }
+
+  test('iter N+1 start emits cause-of-iteration line built from prior validate + dod reports', async () => {
+    const store = createContextStore({ dir });
+    const cap = captureLog();
+    // Iter 1: validate fails [S-2], dod passes. Iter 2: validate passes (converges).
+    const validate = makeValidatePhase({
+      iterByCall: [
+        { failed: ['S-2'], total: 3 },
+        { failed: [], total: 3 },
+      ],
+    });
+    const dod = makeDodPhase({ status: 'pass' });
+    const graph = definePhaseGraph([validate, dod], [['validate', 'dod']]);
+    const report = await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 3, log: cap.log },
+    });
+    expect(report.iterationCount).toBeGreaterThanOrEqual(2);
+    const causeLine = cap.lines.find((l) =>
+      l.startsWith('[runtime] iter 2 implement (start) — retrying:'),
+    );
+    expect(causeLine).toBeDefined();
+    expect(causeLine).toContain('1 failed scenario (S-2)');
+    expect(causeLine).toContain('0 failed dod gates');
+  });
+
+  test('cause-of-iteration falls back to implement-failed message when validate did not run in prior iter', async () => {
+    const store = createContextStore({ dir });
+    const cap = captureLog();
+    let calls = 0;
+    // A single root phase that emits a factory-implement-report and fails;
+    // validate does not run (no validate in graph).
+    const onlyPhase = definePhase('implement', async (ctx) => {
+      try {
+        ctx.contextStore.register('factory-implement-report', z.unknown());
+      } catch {
+        // already registered
+      }
+      calls++;
+      const id = await ctx.contextStore.put(
+        'factory-implement-report',
+        {
+          specId: ctx.spec.frontmatter.id,
+          iteration: ctx.iteration,
+          startedAt: new Date().toISOString(),
+          durationMs: 1,
+          cwd: '/tmp',
+          prompt: 'p',
+          allowedTools: 'Read',
+          claudePath: 'claude',
+          status: 'fail',
+          exitCode: 0,
+          result: '',
+          filesChanged: [],
+          toolsUsed: [],
+          tokens: { input: 1, output: 1, charged: 2, total: 2 },
+        },
+        { parents: [ctx.runId] },
+      );
+      const rec = await ctx.contextStore.get(id);
+      if (rec === null) throw new Error('vanished');
+      return { status: calls < 2 ? 'fail' : 'pass', records: [rec] };
+    });
+    const graph = definePhaseGraph([onlyPhase], []);
+    await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 3, log: cap.log },
+    });
+    const causeLine = cap.lines.find((l) =>
+      l.startsWith('[runtime] iter 2 implement (start) — retrying:'),
+    );
+    expect(causeLine).toBeDefined();
+    expect(causeLine).toContain('prior implement phase failed');
+    expect(causeLine).toContain('factory-implement-report ');
+  });
+
+  test('phase boundaries emit start + end stderr lines with timing and counts', async () => {
+    const store = createContextStore({ dir });
+    const cap = captureLog();
+    const implement = makeImplementPhase();
+    const validate = makeValidatePhase({ failedScenarios: [], totalScenarios: 2 });
+    const dod = makeDodPhase({ status: 'pass' });
+    const graph = definePhaseGraph(
+      [implement, validate, dod],
+      [
+        ['implement', 'validate'],
+        ['validate', 'dod'],
+      ],
+    );
+    const report = await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 1, log: cap.log },
+    });
+    expect(report.status).toBe('converged');
+
+    // Six lines: start + end for each of implement, validate, dod.
+    const startLines = cap.lines.filter((l) => /^\[runtime\] iter 1 \w+ \(start\) —/.test(l));
+    expect(startLines.length).toBe(3);
+
+    const endRe = /^\[runtime\] iter 1 \w+ \(\d+s, \d+ charged tokens/;
+    const endLines = cap.lines.filter((l) => endRe.test(l));
+    expect(endLines.length).toBe(3);
+
+    expect(
+      cap.lines.some((l) => l.includes('iter 1 implement (start)') && l.includes('runId=')),
+    ).toBe(true);
+    expect(
+      cap.lines.some((l) =>
+        /\[runtime\] iter 1 implement \(\d+s, \d+ charged tokens, 1 files changed\)/.test(l),
+      ),
+    ).toBe(true);
+    expect(
+      cap.lines.some((l) =>
+        /\[runtime\] iter 1 validate \(\d+s, \d+ charged tokens, 2\/2 scenarios pass\)/.test(l),
+      ),
+    ).toBe(true);
+    expect(
+      cap.lines.some((l) =>
+        /\[runtime\] iter 1 dod \(\d+s, \d+ charged tokens, 1\/1 dod gates pass\)/.test(l),
+      ),
+    ).toBe(true);
+  });
+
+  test('--quiet (RunOptions.quiet=true) suppresses ALL [runtime] progress + cause-of-iteration + warning', async () => {
+    const store = createContextStore({ dir });
+    const cap = captureLog();
+    // Build a graph that would trigger a cause-of-iteration line AND warning
+    // (DoD pass + identical validate fails twice).
+    const validate = makeValidatePhase({
+      iterByCall: [
+        { failed: ['S-2', 'S-5'], total: 5 },
+        { failed: ['S-2', 'S-5'], total: 5 },
+        { failed: [], total: 5 },
+      ],
+    });
+    const dod = makeDodPhase({ status: 'pass' });
+    const graph = definePhaseGraph([validate, dod], [['validate', 'dod']]);
+    await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 3, log: cap.log, quiet: true },
+    });
+    const runtimeLines = cap.lines.filter((l) => l.startsWith('[runtime]'));
+    expect(runtimeLines).toEqual([]);
+  });
+
+  test('monotonic DoD-pass + identical validate-fail emits warning once at iter N+1 start', async () => {
+    const store = createContextStore({ dir });
+    const cap = captureLog();
+    const validate = makeValidatePhase({
+      iterByCall: [
+        { failed: ['S-2', 'S-5'], total: 5 },
+        { failed: ['S-2', 'S-5'], total: 5 },
+        { failed: ['S-2', 'S-5'], total: 5 },
+      ],
+    });
+    const dod = makeDodPhase({ status: 'pass' });
+    const graph = definePhaseGraph([validate, dod], [['validate', 'dod']]);
+    await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 3, log: cap.log },
+    });
+    const warningLines = cap.lines.filter((l) => l.startsWith('[runtime] WARNING:'));
+    expect(warningLines.length).toBe(1);
+    const w = warningLines[0];
+    expect(w).toContain('DoD passing + validate fails identical across iter 1/2');
+    expect(w).toContain('S-2, S-5');
+    expect(w).toContain('--prefer-dod');
+  });
+
+  test('post-convergence stdout hint references factory finish-task <spec-id>', async () => {
+    const store = createContextStore({ dir });
+    const stdoutLines: string[] = [];
+    const phase = definePhase('p', async () => ({ status: 'pass', records: [] }));
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({
+      spec: makeSpec('my-spec-id'),
+      graph,
+      contextStore: store,
+      options: {
+        stdoutLog: (line: string) => stdoutLines.push(line),
+      },
+    });
+    expect(report.status).toBe('converged');
+    const hint = stdoutLines.find((l) => l.includes('factory finish-task'));
+    expect(hint).toBeDefined();
+    expect(hint).toContain('my-spec-id converged');
+    expect(hint).toContain("'factory finish-task my-spec-id'");
+  });
+
+  test('post-convergence hint NOT emitted on no-converge or error', async () => {
+    const store = createContextStore({ dir });
+    const stdoutLines: string[] = [];
+    const phase = definePhase('p', async () => ({ status: 'fail', records: [] }));
+    const graph = definePhaseGraph([phase], []);
+    const report = await run({
+      spec: makeSpec('flaky'),
+      graph,
+      contextStore: store,
+      options: {
+        maxIterations: 1,
+        stdoutLog: (line: string) => stdoutLines.push(line),
+      },
+    });
+    expect(report.status).toBe('no-converge');
+    expect(stdoutLines.find((l) => l.includes('factory finish-task'))).toBeUndefined();
+  });
+
+  test('no warning when failed-scenario set differs between iterations', async () => {
+    const store = createContextStore({ dir });
+    const cap = captureLog();
+    const validate = makeValidatePhase({
+      iterByCall: [
+        { failed: ['S-2'], total: 5 },
+        { failed: ['S-3'], total: 5 },
+        { failed: [], total: 5 },
+      ],
+    });
+    const dod = makeDodPhase({ status: 'pass' });
+    const graph = definePhaseGraph([validate, dod], [['validate', 'dod']]);
+    await run({
+      spec: makeSpec(),
+      graph,
+      contextStore: store,
+      options: { maxIterations: 3, log: cap.log },
+    });
+    const warningLines = cap.lines.filter((l) => l.startsWith('[runtime] WARNING:'));
+    expect(warningLines.length).toBe(0);
+  });
+});

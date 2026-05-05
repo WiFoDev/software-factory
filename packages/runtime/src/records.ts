@@ -90,7 +90,30 @@ export const FactoryImplementReportSchema = z.object({
   // Populated only on status='fail' (mirrors `result` when the agent self-
   // reports failure) or status='error' (the cost-cap-exceeded line, which
   // overwrites any prior failureDetail). Independent of `result`.
-  failureDetail: z.string().optional(),
+  // v0.0.12 — accepts either a string (legacy + cost-cap/self-fail paths) or
+  // an object form `{ message, stderrTail? }` written by the agent-exit-nonzero
+  // path so callers can inspect the last 10 KB of agent stderr without
+  // re-running. Older string-shaped records remain valid.
+  failureDetail: z
+    .union([
+      z.string(),
+      z.object({
+        message: z.string(),
+        stderrTail: z.string().optional(),
+      }),
+    ])
+    .optional(),
+  // v0.0.12 — telemetry side-channel for the v0.0.6 `filesChanged` snapshot.
+  // Persists the raw pre + post relative-path lists alongside the computed
+  // `filesChanged` so under-attribution bugs (e.g. v0.0.11 short-url BASELINE
+  // friction #3) reproduce trivially from the persisted record. Optional —
+  // v0.0.11 records remain valid.
+  filesChangedDebug: z
+    .object({
+      preSnapshot: z.array(z.string()),
+      postSnapshot: z.array(z.string()),
+    })
+    .optional(),
   // v0.0.3: id of the prior iteration's factory-validate-report when this
   // implement runs as iteration ≥ 2 in an [implement → validate] graph.
   // Undefined on iteration 1 or when ctx.inputs has no validate-report.
@@ -111,11 +134,12 @@ export const FactoryDodReportSchema = z.object({
     z.object({
       kind: z.enum(['shell', 'judge']),
       bullet: z.string(),
-      status: z.enum(['pass', 'fail', 'error']),
+      status: z.enum(['pass', 'fail', 'error', 'skipped']),
       command: z.string().optional(),
       exitCode: z.number().int().nullable().optional(),
       stderrTail: z.string().optional(),
       judgeReasoning: z.string().optional(),
+      reason: z.string().optional(),
       durationMs: z.number().int().nonnegative(),
     }),
   ),

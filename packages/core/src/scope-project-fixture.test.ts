@@ -92,4 +92,20 @@ describe('scope-project URL-shortener fixture', () => {
       }
     }
   });
+
+  test('url-shortener fixtures HTTP spec contains a smoke-boot scenario', () => {
+    // url-shortener-redirect is the HTTP-introducing spec — it should ship a
+    // smoke-boot scenario matching the canonical shape from the slash command's
+    // worked example.
+    const httpSpecPath = resolve(FIXTURE_DIR, 'url-shortener-redirect.md');
+    expect(existsSync(httpSpecPath)).toBe(true);
+    const source = readFileSync(httpSpecPath, 'utf8');
+    expect(source).toContain('boots the production entrypoint on the configured port');
+    expect(source).toContain(
+      'test: src/main.test.ts "boots the production entrypoint on the configured port"',
+    );
+    // The smoke-boot scenario triggers off the `createServer` / `Bun.serve` patterns
+    // present in the redirect spec.
+    expect(source).toMatch(/createServer/);
+  });
 });

@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { CliIo } from './cli.js';
 import {
@@ -15,6 +15,22 @@ import {
 // npm package-name basics — lowercase alphanumerics, dashes, underscores.
 // Must start with alphanumeric. Matches what npm allows for unscoped names.
 const NAME_RE = /^[a-z0-9][a-z0-9-_]*$/;
+
+// v0.0.12 — `--adopt` mode skips these top-level files when they already exist
+// (rather than refusing to run). `.gitignore` is special-cased: appended, not
+// skipped, so factory entries land alongside whatever the host repo had.
+const IGNORE_IF_PRESENT = new Set([
+  'package.json',
+  'tsconfig.json',
+  'biome.json',
+  'bunfig.toml',
+  '.gitignore',
+  'README.md',
+]);
+
+// Entries that `--adopt` ensures are present in the host's .gitignore. Idempotent:
+// each entry only appends if not already a literal line in the existing file.
+const GITIGNORE_FACTORY_ENTRIES = ['.factory', '.factory-spec-review-cache'];
 
 interface PlannedFile {
   relPath: string;
@@ -46,12 +62,27 @@ function planFiles(name: string): PlannedFile[] {
   ];
 }
 
+function appendGitignoreEntries(absPath: string): string[] {
+  const existing = existsSync(absPath) ? readFileSync(absPath, 'utf8') : '';
+  const lines = existing.split('\n').map((line) => line.trim());
+  const present = new Set(lines);
+  const toAdd = GITIGNORE_FACTORY_ENTRIES.filter((entry) => !present.has(entry));
+  if (toAdd.length === 0) return [];
+  const needsLeadingNewline = existing.length > 0 && !existing.endsWith('\n');
+  const appended = `${needsLeadingNewline ? '\n' : ''}${toAdd.join('\n')}\n`;
+  writeFileSync(absPath, existing + appended);
+  return toAdd;
+}
+
 export function runInit(args: string[], io: CliIo): void {
   let parsed: ReturnType<typeof parseArgs>;
   try {
     parsed = parseArgs({
       args,
-      options: { name: { type: 'string' } },
+      options: {
+        name: { type: 'string' },
+        adopt: { type: 'boolean' },
+      },
       allowPositionals: false,
       strict: true,
     });
@@ -86,7 +117,13 @@ export function runInit(args: string[], io: CliIo): void {
     name = NAME_RE.test(raw) ? raw : 'project';
   }
 
+  const adopt = parsed.values.adopt === true;
   const files = planFiles(name);
+
+  if (adopt) {
+    runAdopt(cwd, files, io);
+    return;
+  }
 
   // Atomic check: collect every preexisting target before any write. Fail fast
   // if any exists (no --force in v0.0.4; preserves user files unconditionally).
@@ -139,6 +176,88 @@ export function runInit(args: string[], io: CliIo): void {
       '  pnpm install',
       '  pnpm exec factory spec lint docs/specs/',
       '  # write your first spec under docs/specs/<id>.md (or use /scope-task)',
+      '',
+    ].join('\n'),
+  );
+  io.exit(0);
+}
+
+function runAdopt(cwd: string, files: PlannedFile[], io: CliIo): void {
+  const skipped: string[] = [];
+  const created: string[] = [];
+
+  for (const file of files) {
+    const abs = resolve(cwd, file.relPath);
+
+    if (file.relPath === '.gitignore') {
+      if (existsSync(abs)) {
+        const added = appendGitignoreEntries(abs);
+        if (added.length > 0) {
+          io.stdout(`append: .gitignore (added ${added.join(', ')})\n`);
+        } else {
+          io.stdout('skip: .gitignore (factory entries already present)\n');
+        }
+      } else {
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs, file.contents);
+        created.push(file.relPath);
+      }
+      continue;
+    }
+
+    if (IGNORE_IF_PRESENT.has(file.relPath) && existsSync(abs)) {
+      io.stdout(`skip: ${file.relPath} (already present)\n`);
+      skipped.push(file.relPath);
+      continue;
+    }
+
+    if (file.relPath.endsWith('/.gitkeep')) {
+      // The dir itself is what we care about. If it (or its parent dir we
+      // own) exists we still want to ensure the leaf dir is present, but we
+      // don't overwrite an existing .gitkeep.
+      const dir = dirname(abs);
+      if (existsSync(dir)) {
+        // Log the directory skip once at the top-level (e.g. docs/specs/, src/).
+        const dirRel = dirname(file.relPath);
+        if (!skipped.includes(`${dirRel}/`)) {
+          io.stdout(`skip: ${dirRel}/ (already present)\n`);
+          skipped.push(`${dirRel}/`);
+        }
+        if (!existsSync(abs)) {
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(abs, file.contents);
+          created.push(file.relPath);
+        }
+        continue;
+      }
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(abs, file.contents);
+      created.push(file.relPath);
+      continue;
+    }
+
+    if (existsSync(abs)) {
+      io.stdout(`skip: ${file.relPath} (already present)\n`);
+      skipped.push(file.relPath);
+      continue;
+    }
+
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, file.contents);
+    created.push(file.relPath);
+  }
+
+  if (created.length > 0) {
+    io.stdout('Created:\n');
+    for (const path of created) io.stdout(`  ${path}\n`);
+  }
+  io.stdout(
+    [
+      '',
+      'Adopted into existing repo. Next steps:',
+      '  # Add factory devDeps yourself (this command does not mutate your package.json):',
+      '  #   pnpm add -D @wifo/factory-core @wifo/factory-spec-review',
+      '  pnpm exec factory spec lint docs/specs/',
       '',
     ].join('\n'),
   );

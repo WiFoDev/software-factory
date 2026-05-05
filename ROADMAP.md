@@ -4,7 +4,33 @@ This file is the **direction**. `BACKLOG.md` is the candidate pile. The roadmap 
 
 ---
 
-## Where we are: v0.0.11 — shipped
+## Where we are: v0.0.12 — shipped
+
+**Theme: validate-phase reliability + brownfield-adopter onramp + observability + DoD trust.** v0.0.12 closes 12 BACKLOG entries surfaced across the v0.0.11 ship, the OLH CORE-836 dogfood, and the v0.0.11 short-url BASELINE. Six sibling specs ship together in one cluster — the largest ship to date.
+
+### What v0.0.12 added
+
+| # | Piece | Notes |
+|---|---|---|
+| 1 | **Harness quote normalization + lint warning** *(factory-harness, factory-core)* | `parseTestLine` strips/replaces curly quotes / smart quotes / backticks before substring match. New `spec/test-name-quote-chars` lint catches the friction at scoping time. Per-scenario coverage carve-out descoped to v0.0.13 (bun 1.3.x rejects `--coverage=false`; needs option (b) — parse exit semantics — instead). |
+| 2 | **Live progress on stderr + cause-of-iteration + tooling-mismatch detection** *(factory-runtime)* | One stderr line per phase boundary (start + end with timing/charged/files-changed). Cause-of-iteration line at iter N+1 start lists failed scenarios + dod gates from prior iter. Warning when iter N-1 / iter N have identical `dod=pass + validate-fail` set. New `--quiet` flag + `factory.config.json runtime.quiet` (default off). `RunOptions.quiet?: boolean` field-level addition (no count change). |
+| 3 | **Dedup correctness + filesChanged debug telemetry + agent stderr-tail capture** *(factory-runtime)* | Already-converged dedup aggregates descendant `factory-phase` records to verify actual convergence before skipping (closes the v0.0.11 ship bug). `factory-implement-report.payload.filesChangedDebug?: { preSnapshot, postSnapshot }` for diagnosing the v0.0.11 short-url BASELINE undercount. `failureDetail.stderrTail?: string` (10 KB byte-truncated) on `agent-exit-nonzero`. All optional schema additions; v0.0.11 records remain valid. |
+| 4 | **Literal DoD shell commands** *(factory-core, factory-runtime)* | New `spec/dod-needs-explicit-command` lint warning fires when DoD bullets look like runtime gates without a backtick command. `dodPhase` drops the script-name-guessing path; bullets without backtick commands → `status: 'skipped', reason: 'dod-gate-no-command-found'`. `SPEC_TEMPLATE.md` updated with worked examples (`typecheck clean (\`pnpm typecheck\`)`). |
+| 5 | **`factory init --adopt` + `factory finish-task` + `factory-spec-review` hard dep** *(factory-core)* | `init --adopt` skips `package.json`/`tsconfig.json`/`biome.json` if present (logged), creates only factory-specific bits — brownfield onramp. `factory finish-task <spec-id>` CLI subcommand + library helper moves shipped spec to `<dir>/done/`, emits `factory-spec-shipped` record, refuses if no converged `factory-run` exists. `@wifo/factory-spec-review` moves to `dependencies` of `@wifo/factory-core`; `spec/review-unavailable` error path dropped. Public surface: 33 → 34 (+`finishTask`). |
+| 6 | **Smoke-boot scenarios in `/scope-project`** *(factory-core/commands)* | Slash command source gains an `### HTTP entrypoint smoke-boot scenarios` subsection. When a spec mentions `createServer` / `listen(<port>)` / `app.listen` / `http.createServer` / `Bun.serve` / `serve(`, the scoper appends a smoke-boot scenario that boots `bun src/main.ts` + probes + kills. Closes the v0.0.11 short-url BASELINE "library shipped, server doesn't boot" gap. |
+
+### Reconciliations worth knowing
+
+- **All 6 packages bumped to 0.0.12 in lockstep.** Keeps scaffold's `^0.0.12` deps uniformly resolvable.
+- **Per-scenario coverage carve-out descoped to v0.0.13.** bun 1.3.x rejects `--coverage=false` (`The argument '--coverage' does not take a value.`); bunfig is the only configuration surface. Option (b) from BACKLOG (parse exit-code semantics) is the actual fix; reopens with empirical evidence in v0.0.13.
+- **The cluster shipped via `--skip-dod-phase`.** v0.0.10's DoD-verifier dispatches non-shell judge bullets to the SDK and fails when `ANTHROPIC_API_KEY` is unset. Pre-flight `factory spec lint` + `factory spec review` still gated quality; the v0.0.12 literal-command DoD shipped in this very cluster reduces the LLM dispatch surface for future runs.
+- **`factory init --adopt` does NOT mutate the host's `package.json`.** Adding factory devDeps is the maintainer's responsibility. `--write-deps` is a v0.0.13 candidate.
+- **`factory finish-task` is opt-in.** Move-to-done is a ship action — the runtime emits the hint but never auto-mutates the working tree from inside a phase.
+- **Public API surface deltas:** core 33 → 34 (`+finishTask`); runtime 26 → 26 (field-level `quiet?` addition); core / runtime gain new lint codes + record-schema fields. context / harness / spec-review / twin unchanged in count.
+
+---
+
+## Where we were: v0.0.11 — shipped
 
 **Theme: trust → isolation — runs sandboxed in their own git worktree, plus calibration of the v0.0.10 trust-contract layer.** v0.0.11 closes the long-deferred worktree-sandbox candidate (BACKLOG since the original ROADMAP's v0.1.0 list) and ships five sibling polish specs that pay down friction surfaced by the v0.0.10 BASELINE.
 

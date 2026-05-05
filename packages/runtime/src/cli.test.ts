@@ -1500,6 +1500,87 @@ describe('factory-runtime worktree CLI (v0.0.11) — S-2 + H-3', () => {
   });
 });
 
+// ----- v0.0.12 — --quiet + factory.config.json runtime.quiet (S-2) ------
+
+describe('factory-runtime CLI — v0.0.12 --quiet (S-2)', () => {
+  test('--quiet suppresses progress; existing stdout unchanged', async () => {
+    // Baseline: without --quiet, [runtime] progress lines land on stderr; the
+    // converged stdout summary is unaffected.
+    const ctxA = mkdtempSync(join(tmpdir(), 'runtime-cli-quiet-on-'));
+    const capOn = makeIo();
+    try {
+      await invoke(
+        [
+          'run',
+          ALL_PASS,
+          '--no-judge',
+          '--no-implement',
+          '--skip-dod-phase',
+          '--quiet',
+          '--context-dir',
+          ctxA,
+        ],
+        capOn.io,
+      );
+      expect(capOn.exitCode()).toBe(0);
+      // stdout's converged summary line is unchanged.
+      expect(capOn.stdout()).toMatch(
+        /^factory-runtime: converged in 1 iteration\(s\) \(run=[0-9a-f]{16},/,
+      );
+      // No [runtime] progress lines on stderr.
+      expect(capOn.stderr()).not.toContain('[runtime] iter');
+    } finally {
+      await Bun.$`rm -rf ${ctxA}`.quiet().nothrow();
+    }
+
+    // Without --quiet, progress lines appear on stderr.
+    const ctxB = mkdtempSync(join(tmpdir(), 'runtime-cli-quiet-off-'));
+    const capOff = makeIo();
+    try {
+      await invoke(
+        [
+          'run',
+          ALL_PASS,
+          '--no-judge',
+          '--no-implement',
+          '--skip-dod-phase',
+          '--context-dir',
+          ctxB,
+        ],
+        capOff.io,
+      );
+      expect(capOff.exitCode()).toBe(0);
+      expect(capOff.stderr()).toContain('[runtime] iter 1 validate (start)');
+    } finally {
+      await Bun.$`rm -rf ${ctxB}`.quiet().nothrow();
+    }
+  });
+
+  test('factory.config.json runtime.quiet: true matches --quiet flag behavior', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'runtime-cli-quiet-config-'));
+    await Bun.write(join(work, 'all-pass.md'), await Bun.file(ALL_PASS).text());
+    await Bun.write(
+      join(work, 'trivial-pass.test.ts'),
+      await Bun.file(join(RUNTIME_ROOT, 'test-fixtures/trivial-pass.test.ts')).text(),
+    );
+    writeFileSync(join(work, 'factory.config.json'), JSON.stringify({ runtime: { quiet: true } }));
+    const prevCwd = process.cwd();
+    process.chdir(work);
+    try {
+      const cap = makeIo();
+      await invoke(
+        ['run', 'all-pass.md', '--no-judge', '--no-implement', '--context-dir', ctxDir],
+        cap.io,
+      );
+      expect(cap.exitCode()).toBe(0);
+      expect(cap.stderr()).not.toContain('[runtime] iter');
+    } finally {
+      process.chdir(prevCwd);
+      await Bun.$`rm -rf ${work}`.quiet().nothrow();
+    }
+  });
+});
+
 describe('factory-runtime CLI — v0.0.11 --check-holdouts (S-3)', () => {
   test('factory.config.json runtime.checkHoldouts=true runs holdouts even without --check-holdouts flag', async () => {
     const work = await setupHoldoutsWorkdir('runtime-cli-checkholdouts-config-');

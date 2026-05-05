@@ -31,6 +31,7 @@ Flags (run + run-sequence):
   --skip-dod-phase                 Drop the DoD-verifier phase (v0.0.10; restores v0.0.9 graph)
   --check-holdouts                 Run holdouts each iteration; both visible AND holdouts must pass (v0.0.11; default off)
   --worktree                       Run inside an isolated git worktree at .factory/worktrees/<runId>/ (v0.0.11; default off)
+  --quiet                          Suppress [runtime] stderr progress lines (v0.0.12; default off)
   --max-prompt-tokens <n>          Per-phase cap on agent input tokens (default: 100000)
   --claude-bin <path>              Path to the claude executable (default: 'claude' on PATH)
   --twin-mode <record|replay|off>  Twin recording mode (default: record)
@@ -70,6 +71,8 @@ const FactoryConfigRuntimeSchema = z
     skipDodPhase: z.boolean().optional(),
     // v0.0.11 — holdout-aware convergence opt-in
     checkHoldouts: z.boolean().optional(),
+    // v0.0.12 — suppress runtime progress lines on stderr
+    quiet: z.boolean().optional(),
   })
   .partial();
 
@@ -146,6 +149,7 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
         'skip-dod-phase': { type: 'boolean' },
         'check-holdouts': { type: 'boolean' },
         worktree: { type: 'boolean' },
+        quiet: { type: 'boolean' },
         'max-prompt-tokens': { type: 'string' },
         'max-agent-timeout-ms': { type: 'string' },
         'claude-bin': { type: 'string' },
@@ -331,6 +335,9 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
   const checkHoldouts = checkHoldoutsFromCli || fileRuntime?.checkHoldouts === true;
   // v0.0.11 — --worktree opts the run into the isolated-worktree sandbox.
   const useWorktree = parsed.values.worktree === true;
+  // v0.0.12 — --quiet: CLI flag wins over config; built-in default false.
+  const quietFromCli = parsed.values.quiet === true;
+  const quiet = quietFromCli || fileRuntime?.quiet === true;
 
   // --twin-mode: validate set membership (record|replay|off). The 'off'
   // value drives `opts.twin = 'off'`; others drive `opts.twin = { mode, ... }`.
@@ -435,6 +442,8 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
         ...(maxAgentTimeoutMs !== undefined ? { maxAgentTimeoutMs } : {}),
         ...(checkHoldouts ? { checkHoldouts: true } : {}),
         ...(useWorktree ? { worktree: true } : {}),
+        ...(quiet ? { quiet: true } : {}),
+        log: (line: string) => io.stderr(`${line}\n`),
       },
     });
   } catch (err) {

@@ -255,6 +255,42 @@ describe('FactoryImplementReportSchema', () => {
     const legacy = FactoryImplementReportSchema.safeParse(baseValid);
     expect(legacy.success).toBe(true);
   });
+
+  test('FactoryImplementReportSchema accepts records with and without filesChangedDebug', () => {
+    // v0.0.11-shaped record: no filesChangedDebug → still parses (regression-pin
+    // for the v0.0.12 backward-compat constraint).
+    const legacy = FactoryImplementReportSchema.safeParse(baseValid);
+    expect(legacy.success).toBe(true);
+
+    // v0.0.12-shaped record: filesChangedDebug present.
+    const v012 = FactoryImplementReportSchema.safeParse({
+      ...baseValid,
+      filesChangedDebug: {
+        preSnapshot: ['src/foo.ts', 'src/bar.ts'],
+        postSnapshot: ['src/foo.ts', 'src/bar.ts', 'src/baz.ts'],
+      },
+    });
+    expect(v012.success).toBe(true);
+
+    // failureDetail accepts the legacy string form.
+    const stringFailureDetail = FactoryImplementReportSchema.safeParse({
+      ...baseValid,
+      status: 'fail' as const,
+      failureDetail: 'I could not complete the task',
+    });
+    expect(stringFailureDetail.success).toBe(true);
+
+    // failureDetail accepts the v0.0.12 object form with stderrTail.
+    const objectFailureDetail = FactoryImplementReportSchema.safeParse({
+      ...baseValid,
+      status: 'error' as const,
+      failureDetail: {
+        message: 'agent-exit-nonzero (code=1): claude: authentication failed',
+        stderrTail: 'claude: authentication failed\n',
+      },
+    });
+    expect(objectFailureDetail.success).toBe(true);
+  });
 });
 
 describe('tryRegister', () => {

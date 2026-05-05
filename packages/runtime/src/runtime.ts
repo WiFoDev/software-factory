@@ -48,6 +48,165 @@ function sumImplementTokens(records: ContextRecord[]): number {
   return sum;
 }
 
+interface ScenarioRow {
+  scenarioId?: string;
+  status?: string;
+}
+
+interface DodBulletRow {
+  bullet?: string;
+  command?: string;
+  status?: string;
+}
+
+function truncateList(ids: string[], max = 5): string {
+  if (ids.length <= max) return ids.join(', ');
+  return `${ids.slice(0, max).join(', ')}, ...`;
+}
+
+function getFailedScenarios(records: ContextRecord[]): string[] {
+  const validateReport = records.find((r) => r.type === 'factory-validate-report');
+  if (validateReport === undefined) return [];
+  const scenarios =
+    (validateReport.payload as { scenarios?: ScenarioRow[] } | null | undefined)?.scenarios ?? [];
+  const failed: string[] = [];
+  for (const s of scenarios) {
+    if (s.status === 'fail' || s.status === 'error') {
+      if (typeof s.scenarioId === 'string') failed.push(s.scenarioId);
+    }
+  }
+  return failed;
+}
+
+function getFailedDodGates(records: ContextRecord[]): string[] {
+  const dodReport = records.find((r) => r.type === 'factory-dod-report');
+  if (dodReport === undefined) return [];
+  const bullets =
+    (dodReport.payload as { bullets?: DodBulletRow[] } | null | undefined)?.bullets ?? [];
+  const failed: string[] = [];
+  for (const b of bullets) {
+    if (b.status === 'fail' || b.status === 'error') {
+      const label = typeof b.command === 'string' ? b.command : (b.bullet ?? '<bullet>');
+      failed.push(label);
+    }
+  }
+  return failed;
+}
+
+function getDodStatus(records: ContextRecord[]): 'pass' | 'fail' | 'error' | 'absent' {
+  const dodReport = records.find((r) => r.type === 'factory-dod-report');
+  if (dodReport === undefined) return 'absent';
+  const status = (dodReport.payload as { status?: string } | null | undefined)?.status;
+  if (status === 'pass' || status === 'fail' || status === 'error') return status;
+  return 'absent';
+}
+
+function buildCauseOfIteration(iter: number, priorOutputs: ContextRecord[]): string {
+  const failedScenarios = getFailedScenarios(priorOutputs);
+  const failedGates = getFailedDodGates(priorOutputs);
+
+  if (failedScenarios.length === 0 && failedGates.length === 0) {
+    const implementReport = priorOutputs.find((r) => r.type === 'factory-implement-report');
+    const ref =
+      implementReport !== undefined
+        ? `factory-implement-report ${implementReport.id}`
+        : 'factory-implement-report <none>';
+    return `[runtime] iter ${iter} implement (start) — retrying: prior implement phase failed (see ${ref})`;
+  }
+
+  const scenarioPart =
+    failedScenarios.length === 1
+      ? `1 failed scenario (${truncateList(failedScenarios)})`
+      : `${failedScenarios.length} failed scenarios${
+          failedScenarios.length === 0 ? '' : ` (${truncateList(failedScenarios)})`
+        }`;
+
+  const gatePart =
+    failedGates.length === 1
+      ? `1 failed dod gate (${truncateList(failedGates)})`
+      : `${failedGates.length} failed dod gates${
+          failedGates.length === 0 ? '' : ` (${truncateList(failedGates)})`
+        }`;
+
+  return `[runtime] iter ${iter} implement (start) — retrying: ${scenarioPart}; ${gatePart}`;
+}
+
+function formatPhaseStart(iter: number, phaseName: string, specId: string, runId: string): string {
+  const shortRunId = runId.slice(0, 8);
+  return `[runtime] iter ${iter} ${phaseName} (start) — spec=${specId} phase=${phaseName} runId=${shortRunId}`;
+}
+
+function formatPhaseEnd(
+  iter: number,
+  phaseName: string,
+  durationMs: number,
+  outputs: ContextRecord[],
+): string {
+  const elapsedSec = Math.round(durationMs / 1000);
+  const phaseChargedTokens = sumImplementTokens(outputs);
+  let suffix = '';
+  if (phaseName === 'implement') {
+    const implReport = outputs.find((r) => r.type === 'factory-implement-report');
+    const filesChanged = (
+      (implReport?.payload as { filesChanged?: unknown[] } | undefined)?.filesChanged ?? []
+    ).length;
+    suffix = `, ${filesChanged} files changed`;
+  } else if (phaseName === 'validate') {
+    const valReport = outputs.find((r) => r.type === 'factory-validate-report');
+    if (valReport !== undefined) {
+      const scenarios =
+        (valReport.payload as { scenarios?: ScenarioRow[] } | undefined)?.scenarios ?? [];
+      const total = scenarios.length;
+      const pass = scenarios.filter((s) => s.status === 'pass').length;
+      suffix = `, ${pass}/${total} scenarios pass`;
+    }
+  } else if (phaseName === 'dod') {
+    const dodReport = outputs.find((r) => r.type === 'factory-dod-report');
+    if (dodReport !== undefined) {
+      const bullets =
+        (dodReport.payload as { bullets?: DodBulletRow[] } | undefined)?.bullets ?? [];
+      const total = bullets.length;
+      const pass = bullets.filter((b) => b.status === 'pass').length;
+      suffix = `, ${pass}/${total} dod gates pass`;
+    }
+  }
+  return `[runtime] iter ${iter} ${phaseName} (${elapsedSec}s, ${phaseChargedTokens} charged tokens${suffix})`;
+}
+
+interface IterDiagnostic {
+  failedScenarios: string[];
+  dodStatus: 'pass' | 'fail' | 'error' | 'absent';
+}
+
+function detectToolingMismatchLoop(diagnostics: IterDiagnostic[]): {
+  mismatchDetected: boolean;
+  failedScenarios: string[];
+} {
+  if (diagnostics.length < 2) return { mismatchDetected: false, failedScenarios: [] };
+  const prev = diagnostics[diagnostics.length - 2];
+  const cur = diagnostics[diagnostics.length - 1];
+  if (prev === undefined || cur === undefined) {
+    return { mismatchDetected: false, failedScenarios: [] };
+  }
+  if (prev.dodStatus !== 'pass' || cur.dodStatus !== 'pass') {
+    return { mismatchDetected: false, failedScenarios: [] };
+  }
+  if (prev.failedScenarios.length === 0 || cur.failedScenarios.length === 0) {
+    return { mismatchDetected: false, failedScenarios: [] };
+  }
+  const prevSorted = [...prev.failedScenarios].sort();
+  const curSorted = [...cur.failedScenarios].sort();
+  if (prevSorted.length !== curSorted.length) {
+    return { mismatchDetected: false, failedScenarios: [] };
+  }
+  for (let i = 0; i < prevSorted.length; i++) {
+    if (prevSorted[i] !== curSorted[i]) {
+      return { mismatchDetected: false, failedScenarios: [] };
+    }
+  }
+  return { mismatchDetected: true, failedScenarios: cur.failedScenarios };
+}
+
 export interface RunArgs {
   spec: Spec;
   graph: PhaseGraph;
@@ -63,6 +222,10 @@ export interface RunArgs {
 
 function defaultLog(line: string): void {
   process.stderr.write(`${line}\n`);
+}
+
+function defaultStdoutLog(line: string): void {
+  process.stdout.write(`${line}\n`);
 }
 
 function aggregateIterationStatus(invocations: PhaseInvocationResult[]): PhaseStatus {
@@ -122,6 +285,11 @@ export async function run(args: RunArgs): Promise<RunReport> {
     spec.frontmatter['agent-timeout-ms'] ??
     DEFAULT_MAX_AGENT_TIMEOUT_MS;
   const log = options.log ?? defaultLog;
+  const stdoutLog = options.stdoutLog ?? defaultStdoutLog;
+  const quiet = options.quiet === true;
+  const progress = (line: string): void => {
+    if (!quiet) log(line);
+  };
 
   tryRegister(contextStore, 'factory-run', FactoryRunSchema);
   tryRegister(contextStore, 'factory-phase', FactoryPhaseSchema);
@@ -188,10 +356,36 @@ export async function run(args: RunArgs): Promise<RunReport> {
   // iteration's root phase via ctx.inputs (NOT via factory-phase.parents).
   let priorIterationTerminalOutputs: ContextRecord[] = [];
 
+  // v0.0.12 — observability: prior iter's full output set (across all phases)
+  // for cause-of-iteration, plus per-iter diagnostic for tooling-mismatch
+  // detection. Both are read-only views; nothing is persisted.
+  let priorIterAllOutputs: ContextRecord[] = [];
+  const iterDiagnostics: IterDiagnostic[] = [];
+  let mismatchWarningEmitted = false;
+
   for (let iteration = 1; iteration <= maxIterations; iteration++) {
     const invocations: PhaseInvocationResult[] = [];
     const outputsByPhase = new Map<string, ContextRecord[]>();
     let aborted = false;
+
+    // v0.0.12 — At iter ≥ 2, surface (a) why this iter is retrying, then
+    // (b) a one-shot tooling-mismatch warning when DoD passed but the same
+    // scenarios failed validate twice in a row. Both are stderr progress
+    // lines; `--quiet` (or RunOptions.quiet) suppresses them.
+    if (iteration >= 2) {
+      progress(buildCauseOfIteration(iteration, priorIterAllOutputs));
+      if (!mismatchWarningEmitted && iterDiagnostics.length >= 2) {
+        const detection = detectToolingMismatchLoop(iterDiagnostics);
+        if (detection.mismatchDetected) {
+          const prevIter = iteration - 2;
+          const curIter = iteration - 1;
+          progress(
+            `[runtime] WARNING: DoD passing + validate fails identical across iter ${prevIter}/${curIter} — likely tooling mismatch; consider --prefer-dod or inspect per-scenario harness invocation. Failed scenarios: ${detection.failedScenarios.join(', ')}`,
+          );
+          mismatchWarningEmitted = true;
+        }
+      }
+    }
 
     for (const phaseName of graph.topoOrder) {
       const phase = phaseByName.get(phaseName);
@@ -230,6 +424,7 @@ export async function run(args: RunArgs): Promise<RunReport> {
         }
       }
 
+      progress(formatPhaseStart(iteration, phaseName, spec.frontmatter.id, runId));
       const phaseT0 = performance.now();
       let status: PhaseStatus;
       let outputRecords: ContextRecord[] = [];
@@ -269,6 +464,7 @@ export async function run(args: RunArgs): Promise<RunReport> {
         failureDetail = err instanceof Error ? err.message : String(err);
       }
       const durationMs = Math.round(performance.now() - phaseT0);
+      progress(formatPhaseEnd(iteration, phaseName, durationMs, outputRecords));
 
       const phasePayload = {
         phaseName,
@@ -307,6 +503,20 @@ export async function run(args: RunArgs): Promise<RunReport> {
       priorIterationTerminalOutputs = outputsByPhase.get(terminalName) ?? [];
     }
 
+    // v0.0.12 — flatten this iter's full output set for the next iter's
+    // cause-of-iteration line; record the per-iter diagnostic for the
+    // tooling-mismatch loop detector.
+    priorIterAllOutputs = [];
+    for (const phaseName of graph.topoOrder) {
+      for (const rec of outputsByPhase.get(phaseName) ?? []) {
+        priorIterAllOutputs.push(rec);
+      }
+    }
+    iterDiagnostics.push({
+      failedScenarios: getFailedScenarios(priorIterAllOutputs),
+      dodStatus: getDodStatus(priorIterAllOutputs),
+    });
+
     const iterationStatus = aborted ? 'error' : aggregateIterationStatus(invocations);
     iterations.push({ iteration, phases: invocations, status: iterationStatus });
 
@@ -324,6 +534,17 @@ export async function run(args: RunArgs): Promise<RunReport> {
   }
 
   const durationMs = Math.round(performance.now() - t0);
+
+  // v0.0.12 — post-convergence stdout hint. Surfaces the next ship-action so
+  // the maintainer doesn't have to remember the `factory finish-task` invocation
+  // (CORE-836 friction). stdout (NOT stderr) so a `factory-runtime run | grep`
+  // pipeline picks it up; not gated on `quiet` because convergence is a
+  // lifecycle event, not progress noise.
+  if (runStatus === 'converged') {
+    stdoutLog(
+      `factory-runtime: ${spec.frontmatter.id} converged → ship via 'factory finish-task ${spec.frontmatter.id}'`,
+    );
+  }
 
   // v0.0.11 — Persist the `factory-worktree` record (parents=[runId]) once
   // we know the final run status. The CLI `worktree clean` subcommand

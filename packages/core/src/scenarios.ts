@@ -98,6 +98,7 @@ function parseBlockBody(block: ScenarioBlock): ParsedBody {
   type Section = 'none' | 'given' | 'when' | 'then' | 'satisfaction';
   let section: Section = 'none';
   let baseIndent = 0;
+  let inCodeFence = false;
 
   const setKeyword = (key: 'given' | 'when' | 'then', entry: KeywordEntry) => {
     result[key] = entry;
@@ -114,6 +115,16 @@ function parseBlockBody(block: ScenarioBlock): ParsedBody {
   };
 
   for (const { text, line } of block.bodyLines) {
+    // Worked-example fenced code blocks may contain their own Given/When/Then
+    // and Satisfaction:/test: lines that must NOT be mistaken for the
+    // scenario's actual content. Toggle on each ``` fence and skip everything
+    // between.
+    if (text.trim().startsWith('```')) {
+      inCodeFence = !inCodeFence;
+      continue;
+    }
+    if (inCodeFence) continue;
+
     if (text.trim() === '') {
       // Blank line ends a continuation streak but doesn't end the block.
       continue;

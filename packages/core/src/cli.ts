@@ -1,19 +1,27 @@
 #!/usr/bin/env node
 import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { runReviewCli } from '@wifo/factory-spec-review/cli';
+import { finishTask } from './finish-task.js';
 import { runInit } from './init.js';
 import { getFrontmatterJsonSchema } from './json-schema.js';
 import { type LintError, lintSpec } from './lint.js';
 import { watchSpecs } from './watch.js';
 
 const USAGE = `Usage:
-  factory init [--name <pkg-name>]   Bootstrap a new factory project in cwd
+  factory init [--name <pkg-name>] [--adopt]
+                                     Bootstrap a new factory project in cwd
+                                     (--adopt: additive scaffold for existing repos)
   factory spec lint <path>           Lint a spec file or directory of *.md
   factory spec review <path>         Review spec quality with LLM judges (subscription auth)
   factory spec watch <path> [flags]  Re-run lint (and optionally review) on every *.md change
   factory spec schema [--out <file>] Print the frontmatter JSON Schema
+  factory finish-task <spec-id> [flags]
+                                     Move a converged spec from <dir>/<id>.md to
+                                     <dir>/done/<id>.md and persist a
+                                     factory-spec-shipped record
 `;
 
 export interface CliIo {
@@ -43,6 +51,10 @@ export function runCli(argv: string[], io: CliIo = defaultIo): void {
     runInit(argv.slice(1), io);
     return;
   }
+  if (domain === 'finish-task') {
+    runFinishTask(argv.slice(1), io);
+    return;
+  }
   if (domain !== 'spec' || command === undefined) {
     io.stderr(USAGE);
     io.exit(2);
@@ -58,9 +70,19 @@ export function runCli(argv: string[], io: CliIo = defaultIo): void {
     return;
   }
   if (command === 'review') {
-    // Dispatched in async fashion: the reviewer package is dynamic-imported
-    // so factory-core stays dep-free for callers that never run review.
-    runReviewDispatch(rest, io);
+    // v0.0.12 — `@wifo/factory-spec-review` is a hard dep of `@wifo/factory-core`.
+    // The import resolves through the standard package resolver, so
+    // `npx -p @wifo/factory-core factory spec review` works zero-config without
+    // also passing `-p @wifo/factory-spec-review`.
+    void (async () => {
+      try {
+        await runReviewCli(rest, io);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        io.stderr(`${msg}\n`);
+        io.exit(2);
+      }
+    })();
     return;
   }
   if (command === 'watch') {
@@ -72,59 +94,48 @@ export function runCli(argv: string[], io: CliIo = defaultIo): void {
   io.exit(2);
 }
 
-function runReviewDispatch(args: string[], io: CliIo): void {
-  // Dynamic import so factory-core does not pull spec-review into its
-  // dependency closure when the user only runs `factory spec lint` /
-  // `factory init`. The reviewer package is an optional peer dep.
-  //
-  // Resolution must start from the CONSUMER's cwd (not from this CLI
-  // module's location). When the CLI is invoked via a workspace symlink
-  // at `<consumer>/node_modules/.bin/factory`, both ESM import() AND
-  // createRequire().resolve() fall back to packages/core/ as the base —
-  // where @wifo/factory-spec-review is NOT a dep. We walk node_modules
-  // up from process.cwd() manually to find it.
+function runFinishTask(args: string[], io: CliIo): void {
+  let parsed: ReturnType<typeof parseArgs>;
+  try {
+    parsed = parseArgs({
+      args,
+      options: {
+        dir: { type: 'string' },
+        'context-dir': { type: 'string' },
+      },
+      allowPositionals: true,
+      strict: true,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    io.stderr(`${msg}\n${USAGE}`);
+    io.exit(2);
+    return;
+  }
+  const specId = parsed.positionals[0];
+  if (specId === undefined) {
+    io.stderr(`Missing <spec-id>\n${USAGE}`);
+    io.exit(2);
+    return;
+  }
+  const dir = typeof parsed.values.dir === 'string' ? parsed.values.dir : 'docs/specs';
+  const contextDirRaw =
+    typeof parsed.values['context-dir'] === 'string' ? parsed.values['context-dir'] : './context';
+  const dirAbs = resolve(process.cwd(), dir);
+  const contextDir = resolve(process.cwd(), contextDirRaw);
+
   void (async () => {
     try {
-      const pkgRoot = findPackageRoot(process.cwd(), '@wifo/factory-spec-review');
-      if (pkgRoot === null) {
-        io.stderr(
-          'spec/review-unavailable: install @wifo/factory-spec-review to use this command\n',
-        );
-        io.exit(2);
-        return;
-      }
-      const cliPath = join(pkgRoot, 'dist', 'cli.js');
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mod = (await import(pathToFileURL(cliPath).href)) as {
-        runReviewCli: (args: string[], io: CliIo) => Promise<void>;
-      };
-      await mod.runReviewCli(args, io);
+      const result = await finishTask({ specId, dir: dirAbs, contextDir });
+      const shortRunId = result.runId.slice(0, 8);
+      io.stdout(`factory: shipped ${specId} → ${result.toPath} (run ${shortRunId})\n`);
+      io.exit(0);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       io.stderr(`${msg}\n`);
-      io.exit(2);
+      io.exit(1);
     }
   })();
-}
-
-/**
- * Walk up node_modules from `cwd` looking for `<cur>/node_modules/<pkgName>/`.
- * Returns the absolute path to the package's root if found, else null.
- * Handles pnpm workspace symlinks transparently (statSync follows the symlink).
- */
-function findPackageRoot(cwd: string, pkgName: string): string | null {
-  let cur = resolve(cwd);
-  while (true) {
-    const candidate = join(cur, 'node_modules', pkgName);
-    try {
-      if (statSync(candidate).isDirectory()) return realpathSync(candidate);
-    } catch {
-      // not present at this level
-    }
-    const parent = dirname(cur);
-    if (parent === cur) return null;
-    cur = parent;
-  }
 }
 
 function runLint(args: string[], io: CliIo): void {

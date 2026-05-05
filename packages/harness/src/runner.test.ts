@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { resolve } from 'node:path';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import type { Spec } from '@wifo/factory-core';
 import { runHarness } from './runner';
 import type { JudgeClient, Judgment } from './runners/judge';
@@ -19,6 +21,7 @@ function buildSpec(args: {
       type: 'feat',
       status: 'ready',
       exemplars: [],
+      'depends-on': [],
     },
     body: args.body ?? '',
     scenarios: args.scenarios ?? [],
@@ -220,6 +223,67 @@ describe('runHarness', () => {
     });
     expect(lines.some((l) => l.includes('6 judge calls planned'))).toBe(true);
   });
+
+  test('test name with apostrophe matches it() name without apostrophe under normalization', async () => {
+    // Verify normalization end-to-end: the spec's `test:` pattern carries an
+    // apostrophe that the implementation dropped from the actual `it()` name.
+    // The runner must strip apostrophes from the pattern before passing -t so
+    // bun's regex match still hits the un-apostrophed test name. Fake bun
+    // captures the args and asserts the apostrophe is gone.
+    const tmp = mkdtempSync(join(tmpdir(), 'fake-bun-norm-'));
+    try {
+      const fakeBun = join(tmp, 'fake-bun.sh');
+      writeFileSync(
+        fakeBun,
+        [
+          '#!/usr/bin/env bash',
+          'pattern=""',
+          'next_is_pattern=0',
+          'for arg in "$@"; do',
+          '  if [ "$next_is_pattern" = "1" ]; then pattern="$arg"; next_is_pattern=0; fi',
+          '  if [ "$arg" = "-t" ]; then next_is_pattern=1; fi',
+          'done',
+          'echo "PATTERN: $pattern"',
+          'if echo "$pattern" | grep -q "\'"; then',
+          '  echo "unexpected apostrophe in pattern"',
+          '  exit 1',
+          'fi',
+          'echo "1 pass"',
+          'echo "1 filtered out"',
+          'exit 0',
+          '',
+        ].join('\n'),
+      );
+      chmodSync(fakeBun, 0o755);
+
+      const spec = buildSpec({
+        scenarios: [
+          scenario({
+            id: 'S-1',
+            kind: 'scenario',
+            satisfaction: [
+              {
+                kind: 'test',
+                value: 'test-fixtures/normalize.test.ts "v0.0.10\'s hash"',
+                line: 1,
+              },
+            ],
+          }),
+        ],
+      });
+      const report = await runHarness(spec, { cwd: HARNESS_ROOT, bunPath: fakeBun });
+      expect(report.status).toBe('pass');
+      const detail = report.scenarios[0]?.satisfactions[0]?.detail ?? '';
+      expect(detail).toContain('1 pass');
+      expect(detail).toContain('1 filtered out');
+      // Confirm the harness stripped the apostrophe before -t (regex dots
+      // remain escaped — that's the existing pre-v0.0.12 behavior).
+      expect(detail).not.toContain("v0.0.10's hash");
+      expect(detail).toContain('v0\\.0\\.10s hash');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   test('empty selection: only holdouts present and visibleOnly set returns pass-with-zero-scenarios', async () => {
     const spec = buildSpec({

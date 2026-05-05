@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { parseTestLine } from '../parse-test-line.js';
+import { normalizeTestNamePattern, parseTestLine } from '../parse-test-line.js';
 import type { SatisfactionResult } from '../types.js';
 
 export interface TestRunnerOptions {
@@ -64,7 +64,8 @@ function buildArgs(value: string): string[] {
   const parsed = parseTestLine(value);
   const args: string[] = ['test'];
   if (parsed.file !== undefined) args.push(parsed.file);
-  if (parsed.pattern !== undefined) args.push('-t', escapeRegex(parsed.pattern));
+  if (parsed.pattern !== undefined)
+    args.push('-t', escapeRegex(normalizeTestNamePattern(parsed.pattern)));
   return args;
 }
 

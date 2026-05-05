@@ -52,6 +52,18 @@ describe('docs hygiene (factory-docs-v0-0-5)', () => {
     expect(body).toContain('factory-runtime run');
   });
 
+  test('SPEC_TEMPLATE.md DoD section requires backtick commands and shows 3 worked examples', () => {
+    const body = readDoc('docs/SPEC_TEMPLATE.md');
+
+    expect(body).toContain('Each runtime-gate bullet MUST embed a backtick-wrapped shell command');
+
+    expect(body).toContain('`typecheck clean (\\`pnpm typecheck\\`)`');
+    expect(body).toContain('`tests green (\\`pnpm test\\`)`');
+    expect(body).toContain('`biome clean (\\`pnpm check\\`)`');
+
+    expect(body).toContain('spec/dod-needs-explicit-command');
+  });
+
   test('core README contains the PostToolUse hook recipe with both lint and review commands', () => {
     const body = readDoc('packages/core/README.md');
 

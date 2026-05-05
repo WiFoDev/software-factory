@@ -361,9 +361,20 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
   // record with a matching specsDir. The match is scoped to the CURRENT
   // sequence's specsDir (resolved absolute path, case-sensitive) — re-running
   // the same specs against a different `<dir>` runs them fresh.
+  //
+  // v0.0.12 — verify ACTUAL convergence status before adding to the skip-map.
+  // The v0.0.11 ship found that the dedup keyed only on factory-run record
+  // existence silently skipped prior NO-CONVERGE runs, leaving real failures
+  // un-retried. We now walk the run's descendant `factory-phase` records,
+  // group by iteration, and require that every iteration's terminal phase
+  // (the last one persisted, by recordedAt) has status='pass'. Runs whose
+  // terminal phases are anything other than 'pass' across all iterations are
+  // omitted from the skip-map and a log line is emitted so the operator
+  // sees the re-run.
   const normalizedSpecsDir = resolve(specsDir);
   const allRuns = await contextStore.list({ type: 'factory-run' });
   const allSequences = await contextStore.list({ type: 'factory-sequence' });
+  const allPhases = await contextStore.list({ type: 'factory-phase' });
   const matchingSequenceIds = new Set<string>();
   for (const seq of allSequences) {
     const payload = seq.payload as { specsDir?: unknown } | null | undefined;
@@ -373,6 +384,38 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
       }
     }
   }
+
+  /**
+   * Walk a candidate factory-run's descendant factory-phase records, grouped
+   * by iteration, and confirm every iteration's terminal phase is `status:
+   * 'pass'`. A run with no factory-phase descendants is treated as
+   * non-converged (defensive — a fresh seed might have crashed before any
+   * phase ran). Within an iteration, the LAST phase by `recordedAt` is the
+   * terminal phase; ordering by recordedAt is stable because the runtime
+   * persists factory-phase records sequentially per iteration.
+   */
+  const verifyRunConverged = (runId: string): boolean => {
+    const phases = allPhases.filter((p) => p.parents.includes(runId));
+    if (phases.length === 0) return false;
+    const byIter = new Map<number, ContextRecord[]>();
+    for (const p of phases) {
+      const it = (p.payload as { iteration?: unknown }).iteration;
+      if (typeof it !== 'number') continue;
+      const list = byIter.get(it);
+      if (list === undefined) byIter.set(it, [p]);
+      else list.push(p);
+    }
+    if (byIter.size === 0) return false;
+    for (const list of byIter.values()) {
+      list.sort((a, b) => (a.recordedAt < b.recordedAt ? -1 : a.recordedAt > b.recordedAt ? 1 : 0));
+      const terminal = list[list.length - 1];
+      if (terminal === undefined) return false;
+      const status = (terminal.payload as { status?: unknown }).status;
+      if (status !== 'pass') return false;
+    }
+    return true;
+  };
+
   const convergedBySpecId = new Map<string, ContextRecord>();
   for (const runRec of allRuns) {
     const payload = runRec.payload as Partial<FactoryRunPayload> | null | undefined;
@@ -380,9 +423,14 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
     const specId = payload.specId;
     if (!byId.has(specId)) continue;
     if (!runRec.parents.some((p) => matchingSequenceIds.has(p))) continue;
-    if (!convergedBySpecId.has(specId)) {
-      convergedBySpecId.set(specId, runRec);
+    if (convergedBySpecId.has(specId)) continue;
+    if (!verifyRunConverged(runRec.id)) {
+      skipLog(
+        `factory-runtime: ${specId} prior factory-run found but status=no-converge — re-running`,
+      );
+      continue;
     }
+    convergedBySpecId.set(specId, runRec);
   }
 
   const sequencePayload: FactorySequencePayload = {
@@ -438,6 +486,8 @@ export async function runSequence(args: RunSequenceArgs): Promise<SequenceReport
     perSpecOptions.maxAgentTimeoutMs = options.maxAgentTimeoutMs;
   if (options.log !== undefined) perSpecOptions.log = options.log;
   if (options.worktree !== undefined) perSpecOptions.worktree = options.worktree;
+  if (options.quiet !== undefined) perSpecOptions.quiet = options.quiet;
+  if (options.stdoutLog !== undefined) perSpecOptions.stdoutLog = options.stdoutLog;
 
   for (const id of topoOrder) {
     const loadedSpec = byId.get(id);

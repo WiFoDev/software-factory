@@ -76,6 +76,25 @@ depends-on:
 - Test paths in `Satisfaction:` lines are written **bare** (no backticks): `test: src/foo.test.ts "name"`, NOT `test: \`src/foo.test.ts\` "name"`.
 - Each scenario has at least one `test:` line. `judge:` lines are optional and used for fuzzy criteria (log clarity, error UX) that unit tests can't capture.
 
+### HTTP entrypoint smoke-boot scenarios
+
+If a spec introduces an HTTP entrypoint (mentions any of: `createServer`, `listen(<port>)`, `app.listen`, `http.createServer`, `Bun.serve`, `serve(`), append a smoke-boot scenario like the worked example below. This forces the production entrypoint (`src/main.ts` or the spec-named equivalent) into existence — without it, the implement phase tends to ship working library code while leaving `bun src/main.ts` 404'ing because the entrypoint never gets written.
+
+The trigger keywords above are guidance for you (the LLM running this slash command), not a strict regex — substring-match against the spec's body during authoring. If any one matches, append the smoke-boot scenario.
+
+**Worked example** (paste verbatim, then adapt the route + entrypoint path to whatever the spec actually defines):
+
+```
+**S-N** — boots the production entrypoint on the configured port
+  Given the spec's public API exports
+  When `bun src/main.ts` (or the entrypoint declared in Constraints) is spawned with PORT=<test-port>
+  Then the process binds the configured port; a /health probe (or any defined route) returns 2xx; the process is killed cleanly
+  Satisfaction:
+    - test: src/main.test.ts "boots the production entrypoint on the configured port"
+```
+
+**Test-path convention.** `src/main.test.ts` is canonical (next to `src/main.ts` — the entrypoint it boots). If the spec names a different entrypoint in its Constraints (e.g., `src/server.ts`), the test path follows: `src/server.test.ts`. Defining `/health` is the spec's job, not this slash command's — if the spec's API doesn't have `/health`, the smoke-boot test asserts on whatever route the spec defines. The example uses `/health` as the canonical exemplar; substitute as appropriate.
+
 ## Step 3: Self-check
 
 After writing all specs, run the format-floor lint:

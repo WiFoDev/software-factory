@@ -80,7 +80,7 @@ Convergence requires every phase `pass`. With `--no-implement`, graph becomes `[
 |---|---|---|---|
 | `implement` | `claude -p` headless agent on the spec body | `factory-implement-report` (full transcript + filesChanged + tokens) | `'fail'` (agent self-reports), `'error'` (timeout / token cap / agent crash). |
 | `validate` | `bun test` per `test:` line + LLM judge per `judge:` line | `factory-validate-report` (per-scenario pass/fail) | `'fail'` (any scenario fails), `'error'` (harness crash). |
-| `dod` (v0.0.10+) | Bash per shell DoD bullet (locked allowlist) + LLM judge per non-shell bullet | `factory-dod-report` (per-bullet pass/fail) | `'fail'` (any bullet fails), `'error'` (per-bullet timeout). |
+| `dod` (v0.0.10+) | Bash per shell DoD bullet (locked allowlist) + LLM judge per non-shell bullet | `factory-dod-report` (per-bullet pass/fail) | `'fail'` (any bullet fails), `'error'` (per-bullet timeout). v0.0.12+ — gate-shaped prose without a backtick command (e.g. bare `- typecheck + tests green`) is reported `status: 'skipped'` with `reason: 'dod-gate-no-command-found'` rather than dispatched to a judge or guessed at; pair with `spec/dod-needs-explicit-command` lint to flag at scoping time. |
 
 ### Cross-iteration prompt threading
 
@@ -176,7 +176,13 @@ import type { WorktreeOptions, CreatedWorktree } from '@wifo/factory-runtime';
 
 **Already-converged dedup (v0.0.10+).** `runSequence` queries the context store for existing converged `factory-run` records scoped to the current `specsDir`. Match → skip + log. Closes the v0.0.9 BASELINE's N² re-run pattern.
 
+**Dedup-correctness (v0.0.12+).** The dedup walks each candidate `factory-run`'s descendant `factory-phase` records, groups by iteration, and verifies every iteration's terminal phase has `status: 'pass'` before adding to the skip-map. A prior NO-CONVERGE run is therefore RE-RUN (not silently skipped) and the runtime emits `factory-runtime: <id> prior factory-run found but status=no-converge — re-running` to stdout. Closes the v0.0.11 ship bug where retries against the same context dir silently skipped real failures.
+
+**Implement-report telemetry (v0.0.12+).** Two diagnostic side-channels added on `factory-implement-report.payload` (both optional — older records remain valid): `filesChangedDebug: { preSnapshot, postSnapshot }` exposes the raw sorted relative-path lists that fed the v0.0.6 `filesChanged` comparison, so under-attribution bugs reproduce trivially from the persisted record. On `agent-exit-nonzero` the runtime now persists a `status='error'` report whose `failureDetail: { message, stderrTail }` carries the agent's last 10 KB of stderr (byte-truncated with a `… [truncated, original size N bytes]` marker when oversize). Status classification of the run is unchanged — telemetry only.
+
 **Per-spec timeout override (v0.0.9+).** Each spec's frontmatter may declare `agent-timeout-ms: <N>` to raise (or lower) the per-phase agent wall-clock budget for itself. Precedence: `RunOptions.maxAgentTimeoutMs > spec.frontmatter['agent-timeout-ms'] > 600_000`.
+
+**Post-convergence ship hint (v0.0.12+).** When a spec converges, the runtime emits `factory-runtime: <spec-id> converged → ship via 'factory finish-task <spec-id>'` to **stdout** (NOT stderr — script-friendly so a `factory-runtime run | grep` pipeline picks it up). The hint surfaces the canonical next step (move the spec to `done/` + emit a `factory-spec-shipped` provenance record) without imposing it — `factory finish-task` is an explicit user action with the same risk surface as `git push`. The hint is NOT gated on `--quiet`; convergence is a lifecycle event, not progress noise. Programmatic callers can intercept via `RunOptions.stdoutLog`.
 
 ## Worked example
 

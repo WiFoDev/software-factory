@@ -6,19 +6,23 @@ A toolkit for **spec-driven, agent-friendly software development**. You write a 
 
 ---
 
-## v0.0.11: trust → isolation — runs sandboxed in their own git worktree
+## v0.0.12: validate-phase reliability + brownfield-adopter onramp + observability + DoD trust
 
-**Runtime side:** `factory-runtime run --worktree` materializes an isolated `git worktree` at `<projectRoot>/.factory/worktrees/<runId>/` on a throwaway branch `factory-run/<runId>`; the implement / validate / DoD phases all execute against that checkout, so the maintainer's main tree is never touched by the agent. Strong undo by construction; enables parallel runs against distinct worktree paths. New CLI subcommand `factory-runtime worktree { list | clean }` for forensic inspection + maintenance. New context record type `factory-worktree`.
+**Observability:** `factory-runtime run` and `run-sequence` now emit one stderr line per phase boundary (`[runtime] iter <N> implement (84s, 32k charged tokens, 7 files changed)`) plus a cause-of-iteration line at iter N+1 start (`retrying: 1 failed scenario (S-2); 0 failed dod gates`). New `--quiet` flag (and `factory.config.json runtime.quiet`) suppresses progress. A monotonic-DoD-pass + identical-validate-fail warning surfaces suspected tooling-mismatch loops without changing behavior.
 
-**Polish:** holdout-aware convergence (`--check-holdouts` runs `## Holdout Scenarios` each iteration; both sets must pass); `dod-precision` recalibrated against v0.0.10 BASELINE; `RunReport.chargedTokens` exposes the budget-relevant total (cache reads/creates excluded); `run-sequence` walks the dep DAG dynamically (drafting specs auto-promoted as their deps converge).
+**Brownfield onramp:** new `factory init --adopt` walks the templates but skips `package.json` / `tsconfig.json` / `biome.json` if present (logged), creating only factory-specific bits (`docs/specs/`, `factory.config.json`, `.claude/commands/scope-project.md`, `.gitignore` appended if missing). New `factory finish-task <spec-id>` CLI subcommand (+`finishTask` library helper) moves a converged spec to `<dir>/done/` and emits a `factory-spec-shipped` record. The runtime emits `converged → ship via 'factory finish-task <id>'` post-convergence (read-only). `@wifo/factory-spec-review` is now a hard dep of `@wifo/factory-core` — single install brings the reviewer.
 
-**Release lineage:** v0.0.1 framework → v0.0.2 single-shot agent → v0.0.3 closed loop → v0.0.4 spec quality + bootstrap → v0.0.5 npm publish + implement-guidelines → v0.0.6 v0.0.5.x cluster → v0.0.7 real-product workflow → v0.0.8 discoverability + scaffold drops → v0.0.9 status-aware sequence + per-spec timeout → v0.0.10 trust contract → **v0.0.11 worktree-sandbox + trust-layer calibration**.
+**DoD trust contract:** `factory spec lint` adds `spec/dod-needs-explicit-command` (warning) when a DoD bullet looks like a runtime gate without a backtick command. `dodPhase` drops the script-name-guessing path: bullets without backtick commands → `status: 'skipped', reason: 'dod-gate-no-command-found'`. `SPEC_TEMPLATE.md` updated with worked examples. `/scope-project` enumerates HTTP entrypoint trigger keywords and appends a smoke-boot scenario when matched — closes the v0.0.11 short-url BASELINE "library shipped, server doesn't boot" gap.
+
+**Polish:** harness `parseTestLine` strips/replaces curly quotes / smart quotes / backticks before substring match (with new `spec/test-name-quote-chars` lint warning); `run-sequence` already-converged dedup verifies actual convergence by aggregating `factory-phase` records (closes v0.0.11 ship bug); `factory-implement-report.payload.filesChangedDebug?` and `failureDetail.stderrTail?` add diagnostic telemetry for the v0.0.11 BASELINE undercount + agent-exit-nonzero investigations.
+
+**Release lineage:** v0.0.1 framework → v0.0.2 single-shot agent → v0.0.3 closed loop → v0.0.4 spec quality + bootstrap → v0.0.5 npm publish + implement-guidelines → v0.0.6 v0.0.5.x cluster → v0.0.7 real-product workflow → v0.0.8 discoverability + scaffold drops → v0.0.9 status-aware sequence + per-spec timeout → v0.0.10 trust contract → v0.0.11 worktree-sandbox + trust-layer calibration → **v0.0.12 validate-phase reliability + brownfield onramp + observability + DoD trust**.
 
 Inspired by the [StrongDM Software Factory](https://factory.strongdm.ai/) model.
 
 ---
 
-## The canonical workflow (v0.0.11)
+## The canonical workflow (v0.0.12)
 
 The recommended end-to-end shape from a fresh directory to a shipped product:
 
@@ -42,7 +46,7 @@ factory-context tree <factorySequenceId> --direction down   # walk the entire pr
 
 For one feature (not a multi-feature product), substitute `/scope-task <feature>` and `factory-runtime run <spec>` for the slash command + sequence-runner.
 
-**Empirical evidence (longitudinal in [`BASELINE.md`](./BASELINE.md)):** the canonical URL-shortener (4-5 specs, JSON-over-HTTP + click tracking + stats) ships in 5-10 minutes wall-clock + ~20-30k raw tokens, all DoD shell gates green. Versus v0.0.5's manual ~32 maintainer interventions to ship the same product, v0.0.10 / v0.0.11 collapses to ~3-8. Add `--worktree` to keep the maintainer's main tree untouched.
+**Empirical evidence (longitudinal in [`BASELINE.md`](./BASELINE.md)):** the canonical URL-shortener (4-5 specs, JSON-over-HTTP + click tracking + stats) ships in 5-10 minutes wall-clock + ~20-30k raw tokens, all DoD shell gates green. Versus v0.0.5's manual ~32 maintainer interventions to ship the same product, v0.0.10 / v0.0.11 / v0.0.12 collapses to ~3-8. Add `--worktree` to keep the maintainer's main tree untouched; `factory finish-task <id>` (v0.0.12+) ships each converged spec to `<dir>/done/` with one command.
 
 **Three modes of use:**
 

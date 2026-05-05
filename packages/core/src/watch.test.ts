@@ -27,7 +27,7 @@ const VALID_SPEC = [
   '- uses zod',
   '',
   '## Definition of Done',
-  '- all tests pass',
+  '- all tests pass (`pnpm test`)',
   '',
 ].join('\n');
 

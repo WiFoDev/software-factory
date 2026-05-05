@@ -153,6 +153,7 @@ Every primitive the agent might reference, in one place. Skim once; come back as
 | `spec/invalid-depends-on` | error | v0.0.7+. Entry doesn't match kebab-case. |
 | `spec/depends-on-missing` | warning | v0.0.7+. Dep file not found under `docs/specs/` or `docs/specs/done/`. |
 | `spec/wide-blast-radius` | warning | v0.0.9+. `## Subtasks` references ≥ 12 distinct file paths (was 8 in v0.0.9; calibrated to 12 in v0.0.10). |
+| `spec/test-name-quote-chars` | warning | v0.0.12+. `test:` pattern uses non-ASCII quote chars (curly `‘ ’ “ ”`); the harness normalizes at run-time as a safety net, but rewriting to ASCII at scope-time is cleanest. |
 
 NOQA directive (v0.0.10+): place `<!-- NOQA: spec/wide-blast-radius -->` (or `<!-- NOQA: -->` blanket) anywhere in the spec body to suppress warnings per-spec. Errors cannot be suppressed.
 

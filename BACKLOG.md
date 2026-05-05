@@ -208,62 +208,43 @@ Lean: (a). `--context-dir` is the more descriptive name; `factory.config.json`'s
 
 ---
 
-## Harness `bun test -t <pattern>` should normalize quote chars when matching test names *(NEW, surfaced by v0.0.11 ship — first run-sequence attempt blocked for 23 min)*
 
-**What:** The first v0.0.11 run-sequence invocation hit no-converge on `dod-precision-calibration-v0-0-11` for 5 iterations (~23 min wall-clock wasted). Root cause: the spec's `test:` line referenced `"v0.0.10's hash"` (with apostrophe); the agent wrote the test as `"v0.0.10s hash"` (without apostrophe — likely auto-stylized during implementation). The harness's `bun test -t <pattern>` substring match doesn't tolerate quote-character differences → no test matched → reported as fail every iteration. The agent's actual implementation was correct; the apostrophe drop alone caused the validate phase to block.
+## "Sketch" tier under LIGHT for ≤30-line specs *(NEW, surfaced by v0.0.11 OLH dogfood — CORE-836 retro, future-work)*
 
-**Why:** Apostrophes, smart quotes (`'` vs `'`), and other Unicode-vs-ASCII variants are common stylistic auto-corrections agents (and humans) make when transcribing test names. The harness should be more forgiving than strict-substring-equal — the cost of false negatives (agent's correct work blocked) far exceeds the cost of false positives (harness matches loosely).
+**What:** Today's spec template tiers are LIGHT (~50-200 LOC, 5-8 scenarios) and DEEP (200+ LOC, 8+ scenarios + holdouts). For very small fixes/refactors (60-line implementation work, single concern), even LIGHT feels like ceremony — the spec ends up larger than the diff. The CORE-836 dogfooder noted this directly: "my 130-line spec was overhead vs. just writing the code." A SKETCH tier (intent + 2 scenarios + DoD, max 30 lines, no holdouts) would right-size the workflow for fix/refactor work.
+
+**Why:** The factory's compounding leverage assumes the spec is cheaper than the code it produces. For 60-line refactors, that ratio inverts unless the spec scales down. The factory loses "fix-shaped" use cases entirely without a smaller tier — maintainers default to writing the fix by hand, the loop never runs, and the audit/provenance trail for that work disappears.
 
 **Shape options:**
-- (a) **Normalize both sides to ASCII** before substring match: strip/replace `'` `'` `"` `"` `` ` `` (curly + back) → `'` `"` `` ` ``. Strip leading/trailing whitespace from each. Substring match operates on normalized strings. ~10 LOC in `parseTestLine` + the bun test invocation.
-- (b) **`factory spec lint` warns on apostrophes / smart quotes in `test:` line names.** Catches the bomb at scoping time, not run time. Agent fixes the spec OR rewrites without apostrophes. ~30 LOC + a new `spec/test-name-quote-chars` lint code.
-- (c) Both (a) and (b). Belt + suspenders.
+- (a) **Add a `tier: sketch` enum value to `SpecFrontmatter`.** Lint enforces ≤2 scenarios + ≤30 lines + DoD section + no holdouts. Reviewer judges that don't apply to sketches (`review/holdout-distinctness`, `review/judge-parity`) skip on `tier: sketch`. Scoper produces sketch-sized specs when prompt mentions "fix" / "refactor" / clear small-scope phrasing.
+- (b) **Keep the tier dimension binary; add a `--sketch` flag to `factory spec lint` that disables the tier-specific judges and relaxes the LIGHT-floor requirements.** Lighter touch; opts out at lint time.
+- (c) **Add a `/scope-fix` slash command (parallel to `/scope-task` / `/scope-project`)** that produces sketch-sized output by construction. Workflow-side fix; doesn't change the spec format.
 
-Lean: (c). The lint catches at scoping time (cheap signal); the harness normalizes as a runtime safety net (no agent work lost to a stylistic difference).
+Lean: (a) + (c). The tier value is the cleanest schema-side fix; the slash command is the matching scoping-side entrypoint. Pairs naturally.
 
-**Touches:** `packages/harness/src/parse-test-line.ts` (normalize the pattern string before passing to bun); `packages/harness/src/runners/test.ts` (apply the same normalization to the test name harvested from `bun test --json`); `packages/core/src/lint.ts` (new warning); tests. ~80 LOC.
+**Touches:** `packages/core/src/schema.ts` (add `'sketch'` to `tier` enum), `packages/core/src/lint.ts` (sketch-tier validation), `packages/spec-review/src/judges/*` (skip rules where appropriate), `SPEC_TEMPLATE_SKETCH.md` (new template — minimal), `~/.claude/commands/scope-fix.md` (new slash command), tests, README. ~150 LOC.
 
-**Phasing suggestion:** v0.0.12 lead candidate. Saves real wall-clock on every future agent-driven run.
+**Phasing suggestion:** v0.0.13+ candidate (post-v0.0.12 stabilization). Tier-shift, not a friction fix. Worth holding until v0.0.12's brownfield-adopter work lands so we have data on what fix-sized specs actually look like in real OLH adoption.
 
 ---
 
-## `factory-run` already-converged dedup must verify actual convergence status *(NEW, surfaced by v0.0.11 ship — bug in v0.0.10's `run-sequence-polish-v0-0-10`)*
+## Provenance retention / pruning *(NEW, surfaced by v0.0.11 OLH dogfood — CORE-836 retro, future-work)*
 
-**What:** v0.0.10's run-sequence-polish-v0-0-10 added a "skip already-converged spec" dedup that checks: (a) a `factory-run` record exists for this `specId`; (b) its `parents[]` includes a `factory-sequence` whose `payload.specsDir` matches. **Crucially, the check does NOT verify that the run's actual convergence status was `'converged'`.** The variable name `convergedBySpecId` (in `sequence.ts`) is misleading — it stores ANY prior factory-run, regardless of whether the run succeeded.
+**What:** Each `factory-runtime run` invocation produces ~14 records / ~80 KB in `.factory/` for a 3-iteration run. For a 6-spec product across many runs, that grows quickly — measured in MB after a few weeks of regular use. No pruning today; everything stays forever.
 
-This is a real bug, not just polish: in v0.0.11's first run-sequence attempt, dod-precision hit no-converge. On the retry, dod-precision was incorrectly skipped via dedup — the runtime treated its prior NO-CONVERGE record as if it had converged. (For v0.0.11 this was benign because we'd manually fixed the apostrophe; in general, re-running a failed sequence would silently skip the spec that needed retrying.)
-
-**Why:** The runtime persists `factory-run` records at run START with metadata only; the run's final status (`'converged'` / `'no-converge'` / `'error'`) lives in `RunReport` (in-memory) and is reconstructed from `factory-phase` aggregation. The dedup logic doesn't reconstruct or check status — it just trusts that the record's existence implies convergence.
+**Why:** The provenance DAG is one of the factory's strongest features (`factory-context tree --direction down` saves real debugging time, per the CORE-836 retro), but unbounded growth is a known scaling issue. Better to design the pruning model deliberately than to ship a `rm -rf .factory/` workaround when the disk fills.
 
 **Shape options:**
-- (a) **Persist run status on the `factory-run` record** post-run. Schema-level fix; future-compatible. The runtime updates the record after `RunReport` is computed. Requires the context store to support record mutation OR a separate `factory-run-status` record. Since the existing context store is content-addressable + immutable, the second is cleaner.
-- (b) **Aggregate status from `factory-phase` records on dedup-check.** For each candidate factory-run, list its descendant factory-phase records, check that every iteration's last phase is `'pass'`. Read-only; no schema change. More expensive (per-spec context-store walk).
-- (c) **Walk the run's `iterations[]` from a derivative record** if any. Requires designing a "factory-run-summary" record persisted post-run (different from the existing factory-run which is metadata-only).
+- (a) **`factory-context prune --keep-last <N>`** subcommand: keep records from the last N runs per spec, drop older ones. Default N=5. Manual / scriptable.
+- (b) **Default gzip on persisted records** at write time — content-addressable, transparent decompress on read. Buys ~3-5× compression for typical record shape. Doesn't bound storage; just reduces it.
+- (c) **`factory.config.json` retention policy**: `provenance.retainRunsPerSpec: 5` + `provenance.retainAtomicRuns: 3` — runtime auto-prunes on each `run`. Hands-off after config.
+- (d) **All three.** Manual prune + gzip + auto-retention.
 
-Lean: (b). Read-only check using existing factory-phase records; no schema migration. The cost is ~one extra `contextStore.list` call per dedup candidate; acceptable.
+Lean: (a) + (b) for v0.0.13+. Manual prune as the explicit knob; gzip as the transparent storage win. (c) is overkill until storage actually pinches.
 
-**Touches:** `packages/runtime/src/sequence.ts` (the `convergedBySpecId` builder — verify status before adding to map). Tests pin the no-converge → don't-skip path. ~40 LOC.
+**Touches:** `packages/context/src/cli.ts` (new `prune` subcommand), `packages/context/src/store.ts` (gzip on write, decompress on read), tests, README. ~150 LOC.
 
-**Phasing suggestion:** v0.0.12 alongside the harness quote-normalization fix. Both are correctness bugs in v0.0.10 / v0.0.11 that surfaced together in v0.0.11's ship cycle.
-
----
-
-## Investigate `agent-exit-nonzero (code=1)` at end of iteration *(NEW, surfaced by v0.0.11 ship — worktree-sandbox spec hit it after work landed)*
-
-**What:** During v0.0.11's worktree-sandbox-v0-0-11 implementation, the implement phase hit `runtime/agent-failed: agent-exit-nonzero (code=1)` at the END of iteration 1 — AFTER the entire spec's work had landed (worktree.ts + worktree.test.ts + version bumps + CHANGELOG/ROADMAP/README updates all on disk). The runtime classified the spec as `'error'`, but the work was correct (verified post-hoc: 228 runtime tests pass, biome clean, spec lint clean).
-
-**Why:** Distinct from `runtime/agent-failed: agent-timeout` (which fires when the wall-clock budget elapses). `agent-exit-nonzero` is `claude -p` itself returning a non-zero exit code. Possible causes: Claude Code internal error / OOM / message-too-long / API rate limit / final-output edge case. Worth an investigation pass to identify the exact cause and either fix the upstream issue or recover gracefully (treat exit-code-1-with-output as a fail rather than error so iteration retries).
-
-**Shape options:**
-- (a) **Investigate root cause via the persisted `factory-implement-report.payload.result` and `failureDetail`.** Capture stdout/stderr-tail when claude exits non-zero (already partially captured today via `failureDetail`). Add a v0.0.12 telemetry-only step: when this fires, persist the LAST 10 KB of agent stdout for forensic inspection.
-- (b) **Treat `agent-exit-nonzero` as `'fail'` (retry-able) instead of `'error'` (abort).** If the agent's work landed, validate phase will catch up — the next iteration's prompt sees the prior validate report and the agent fixes whatever was missing. Risk: infinite retry loop if the failure is deterministic (e.g., always blow up at the last line). Mitigation: the existing `--max-iterations` cap.
-- (c) **Both.** Capture telemetry first; once we know the cause, decide whether to retry or abort.
-
-Lean: (c). One spec for telemetry capture (cheap; adds value regardless), one (deferred) spec for the retry-vs-abort decision once we know more.
-
-**Touches:** `packages/runtime/src/phases/implement.ts` (capture more stderr context on exit-nonzero); `packages/runtime/README.md` (document the failure mode); tests. ~50 LOC for telemetry capture; the retry-vs-abort change is data-dependent.
-
-**Phasing suggestion:** v0.0.12 alongside the other two findings. The telemetry capture is cheap and unlocks future investigation.
+**Phasing suggestion:** v0.0.13+. Not a current pain point at OLH dogfood scale (80 KB is cheap); ship before the first user reports a "factory dir is GBs" issue. Consider tracking `.factory/` size as a v0.0.12 telemetry signal so we know when to prioritize.
 
 ---
 
@@ -442,6 +423,40 @@ Lean: ship (b) + (c) together in v0.0.9. (a) is too crude. (d) is v0.1.0+ territ
 **Touches:** `packages/core/commands/scope-project.md` (move from `docs/commands/`), `packages/core/package.json` (add to `files` glob), `packages/core/src/init.ts` + `init-templates.ts` (planFiles for `.claude/commands/scope-project.md`), tests, README updates. Optional: a `factory commands install` subcommand for retrofitting existing projects.
 
 **Phasing suggestion:** v0.0.8 candidate. Pairs naturally with the PostToolUse hook recipe (also deferred to v0.0.8) — both are "make Claude Code aware of factory tooling" workflow polish.
+
+---
+
+## Per-scenario test runs short-circuit coverage gates — re-shaped via option (b) *(NEW, surfaced by v0.0.12 ship — option (a) hit the bun-CLI limit)*
+
+**What:** v0.0.12's `factory-harness-v0-0-12` shipped quote normalization but DESCOPED the per-scenario coverage carve-out. Original BACKLOG option (a) called for `--coverage=false` on per-scenario `bun test` invocations; bun 1.3.x rejects this flag (`The argument '--coverage' does not take a value.`). bun has no CLI override for coverage; bunfig is the only configuration surface.
+
+**Why:** The underlying friction (CORE-836 dogfood: per-scenario filtered runs trip a host's coverage gate, false validate-fail) is real and unfixed after v0.0.12. The fix needs a different shape — option (b) from the original BACKLOG entry.
+
+**Shape options:**
+- (b) **Parse bun's stdout: treat `0 fail + nonzero exit` as a coverage trip** and surface a distinct error code (`harness/coverage-threshold-tripped-on-filtered-run`). Validate phase logs the trip and continues to DoD; convergence still requires DoD-side coverage to pass. Doesn't fix the underlying mismatch but makes it diagnosable + non-fatal at validate time.
+- (d) **Wrap bun via a shim script that overrides bunfig's `[test] coverage` setting per-invocation.** Hacky; bun's behavior here would need an empirical pass.
+- (e) **Re-route per-scenario invocations through a `bun --eval` wrapper that disables coverage post-config-load.** Most invasive; deepest leverage.
+
+Lean: (b) for v0.0.13. Cheapest, most diagnosable; the actual fix to coverage gates becomes a future entry once we know what bun version + bunfig shape is biting users in real adoption.
+
+**Touches:** `packages/harness/src/runner.ts` (parse bun stdout for "coverage threshold" or similar token + nonzero exit + 0 fail), `packages/harness/src/errors.ts` (new error code), tests, README. ~60 LOC.
+
+**Phasing suggestion:** v0.0.13. Pairs with the empirical evidence the v0.0.12 BASELINE re-run will surface.
+
+---
+
+## Shipped in v0.0.12 (kept here briefly for history)
+
+The "validate-phase reliability + brownfield-adopter onramp + observability + DoD trust" cluster shipped in v0.0.12. Six specs scoped via `/scope-project` (fifth dogfood) + run via `factory-runtime run-sequence` with `--include-drafting --skip-dod-phase --max-agent-timeout-ms 1800000` (30min budget; DoD-phase skipped because v0.0.10's judge dispatcher requires `ANTHROPIC_API_KEY` — pre-flight `factory spec lint` + `factory spec review` gated quality):
+
+- ✅ **Harness quote normalization + lint warning** — `parseTestLine` strips/replaces curly quotes; `spec/test-name-quote-chars` lint catches scoping-time. Per-scenario coverage carve-out **descoped to v0.0.13** (bun 1.3.x rejects `--coverage=false`; option (b) re-opens — see entry above).
+- ✅ **Live progress on stderr + cause-of-iteration + tooling-mismatch detection** — `[runtime] iter <N> <phase>` lines per phase boundary; cause-line at iter N+1 start; warning on monotonic DoD-pass + identical validate-fail. New `--quiet` flag + `factory.config.json runtime.quiet`.
+- ✅ **Dedup correctness + filesChanged debug telemetry + agent stderr-tail capture** — `convergedBySpecId` aggregates `factory-phase` records to verify actual convergence (closes v0.0.11 ship bug); `filesChangedDebug?: { preSnapshot, postSnapshot }` for diagnosing the v0.0.11 BASELINE undercount; `failureDetail.stderrTail?: string` (10 KB) on agent-exit-nonzero.
+- ✅ **Literal DoD shell commands** — new `spec/dod-needs-explicit-command` lint warning. `dodPhase` drops script-name-guessing; bullets without backtick commands → `status: 'skipped', reason: 'dod-gate-no-command-found'`. SPEC_TEMPLATE.md updated with worked examples.
+- ✅ **`factory init --adopt` + `factory finish-task` + `factory-spec-review` hard dep** — `init --adopt` for brownfield onramp; `factory finish-task <id>` CLI subcommand + library helper (+1 public surface: `finishTask`, 33 → 34); `@wifo/factory-spec-review` moves to `dependencies` of `@wifo/factory-core`. Runtime emits `converged → ship via 'factory finish-task <id>'` hint on convergence.
+- ✅ **Smoke-boot scenarios in `/scope-project`** — slash command source enumerates HTTP entrypoint trigger keywords (`createServer`, `listen(<port>)`, `app.listen`, `http.createServer`, `Bun.serve`, `serve(`); appends a smoke-boot scenario that boots `bun src/main.ts` + probes + kills. Closes the v0.0.11 short-url BASELINE "library shipped, server doesn't boot" gap.
+
+**v0.0.12 dogfood summary:** 4 run-sequence invocations to ship cleanly (recovery from one bad spec assumption — bun's `--coverage=false` doesn't exist; one transient stale-dist after my source-revert; one `agent-exit-nonzero` after work landed — same shape as v0.0.11 worktree-sandbox spec). Total wall-clock ~140 minutes across all attempts; ~275k charged tokens. Public API surface: factory-core 33 → 34 (+`finishTask`); factory-runtime 26 → 26 (field-level `RunOptions.quiet?` addition). Workspace tests grew ~700 → ~750+. The v0.0.12 BASELINE re-run is the next maintainer-driven step.
 
 ---
 

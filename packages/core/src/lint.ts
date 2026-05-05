@@ -144,6 +144,26 @@ export function lintSpec(source: string, opts: LintOptions = {}): LintError[] {
     }
   }
 
+  const dodSection = findSection(source, 'Definition of Done');
+  if (dodSection) {
+    for (let idx = 0; idx < dodSection.lines.length; idx++) {
+      const line = dodSection.lines[idx];
+      if (line === undefined) continue;
+      const m = DOD_BULLET_RE.exec(line);
+      if (!m || m[1] === undefined) continue;
+      const body = m[1];
+      if (!DOD_GATE_KEYWORDS_RE.test(body)) continue;
+      if (DOD_BACKTICK_SPAN_RE.test(body)) continue;
+      push({
+        line: dodSection.headingLine + 1 + idx,
+        severity: 'warning',
+        code: 'spec/dod-needs-explicit-command',
+        message:
+          "DoD bullet looks like a runtime gate but doesn't embed a backtick-wrapped shell command. Add the literal command, e.g.: 'typecheck clean (`pnpm typecheck`)'",
+      });
+    }
+  }
+
   const subtasksSection = findSection(source, 'Subtasks');
   if (subtasksSection) {
     const body = subtasksSection.lines.join('\n');
@@ -289,5 +309,26 @@ function lintScenario(scenario: Scenario): Omit<LintError, 'file'>[] {
       });
     }
   }
+  // v0.0.12 — surface non-ASCII quote chars in `test:` patterns. The harness
+  // normalizes at run-time as a safety net, but flagging at scope-time lets
+  // the author rewrite cleanly.
+  for (const sat of scenario.satisfaction) {
+    if (sat.kind !== 'test') continue;
+    if (NON_ASCII_QUOTE_RE.test(sat.value)) {
+      errors.push({
+        line: sat.line,
+        severity: 'warning',
+        code: 'spec/test-name-quote-chars',
+        message:
+          'test name pattern uses non-ASCII quote characters; normalize to \' or " before run-time',
+      });
+    }
+  }
   return errors;
 }
+
+const NON_ASCII_QUOTE_RE = /[‘’“”]/;
+
+const DOD_BULLET_RE = /^\s*[-*]\s+(.*)$/;
+const DOD_BACKTICK_SPAN_RE = /`[^`]+`/;
+const DOD_GATE_KEYWORDS_RE = /\b(typecheck|tests?|lint|check|build|green|clean|passes?)\b/i;

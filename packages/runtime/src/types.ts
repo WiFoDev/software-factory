@@ -106,6 +106,23 @@ export interface RunOptions {
    * v0.0.10 behavior — phases run from `process.cwd()`.
    */
   worktree?: boolean | WorktreeOptions;
+  /**
+   * v0.0.12 — Field-level addition. When `true`, the runtime suppresses
+   * its `[runtime] ...` progress lines on stderr (per-phase start + end,
+   * cause-of-iteration, tooling-mismatch warning). Hard-fail stderr
+   * (RuntimeError surfaces, agent stderr captures) is unaffected. CLI
+   * `--quiet` and `factory.config.json runtime.quiet` consume this.
+   * Default `false`.
+   */
+  quiet?: boolean;
+  /**
+   * v0.0.12 — Field-level addition. Sink for the post-convergence "ship via
+   * factory finish-task <spec-id>" hint. Defaults to `process.stdout` so the
+   * hint is script-friendly (distinct from stderr progress). Tests inject a
+   * captured sink. `quiet` does NOT suppress the hint — convergence is a
+   * lifecycle event, not progress noise.
+   */
+  stdoutLog?: (line: string) => void;
 }
 
 export interface PhaseInvocationResult {

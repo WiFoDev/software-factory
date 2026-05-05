@@ -97,6 +97,14 @@ if (mode === 'success') {
   process.exit(0);
 } else if (mode === 'exit-nonzero') {
   process.stderr.write('claude: authentication failed\n');
+  // v0.0.12 — optional stderr padding for the agent-exit-nonzero stderrTail
+  // capture tests. Emit `padBytes` of additional stderr so we can exercise
+  // both the < 10 KB (stored in full) and ≥ 10 KB (truncated with marker)
+  // paths.
+  const padBytes = Number(process.env.FAKE_CLAUDE_STDERR_PAD_BYTES ?? '0');
+  if (padBytes > 0) {
+    process.stderr.write('A'.repeat(padBytes));
+  }
   process.exit(exitCode);
 } else if (mode === 'malformed-json') {
   process.stdout.write('not actually JSON');

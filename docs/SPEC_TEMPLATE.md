@@ -47,10 +47,18 @@ exemplars:
 <ordered list with explicit dependencies>
 
 ## Definition of Done
-- All scenarios pass (tests green + judge criteria met)
-- typecheck + lint + tests green
+- All scenarios pass (judge criteria met)
+- typecheck clean (`pnpm typecheck`)
+- tests green (`pnpm test`)
+- biome clean (`pnpm check`)
 - <project-specific gates if any>
 ```
+
+Each runtime-gate bullet MUST embed a backtick-wrapped shell command. The runtime extracts the literal command and shells it out via Bash; bullets without a backtick command are skipped (rather than guessed at). The lint code `spec/dod-needs-explicit-command` flags gate-shaped prose missing a literal command. Worked examples:
+
+- `typecheck clean (\`pnpm typecheck\`)`
+- `tests green (\`pnpm test\`)`
+- `biome clean (\`pnpm check\`)`
 
 ## Notes on fields
 

@@ -20,12 +20,12 @@ A self-contained spec whose `test:` lines reference sibling fixture files. `fact
   Satisfaction:
     - test: passing.test.ts
 
-**S-2** — pattern-filtered passing tests
-  Given the harness filters by test name
-  When `bun test -t "passing-arithmetic"` runs against passing.test.ts
-  Then exactly one test passes
+**S-2** — second passing fixture (sibling test file)
+  Given a second fixture file with one passing test
+  When the harness runs the test satisfaction
+  Then the test passes
   Satisfaction:
-    - test: passing.test.ts "passing-arithmetic"
+    - test: passing-arithmetic.test.ts
 
 ## Definition of Done
 

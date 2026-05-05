@@ -36,16 +36,26 @@ Wire `Bun.serve` to two endpoints: `POST /shorten { url }` returns `{ slug }`; `
   Satisfaction:
     - test: src/redirect.test.ts "GET /:slug returns 404 for missing slug"
 
+**S-4** — boots the production entrypoint on the configured port
+  Given the spec's public API exports
+  When `bun src/main.ts` (or the entrypoint declared in Constraints) is spawned with PORT=<test-port>
+  Then the process binds the configured port; a /health probe (or any defined route) returns 2xx; the process is killed cleanly
+  Satisfaction:
+    - test: src/main.test.ts "boots the production entrypoint on the configured port"
+
 ## Constraints / Decisions
 
 - New file: `src/redirect.ts`. Public export: `createServer(storage: Storage, port?: number): { stop(): void; port: number }`.
+- New file: `src/main.ts`. Production entrypoint — instantiates `createInMemoryStorage()`, calls `createServer(storage, Number(process.env.PORT ?? 3000))`, and serves a `/health` route returning HTTP 200 `{ ok: true }` for the smoke-boot probe.
 - Uses the `Storage` interface from `url-shortener-core`'s `src/core.ts` — does NOT define its own storage.
 - Bad URL on `POST /shorten` → HTTP 400 with body `{ error: 'invalid-url' }` (uses the error code from `url-shortener-core`'s Constraints).
 
 ## Subtasks
 
-- **T1** [feature] — `src/redirect.ts`: `createServer` with the two endpoints. ~80 LOC.
-- **T2** [test] — `src/redirect.test.ts`: tests covering S-1..S-3 using ephemeral ports. ~70 LOC.
+- **T1** [feature] — `src/redirect.ts`: `createServer` with the two endpoints + `/health`. ~80 LOC.
+- **T2** [feature] — `src/main.ts`: production entrypoint that boots `createServer` on `process.env.PORT`. ~15 LOC.
+- **T3** [test] — `src/redirect.test.ts`: tests covering S-1..S-3 using ephemeral ports. ~70 LOC.
+- **T4** [test] — `src/main.test.ts`: smoke-boot test covering S-4 (spawn `bun src/main.ts`, probe `/health`, kill cleanly). ~40 LOC.
 
 ## Definition of Done
 

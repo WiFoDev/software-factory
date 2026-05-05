@@ -19,6 +19,12 @@ const STDERR_TAIL_LINES = 20;
 const STDERR_TAIL_BYTES = 4 * 1024;
 const TRUNCATION_MARKER = '\n… [truncated]';
 
+// v0.0.12 — telemetry capture for agent-exit-nonzero. Last 10 KB of stderr,
+// byte-truncated (NOT line-truncated) so multi-byte chars at the truncation
+// boundary don't desync downstream parsers. When truncated, prepend the
+// `... [truncated, original size <N> bytes]\n` marker so consumers can tell.
+const STDERR_TAIL_BYTES_10KB = 10 * 1024;
+
 // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC byte is required to match ANSI CSI escape sequences
 // biome-ignore lint/complexity/useRegexLiterals: literal would require an unescaped ESC, which biome also rejects
 const ANSI_PATTERN = new RegExp('\\x1b\\[[0-9;]*[A-Za-z]', 'g');
@@ -26,6 +32,21 @@ const ANSI_PATTERN = new RegExp('\\x1b\\[[0-9;]*[A-Za-z]', 'g');
 /** Strip ANSI escape sequences from text. */
 export function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, '');
+}
+
+/**
+ * v0.0.12 — Byte-truncate stderr to the last 10 KB. UTF-8 safe at the
+ * boundary: prepended marker `... [truncated, original size <N> bytes]\n`
+ * names the original byte count when truncation happened. Short stderr
+ * stored in full (no marker). Distinct from `tailDetail` (which trims by
+ * line + ANSI-strips for prompt-friendly display) — this preserves raw
+ * bytes for diagnosis.
+ */
+export function captureStderrTail(stderr: string): string {
+  const buf = Buffer.from(stderr, 'utf8');
+  if (buf.byteLength <= STDERR_TAIL_BYTES_10KB) return stderr;
+  const slice = buf.subarray(buf.byteLength - STDERR_TAIL_BYTES_10KB);
+  return `… [truncated, original size ${buf.byteLength} bytes]\n${slice.toString('utf8')}`;
 }
 
 /**
@@ -755,12 +776,12 @@ function captureDirtyPaths(cwd: string): Set<string> {
 function captureFileChanges(args: {
   cwd: string;
   pre: Map<string, string>;
+  post: Map<string, string>;
   dirty: Set<string>;
 }): FileChangeEntry[] {
-  const post = captureFileSnapshot(args.cwd);
   const changed: FileChangeEntry[] = [];
   // Created (in post, not in pre) and modified (in both with differing hash).
-  for (const [path, hash] of post) {
+  for (const [path, hash] of args.post) {
     if (args.dirty.has(path)) continue;
     if (args.pre.get(path) === hash) continue;
     changed.push({ path, diff: simpleDiff('', safeReadRel(args.cwd, path)) });
@@ -768,7 +789,7 @@ function captureFileChanges(args: {
   // Deleted (in pre, not in post).
   for (const [path] of args.pre) {
     if (args.dirty.has(path)) continue;
-    if (post.has(path)) continue;
+    if (args.post.has(path)) continue;
     changed.push({ path, diff: simpleDiff('deleted', '') });
   }
   return changed;
@@ -970,12 +991,48 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
       log: ctx.log,
     });
 
-    // Non-zero exit code → operational failure. No envelope to record.
+    // Non-zero exit code → operational failure. v0.0.12 telemetry: persist a
+    // factory-implement-report with status='error' and failureDetail.stderrTail
+    // BEFORE throwing, so the agent's last 10 KB of stderr is recoverable from
+    // the context store without re-running. Status classification is unchanged
+    // — the runtime still treats this iteration as 'error'.
     if (spawnResult.exitCode !== 0) {
-      throw new RuntimeError(
-        'runtime/agent-failed',
-        `agent-exit-nonzero (code=${spawnResult.exitCode}): ${tailDetail(spawnResult.stderr)}`,
-      );
+      const message = `agent-exit-nonzero (code=${spawnResult.exitCode}): ${tailDetail(spawnResult.stderr)}`;
+      const post = captureFileSnapshot(cwd);
+      const filesChangedExit = captureFileChanges({ cwd, pre, post, dirty });
+      const filesChangedDebugExit = {
+        preSnapshot: [...pre.keys()].sort(),
+        postSnapshot: [...post.keys()].sort(),
+      };
+      const durationMsExit = Math.round(performance.now() - t0);
+      const exitPayload = {
+        specId: ctx.spec.frontmatter.id,
+        ...(ctx.spec.raw.filename !== undefined ? { specPath: ctx.spec.raw.filename } : {}),
+        iteration: ctx.iteration,
+        startedAt: startedAt.toISOString(),
+        durationMs: durationMsExit,
+        cwd,
+        prompt,
+        allowedTools,
+        claudePath,
+        status: 'error' as const,
+        exitCode: spawnResult.exitCode,
+        ...(spawnResult.signal !== null ? { signal: spawnResult.signal } : {}),
+        result: '',
+        filesChanged: filesChangedExit,
+        filesChangedDebug: filesChangedDebugExit,
+        toolsUsed: [] as string[],
+        tokens: { input: 0, output: 0, charged: 0, total: 0 },
+        failureDetail: {
+          message,
+          stderrTail: captureStderrTail(spawnResult.stderr),
+        },
+        ...(priorValidateReportId !== undefined ? { priorValidateReportId } : {}),
+      };
+      const exitParents =
+        priorValidateReportId !== undefined ? [ctx.runId, priorValidateReportId] : [ctx.runId];
+      await ctx.contextStore.put('factory-implement-report', exitPayload, { parents: exitParents });
+      throw new RuntimeError('runtime/agent-failed', message);
     }
 
     // Parse the envelope. Throws RuntimeError({ code: 'runtime/agent-failed' })
@@ -983,7 +1040,14 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
     const envelope = parseAgentJson(spawnResult.stdout);
 
     // Capture file changes via pre/post snapshot diff, filtered by pre-dirty.
-    const filesChanged = captureFileChanges({ cwd, pre, dirty });
+    // v0.0.12 — also expose pre/post snapshots as a side-channel `filesChangedDebug`
+    // so under-attribution bugs in the comparison are diagnosable from the record.
+    const post = captureFileSnapshot(cwd);
+    const filesChanged = captureFileChanges({ cwd, pre, post, dirty });
+    const filesChangedDebug = {
+      preSnapshot: [...pre.keys()].sort(),
+      postSnapshot: [...post.keys()].sort(),
+    };
 
     // Token extraction.
     const u = envelope.usage ?? {};
@@ -1044,6 +1108,7 @@ export function implementPhase(opts: ImplementPhaseOptions = {}): Phase {
       ...(spawnResult.signal !== null ? { signal: spawnResult.signal } : {}),
       result,
       filesChanged,
+      filesChangedDebug,
       toolsUsed,
       tokens: {
         input: tokensInput,
