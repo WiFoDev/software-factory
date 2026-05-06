@@ -83,10 +83,15 @@ describe('ci-publish — workflow structure (S-1)', () => {
     const typecheckIdx = findIndex((s) => s.run === 'pnpm typecheck');
     const testIdx = findIndex((s) => s.run === 'pnpm test');
     const checkIdx = findIndex((s) => s.run === 'pnpm check');
-    // v0.0.12 — build step accepts an optional `--workspace-concurrency=<n>`
-    // flag (added to handle the core ↔ spec-review cyclic workspace dep).
+    // v0.0.12 — build step accepts either `pnpm -r build` (with optional
+    // `--workspace-concurrency=<n>`) OR an explicit multi-line per-package
+    // order (`pnpm --filter @wifo/factory-<name> build` × N) — the latter
+    // sidesteps the core ↔ spec-review cyclic workspace dep.
     const buildIdx = findIndex(
-      (s) => typeof s.run === 'string' && /pnpm\s+-r\s+(--workspace-concurrency=\d+\s+)?build\b/.test(s.run),
+      (s) =>
+        typeof s.run === 'string' &&
+        (/pnpm\s+-r\s+(--workspace-concurrency=\d+\s+)?build\b/.test(s.run) ||
+          /pnpm\s+--filter\s+@wifo\/factory-\S+\s+build/.test(s.run)),
     );
     // v0.0.12 — publish step is idempotent (per-package loop with `npm view`
     // skip-if-published guard) instead of `pnpm publish -r`. Match either
