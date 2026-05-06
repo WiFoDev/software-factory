@@ -521,6 +521,44 @@ Lean: (a). One-line check at runtime.ts startup; `--progress` flag opts in when 
 
 ---
 
+## Break the `core ↔ spec-review` workspace cycle architecturally *(NEW, surfaced by v0.0.12 tag-fire — every CI build step had to work around it)*
+
+**What:** v0.0.12's `factory-core-v0-0-12-brownfield` spec moved `@wifo/factory-spec-review` from a lazy dynamic import to a hard `dependencies` entry of `@wifo/factory-core`. Since `spec-review` already depends on `core`, this introduced a workspace cycle. The v0.0.12 publish-workflow tag-fire surfaced the cost: pnpm can't determine a topological build order with cycles, so the CI workflow needs (a) explicit per-package build sequence in `publish.yml`, (b) `createRequire` in `core/cli.ts` to defer the spec-review type lookup to runtime. Both are pragmatic workarounds that mask the architectural issue.
+
+**Why:** Workspace cycles are a smell. Today's workarounds work but each requires future maintainers to understand "why is the build step a per-package list?" / "why does core use createRequire here?". A cleaner separation removes the smell at the source — and prevents the next dep edit from re-tripping the cycle in a new place.
+
+**Shape options:**
+- (a) **Move `@wifo/factory-spec-review` to `peerDependencies` of `@wifo/factory-core`** with `peerDependenciesMeta.<name>.optional: false`. pnpm 8+ and npm 7+ auto-install peer deps, so the v0.0.12 brownfield spec's "single install brings everything" goal still holds for the major package managers. Build-graph cycle disappears: peer deps don't form build-time edges. Risk: legacy npm versions (< 7) won't auto-install peer deps; needs an explicit caveat in the install docs.
+- (b) **Introduce `@wifo/factory-cli` umbrella package** that depends on both core + spec-review and provides the unified `factory` binary. core itself stops shipping a CLI; everything routes through factory-cli. Cleanest separation; biggest blast radius (touches every adopter's `bin: factory` reference).
+- (c) **Keep the cycle; document the workarounds.** Add a comment block at the top of `publish.yml` and `core/cli.ts` explaining why the unusual patterns exist. Cheapest; doesn't reduce the smell, just labels it.
+
+Lean: (a) for v0.0.13. Lowest blast radius; preserves the v0.0.12 zero-config goal under pnpm/npm 7+; the docs caveat for older npm is a one-liner. (b) is the right v1.0.0 architecture but premature now. (c) is fallback if (a) hits a peer-dep auto-install edge case.
+
+**Touches:** `packages/core/package.json` (move spec-review from `dependencies` to `peerDependencies`); `.github/workflows/publish.yml` (revert to `pnpm -r build` once cycle is gone); `packages/core/src/cli.ts` (revert to static `import { runReviewCli }` since the build cycle is gone — but keep the createRequire as a fallback for resolution failures); README + scaffold install docs (note "factory-spec-review auto-installs as peer; if you're on npm < 7, install both"); tests (`ci-publish.test.ts` matchers can simplify back). ~80 LOC across the changes; net code reduction.
+
+**Phasing suggestion:** v0.0.13. Pairs naturally with the bun-build-dep entry below — both are about hardening the install/build surface for adopters.
+
+---
+
+## `bun` as a hidden build dependency — make it explicit or remove *(NEW, surfaced by v0.0.12 tag-fire — `bun: not found` in CI)*
+
+**What:** `packages/core`'s `build` script runs `tsc -p tsconfig.build.json && bun run scripts/emit-json-schema.ts`. The second command emits the spec frontmatter JSON schema using bun (because the script uses bun-specific APIs or imports). bun is therefore an implicit hard build dep — but it's not declared anywhere; CI workflows need `oven-sh/setup-bun`, and brownfield adopters need bun on PATH or `factory init`-scaffolded projects can't rebuild factory-core from source. Also: every package's `test` script is `bun test src` — bun is also a hard test dep for anyone running `pnpm test` against the workspace.
+
+**Why:** Hidden hard deps fail silently for adopters and noisily in CI. The v0.0.12 publish-workflow tag-fire hit this on retry #5 (`bun: not found`). It would also hit any greenfield user who scaffolds via `factory init`, runs `pnpm install`, then attempts `pnpm build` without bun on their PATH. Two ways to close: declare bun explicitly, or remove the dep.
+
+**Shape options:**
+- (a) **Rewrite `scripts/emit-json-schema.ts` to be Node-native.** ~30 LOC. Drops the bun build-dep entirely. The test-time bun dep stays (`bun test src` is the workspace's test runner; not changing that), but `pnpm build` becomes Node-only. Adopters who only consume the published packages don't need bun.
+- (b) **Document bun as a hard prereq** in the README, AGENTS.md, and `factory init` scaffold's README. Add a `setup-bun` step to publish.yml (already shipped in v0.0.12). Doesn't reduce the dep; just makes it explicit.
+- (c) **Both.** Rewrite the schema emitter to Node (closes the build-dep) AND document bun for the test-runner dep (which is intentional and unchanged).
+
+Lean: (c). The schema emitter is a one-off script; rewriting it removes a real adopter hurdle. The test-time bun dep is intentional + documented. Splits "what bun is for" cleanly.
+
+**Touches:** `packages/core/scripts/emit-json-schema.ts` (rewrite to Node — likely just `import { writeFileSync } from 'node:fs'` + import the existing schema source from `dist/`; ~30 LOC); `packages/core/package.json` (build script becomes plain `tsc && node scripts/emit-json-schema.js`); top-level README + AGENTS.md (one paragraph: "bun is required for `pnpm test` only — `pnpm build` and the published packages are Node-native"); `factory init`'s scaffolded README inherits the same caveat. ~50 LOC.
+
+**Phasing suggestion:** v0.0.13. Pairs naturally with the cycle-break entry above — both harden the install/build surface for adopters.
+
+---
+
 ## Per-scenario test runs short-circuit coverage gates — re-shaped via option (b) *(NEW, surfaced by v0.0.12 ship — option (a) hit the bun-CLI limit)*
 
 **What:** v0.0.12's `factory-harness-v0-0-12` shipped quote normalization but DESCOPED the per-scenario coverage carve-out. Original BACKLOG option (a) called for `--coverage=false` on per-scenario `bun test` invocations; bun 1.3.x rejects this flag (`The argument '--coverage' does not take a value.`). bun has no CLI override for coverage; bunfig is the only configuration surface.
