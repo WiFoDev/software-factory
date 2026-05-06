@@ -26,6 +26,14 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
 
+      # bun is required for `pnpm test` (every package's test script runs
+      # `bun test`) AND for `packages/core`'s build (which runs
+      # `bun run scripts/emit-json-schema.ts` after tsc).
+      - name: setup-bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: install
         run: pnpm install --frozen-lockfile
 
