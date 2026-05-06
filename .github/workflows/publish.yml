@@ -42,7 +42,28 @@ jobs:
         run: pnpm -r build
 
       - name: publish
-        run: pnpm publish -r --access public --no-git-checks
+        # Idempotent per-package publish: skip any package whose local
+        # version is already on npm. Lets us re-tag a release (e.g., for
+        # GitHub Releases page hygiene after a manual `pnpm publish`)
+        # without the workflow failing on duplicate-version errors.
+        run: |
+          set -e
+          published=0
+          skipped=0
+          for pkg_dir in packages/*/; do
+            name=$(jq -r '.name' "${pkg_dir}package.json")
+            local_version=$(jq -r '.version' "${pkg_dir}package.json")
+            remote_version=$(npm view "$name" version 2>/dev/null || echo "0.0.0")
+            if [ "$local_version" != "$remote_version" ]; then
+              echo "::notice::Publishing $name@$local_version (registry was at $remote_version)"
+              (cd "$pkg_dir" && pnpm publish --access public --no-git-checks)
+              published=$((published + 1))
+            else
+              echo "::notice::Skipping $name@$local_version (already on npm)"
+              skipped=$((skipped + 1))
+            fi
+          done
+          echo "::notice::publish summary — published=$published skipped=$skipped"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
