@@ -84,6 +84,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@wifo/factory-spec-review':
+        specifier: workspace:*
+        version: link:../spec-review
       yaml:
         specifier: ^2.5.0
         version: 2.8.3
