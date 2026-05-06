@@ -83,12 +83,18 @@ describe('ci-publish — workflow structure (S-1)', () => {
     const typecheckIdx = findIndex((s) => s.run === 'pnpm typecheck');
     const testIdx = findIndex((s) => s.run === 'pnpm test');
     const checkIdx = findIndex((s) => s.run === 'pnpm check');
-    const buildIdx = findIndex((s) => s.run === 'pnpm -r build');
+    // v0.0.12 — build step accepts an optional `--workspace-concurrency=<n>`
+    // flag (added to handle the core ↔ spec-review cyclic workspace dep).
+    const buildIdx = findIndex(
+      (s) => typeof s.run === 'string' && /pnpm\s+-r\s+(--workspace-concurrency=\d+\s+)?build\b/.test(s.run),
+    );
+    // v0.0.12 — publish step is idempotent (per-package loop with `npm view`
+    // skip-if-published guard) instead of `pnpm publish -r`. Match either
+    // shape to keep the invariant assertion stable across the change.
     const publishIdx = findIndex(
       (s) =>
         typeof s.run === 'string' &&
         s.run.includes('pnpm publish') &&
-        s.run.includes('-r') &&
         s.run.includes('--access public'),
     );
 
@@ -96,11 +102,13 @@ describe('ci-publish — workflow structure (S-1)', () => {
     expect(setupPnpmIdx).toBeGreaterThan(checkoutIdx);
     expect(setupNodeIdx).toBeGreaterThan(setupPnpmIdx);
     expect(installIdx).toBeGreaterThan(setupNodeIdx);
-    expect(typecheckIdx).toBeGreaterThan(installIdx);
+    // v0.0.12 — build runs BEFORE typecheck so cross-package type resolution
+    // (e.g., harness → @wifo/factory-core) finds workspace-linked dist/.
+    expect(buildIdx).toBeGreaterThan(installIdx);
+    expect(typecheckIdx).toBeGreaterThan(buildIdx);
     expect(testIdx).toBeGreaterThan(typecheckIdx);
     expect(checkIdx).toBeGreaterThan(testIdx);
-    expect(buildIdx).toBeGreaterThan(checkIdx);
-    expect(publishIdx).toBeGreaterThan(buildIdx);
+    expect(publishIdx).toBeGreaterThan(checkIdx);
 
     // setup-node pins node 22
     const nodeStep = steps[setupNodeIdx];

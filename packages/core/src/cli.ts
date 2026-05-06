@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { runReviewCli } from '@wifo/factory-spec-review/cli';
 import { finishTask } from './finish-task.js';
 import { runInit } from './init.js';
 import { getFrontmatterJsonSchema } from './json-schema.js';
@@ -71,11 +71,16 @@ export function runCli(argv: string[], io: CliIo = defaultIo): void {
   }
   if (command === 'review') {
     // v0.0.12 — `@wifo/factory-spec-review` is a hard dep of `@wifo/factory-core`.
-    // The import resolves through the standard package resolver, so
-    // `npx -p @wifo/factory-core factory spec review` works zero-config without
-    // also passing `-p @wifo/factory-spec-review`.
+    // Resolved via `createRequire` rather than a static import to avoid a
+    // build-time cycle (core ← spec-review ← core); the runtime resolution
+    // still goes through the standard package resolver, so
+    // `npx -p @wifo/factory-core factory spec review` works zero-config.
     void (async () => {
       try {
+        const requireSpecReview = createRequire(import.meta.url);
+        const { runReviewCli } = requireSpecReview('@wifo/factory-spec-review/cli') as {
+          runReviewCli: (argv: string[], io: CliIo) => Promise<void>;
+        };
         await runReviewCli(rest, io);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
