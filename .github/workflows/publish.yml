@@ -32,8 +32,12 @@ jobs:
       # Build must run before typecheck/test/check so cross-package
       # type resolution (e.g., harness importing @wifo/factory-core)
       # finds the workspace-linked `dist/` from a fresh checkout.
+      # `--workspace-concurrency=1` forces serial builds: the
+      # core ↔ spec-review hard-dep (added in v0.0.12) introduces a
+      # cyclic workspace edge that prevents pnpm from determining
+      # topo-order; serial gives a consistent linear walk that works.
       - name: build
-        run: pnpm -r build
+        run: pnpm -r --workspace-concurrency=1 build
 
       - name: typecheck
         run: pnpm typecheck
