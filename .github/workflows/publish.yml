@@ -29,6 +29,12 @@ jobs:
       - name: install
         run: pnpm install --frozen-lockfile
 
+      # Build must run before typecheck/test/check so cross-package
+      # type resolution (e.g., harness importing @wifo/factory-core)
+      # finds the workspace-linked `dist/` from a fresh checkout.
+      - name: build
+        run: pnpm -r build
+
       - name: typecheck
         run: pnpm typecheck
 
@@ -37,9 +43,6 @@ jobs:
 
       - name: check
         run: pnpm check
-
-      - name: build
-        run: pnpm -r build
 
       - name: publish
         # Idempotent per-package publish: skip any package whose local
