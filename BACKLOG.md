@@ -426,6 +426,101 @@ Lean: ship (b) + (c) together in v0.0.9. (a) is too crude. (d) is v0.1.0+ territ
 
 ---
 
+## `factory init` ships a `biome.json` matching the pinned Biome major *(NEW, surfaced by v0.0.12 BASELINE — friction #1, every adopter pays the tax)*
+
+**What:** `factory init`'s `biome.json` template uses `"include"` (Biome 1.x's key); the same scaffold's `package.json` pins `@biomejs/biome ^2.4.4` which resolves to 2.4.14 where the key migrated to `"includes"`. Every greenfield run hits this on the first `pnpm check`, has to hand-patch one character, then re-runs. Surfaced cleanly by the v0.0.12 BASELINE — the first action the dogfooder took after `factory init` was the inline `"include" → "includes"` patch.
+
+**Why:** The scaffold's job is "first-contact UX" — and we just shipped `factory init --adopt` to broaden adoption. A scaffold that doesn't pass its own DoD lint gate on a fresh `pnpm install` is a brownfield trust regression. Closes a real-time tax measured at every adopter.
+
+**Shape options:**
+- (a) **Update `biome.json` template to match the pinned major's schema.** Today: write `"includes"` (Biome 2.x key). Bonus: read `@biomejs/biome` version constant from `init-templates.ts` and assert in tests that the template matches the major. ~10 LOC + a regression-pin test.
+- (b) **Pin `@biomejs/biome` to `~1.9.4`** (the major that uses `"include"`) instead of bumping to 2.x. Sidesteps the migration but inherits a deprecated major. Worse direction.
+- (c) **Add a scaffold smoke test** that runs `pnpm check` against the freshly-scaffolded tree as part of `init.test.ts`. Catches this class of bug going forward — every scaffold change has to keep `pnpm check` green. ~30 LOC.
+
+Lean: (a) + (c). Fix the immediate scaffold; add the regression-pin so this class of bug surfaces in CI rather than at every adopter's first run.
+
+**Touches:** `packages/core/src/init-templates.ts` (biome.json template + version constant), `packages/core/src/init.test.ts` (scaffold smoke test), tests, README. ~50 LOC.
+
+**Phasing suggestion:** v0.0.13 lead candidate. Highest leverage of the v0.0.12 BASELINE findings — every brownfield + greenfield adopter pays this tax on first contact.
+
+---
+
+## `factory init` + `/scope-project` auto-emit a literal-command DoD template *(NEW, surfaced by v0.0.12 BASELINE — friction #2, ergonomics fix to the v0.0.12 lint we just shipped)*
+
+**What:** v0.0.12 shipped the `spec/dod-needs-explicit-command` lint warning (DoD bullets like "tests pass green" without a backtick command). The v0.0.12 BASELINE found the lint fires four times per cluster on the natural-language DoD lines spec authors write by hand — fresh users re-discover the same warning every spec. Both `factory init` (which writes `package.json` with known scripts) and `/scope-project` (which authors specs against those scripts) have the data to emit a project-default DoD block automatically — they're just not wired together.
+
+**Why:** This is "shipped the catch, didn't ship the fix." A lint warning that fires repeatedly on the natural-language idiom every author uses isn't catching a bomb — it's catching the user. The fix is to give the author the right DoD block by default so they never write the imprecise version in the first place.
+
+**Shape options:**
+- (a) **`factory.config.json` gains `dod.template?: string[]`.** New field; default derived from `package.json` scripts at `factory init` time (`['typecheck clean (\`pnpm typecheck\`)', 'tests green (\`pnpm test\`)', 'biome clean (\`pnpm check\`)']`). `/scope-project`'s slash-command source enumerates "if `factory.config.json` has `dod.template`, use it as the DoD section's body; otherwise fall back to canonical defaults."
+- (b) **`factory init --emit-dod-template`** writes a DoD-template file to disk (`docs/specs/_dod-template.md`) that scope-project reads. More files; same outcome.
+- (c) **`/scope-project` reads `package.json` scripts directly** and constructs the DoD block at scope time. Self-contained; doesn't add config surface.
+
+Lean: (a). The `factory.config.json` is the canonical place for project-wide knobs; this pairs naturally with `runtime.maxAgentTimeoutMs` etc. The fall-back-to-defaults path keeps existing projects working.
+
+**Touches:** `packages/core/src/init-templates.ts` (write `dod.template` derived from scripts at init time), `packages/core/src/config.ts` (consume `dod.template` field), `packages/core/commands/scope-project.md` (instruction to use `dod.template`), tests, README. ~80 LOC.
+
+**Phasing suggestion:** v0.0.13. Pairs naturally with the biome.json fix above (both touch `factory init`'s template surface).
+
+---
+
+## `factory init` pre-creates `.factory/` + adds `worktrees/` to `.gitignore` *(NEW, surfaced by v0.0.12 BASELINE — friction #3)*
+
+**What:** The runtime creates `.factory/` on first use, but anything that writes there *before* the runtime starts (e.g., `tee .factory/run-sequence.log` to capture the run output) fails at startup with "no such file or directory." The dogfooder hit this on the v0.0.12 BASELINE while trying to capture the run-sequence log alongside the runtime records.
+
+**Why:** The "capture-the-log alongside the records" pattern is universal — every dogfooder + every CI invocation does it. Today's runtime creates `.factory/` lazily, which means anything outside the runtime's own scope is racing it. The fix is trivial; the friction is real.
+
+**Shape options:**
+- (a) **`factory init` writes `.factory/.gitkeep`** (creates the dir at init time). Adds `.factory/worktrees/` and `.factory/twin-recordings/` to `.gitignore`. ~10 LOC.
+- (b) **Runtime creates `.factory/` on import** (not first write). Stretches the runtime's responsibility into eager dir-creation. More surface change.
+- (c) Both — (a) for greenfield, (b) for any path that imports the runtime without going through `factory init`.
+
+Lean: (a) for v0.0.13. Tiny lift; matches the scaffold's "first-contact UX" responsibility. (b) is over-eager.
+
+**Touches:** `packages/core/src/init-templates.ts` (add `.factory/.gitkeep` to template + extend `.gitignore` template), tests, README. ~15 LOC.
+
+**Phasing suggestion:** v0.0.13. Three-line fix; ship alongside friction #1 + #2.
+
+---
+
+## `factory finish-task --all-converged` batch ship-cycle move-to-done *(NEW, surfaced by v0.0.12 BASELINE — honorable mention #1)*
+
+**What:** v0.0.12 shipped per-spec `factory finish-task <id>` — but the maintainer's natural workflow ships an entire cluster, then wants to move *all* shipped specs in one go. Today the maintainer either runs `factory finish-task <id>` per spec or `git mv` manually; neither matches the "approve-and-watch one command" feel of the rest of `run-sequence`. The runtime already knows which specs converged in the most recent sequence; `--all-converged` walks them.
+
+**Why:** The move-to-done step is the only step of the v0.0.11+v0.0.12 workflow that doesn't auto-progress with the rest. Closes the loop on "the factory ships a 4-spec product in one CLI invocation" — currently the user still does 4 finish-tasks (or 1 git mv with shell glob).
+
+**Shape options:**
+- (a) **Extend `factory finish-task` to accept either `<spec-id>` or `--all-converged [--since <factorySequenceId>]`.** Default `--since` is the most recent factory-sequence record in the context store. Lists shipped specs from that sequence's converged factory-runs; moves each. Emits one `factory-spec-shipped` record per spec.
+- (b) **`factory finish-task --since <isoTimestamp>`** — same idea, time-based instead of sequence-based. Less precise but simpler.
+- (c) **`factory finish-task --interactive`** — prompts per converged spec. Worse — defeats "approve-and-watch."
+
+Lean: (a). Default to the most recent `factory-sequence`'s converged set; allow `--since <id>` to override. Matches how the runtime already thinks about cluster-atomic ships.
+
+**Touches:** `packages/core/src/finish-task.ts` (extend signature + walk factory-sequence), `packages/core/src/cli.ts` (new `--all-converged` flag + `--since`), tests, README. ~60 LOC.
+
+**Phasing suggestion:** v0.0.13. Smallest CLI ergonomics fix in the cluster; closes the only step that doesn't auto-progress.
+
+---
+
+## Default `--quiet` for non-TTY stdout (or stderr-progress channel discipline) *(NEW, surfaced by v0.0.12 BASELINE — honorable mention #2)*
+
+**What:** v0.0.12 shipped live progress on stderr default-on. The v0.0.12 BASELINE dogfooder noted this pollutes captured logs — `tee` and shell redirection (`2>&1 | tee log.txt`) catch the progress lines as noise. `--quiet` exists but is opt-in; the most common capture pattern silently re-pollutes.
+
+**Why:** The progress-on-stderr default optimizes for the human watching the run. The capture pattern (every CI, every dogfood log) is the OTHER common case. The default needs to be smart enough to detect which case it's in.
+
+**Shape options:**
+- (a) **Auto-detect `process.stderr.isTTY` and downgrade to `--quiet` when not a TTY.** Simplest; matches the "smart default" idiom most CLIs use. ~5 LOC. Override via `--progress` flag for non-TTY contexts that DO want progress (e.g., a CI job that wants step-by-step in its captured log).
+- (b) **Move progress to a third stream via `--progress=fd:N` flag.** Most precise but most complex; new flag surface.
+- (c) **`--no-quiet` opt-in for non-TTY**, default behavior matches `--quiet`. Reverses the default; users in TTY mode have to opt in to the progress they had v0.0.12.
+
+Lean: (a). One-line check at runtime.ts startup; `--progress` flag opts in when capture *wants* progress. Matches the idiom; no new flag surface beyond `--progress`.
+
+**Touches:** `packages/runtime/src/cli.ts` (TTY check + auto-quiet), `packages/runtime/src/runtime.ts` (consume the resolved quiet flag), tests (snapshot stderr in TTY-vs-non-TTY mode), README. ~30 LOC.
+
+**Phasing suggestion:** v0.0.13. Smallest fix in the cluster; closes the "live progress on stderr is great until you `tee`" friction.
+
+---
+
 ## Per-scenario test runs short-circuit coverage gates — re-shaped via option (b) *(NEW, surfaced by v0.0.12 ship — option (a) hit the bun-CLI limit)*
 
 **What:** v0.0.12's `factory-harness-v0-0-12` shipped quote normalization but DESCOPED the per-scenario coverage carve-out. Original BACKLOG option (a) called for `--coverage=false` on per-scenario `bun test` invocations; bun 1.3.x rejects this flag (`The argument '--coverage' does not take a value.`). bun has no CLI override for coverage; bunfig is the only configuration surface.

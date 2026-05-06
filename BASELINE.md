@@ -454,6 +454,134 @@ The "trust contract + spec-quality teeth + workflow polish" cluster shipped (`do
 
 **Would you want to use the factory for the next product?** Per the agent: *"yes — would use the factory for the next product. First-iteration convergence on every spec with locked shared decisions surviving four independent implementer invocations is a real win — `/scope-project` did its job."* Net signal: **v0.0.10 is the first release where the factory is recommended without caveats** — first-iter convergence on every spec, DoD gates working as designed, /scope-project's decomposition surviving multi-spec consistency, friction shifted to polish tier.
 
+##### v0.0.11 — shipped 2026-05-04 (worktree-sandbox + dynamic DAG walk landed; first 1-invocation 4-spec ship)
+
+The "trust → isolation + trust-layer calibration" cluster shipped (worktree sandbox, holdout-aware convergence, dod-precision calibration, charged-token budget surfacing, **dynamic DAG walk** for run-sequence, CI publish hardening). Run executed in `~/dev/url-shortener-v0.0.11/` against the published 0.0.11 packages.
+
+**Predictions (locked before the run):**
+
+1. Dynamic DAG walk collapses 4 invocations → 1.
+2. Charged-token surfacing makes the budget number meaningful again.
+3. dod-precision calibration eliminates the "green/clean" false-positives.
+4. First baseline where some spec needs iter 2+ (the streak ends eventually).
+
+**Actuals:**
+
+| Spec | Iterations | Wall-clock | Tokens (charged) |
+|---|---|---|---|
+| core-store-and-slug | **2** | 173.1s | 8,521 |
+| shorten-endpoint | 1 | 87.6s | 4,741 |
+| redirect-with-click-tracking | 1 | 68.9s | 4,387 |
+| stats-endpoint | 1 | 60.9s | 3,489 |
+| **Total (4 specs)** | **5** | **6m 32s (392.4s)** | **21,138** |
+
+| Metric | v0.0.7 | v0.0.8 | v0.0.9 | v0.0.10 | v0.0.11 |
+|---|---|---|---|---|---|
+| Specs shipped | 4 (linear) | 5 (diamond) | 4 (diamond) | 4 (linear) | **4 (linear)** |
+| Wall-clock | 5m 9s | 6m 26s | 6m 26s | 5m 12s | **6m 32s** |
+| Wall-clock per spec | 77 s | 77 s | 77 s | 78 s | **98 s** |
+| Charged tokens | 17,009 | 20,900 | 17,009 | 17,422 | **21,138** |
+| Tokens per spec | ~4,250 | ~4,180 | ~4,180 | ~4,355 | **~5,285** |
+| Iterations / spec | 1 each | 1 each | 1 each | 1 each | **1 each (3) + 2 (1)** |
+| Maintainer interventions | 32 | ~3-8 | ~3-8 | 7 | **1 invocation** ✓ |
+
+**End-to-end smoke:** all `curl` calls in the cookbook behave per spec.
+
+**Top 3 friction points (per agent's JOURNAL — ranked by annoyance):**
+
+1. **`run-sequence` is silent about *why* a spec re-iterated.** `core-store-and-slug` needed iter 2; the only way to find out what failed in iter 1 was to read both implement-report payloads (~10KB each) and diff them against the working tree. ~5 min of manual archaeology to answer a one-line question. **NEW v0.0.12 BACKLOG entry — highest impact.**
+2. **The runtime ships product code without the production entrypoint.** `shorten-endpoint`'s Constraints specified `index.ts` (or `src/main.ts`) calls `createServer({ port: 3000 })`, but no spec emitted a `test:` line forcing its existence — implement shipped library-only code and `bun src/main.ts` 404'd. Dogfooder hand-wrote 4 lines to make the curl cookbook runnable. **NEW v0.0.12 BACKLOG entry.**
+3. **`factory-implement-report.filesChanged` reports 0 despite obvious edits.** Two of four iterations reported `filesChanged: 0` despite both `src/server.ts` and `src/store.ts` getting patched (verified by `git log --stat`). Different shape from v0.0.6's new-file false-negative — this fails on edits to *existing* files. **NEW v0.0.12 BACKLOG entry — correctness bug.**
+
+**Predicted-vs-actual scoring:**
+
+| Prediction | Outcome | Notes |
+|---|---|---|
+| #1 Dynamic DAG walk → 1 invocation | ✅ Landed | 4 specs shipped in one `run-sequence` invocation; auto-promotion of `drafting → ready` worked invisibly. |
+| #2 Charged-token surfacing meaningful | ✅ Landed | `tokens.charged` is now the budget-relevant number; `tokens.total` (cache-aware) preserved as deprecated alias. |
+| #3 dod-precision calibration eliminates green/clean false positives | ✅ Landed | Reviewer no longer fires on canonical idioms paired with a command. |
+| #4 First baseline with iter 2+ | ✅ Landed | `core-store-and-slug` needed iter 2 — first time across 6 baselines. **The streak ended at 5.** |
+
+**Surprises (the high-value entries):**
+
+- **The 6-baseline streak of 1-iter-per-spec convergence broke.** `core-store-and-slug` hit iter 2. Apparent because the friction immediately shifted from "did it converge?" to "*why* did it re-iterate?" — exactly the friction-shifts-up pattern v0.0.10 anticipated. Friction #1 above is the direct consequence.
+- **Per-spec wall-clock crept up from 78s → 98s.** Mostly from the iter-2 spec dragging the average; the 3 single-iter specs averaged 72s, in line with the v0.0.7-v0.0.10 invariant.
+- **`/scope-project` + dynamic DAG walk together earned the v0.0.11 lineage.** The agent's verdict — *"yes — would use the factory for the next product. /scope-project + run-sequence removed the two most-tedious chores; 4 specs shipped in ~6.5min with one human-readable command"* — confirms the v0.0.10 maturity-threshold holds AND the workflow tightened further: 7 maintainer interventions → 1.
+- **The `filesChanged` correctness bug is a real regression** of trust on a v0.0.6-fixed area. Different shape from the v0.0.6 fix (which addressed new-file-only runs); this one fails on edits to *existing* files. Telemetry-first response (capture pre/post snapshots in factory-implement-report) shipped in v0.0.12.
+
+**Mapped BACKLOG entries:**
+- Friction #1 (cause-of-iteration) → NEW v0.0.12 entry — closed via `factory-runtime-v0-0-12-observability`.
+- Friction #2 (production entrypoint missing) → NEW v0.0.12 entry — closed via `scope-project-v0-0-12-smoke-boot`.
+- Friction #3 (filesChanged undercount) → NEW v0.0.12 entry — telemetry capture closed via `factory-runtime-v0-0-12-correctness`; algorithm replacement deferred to v0.0.13 once captured snapshots reveal the root cause.
+
+**Would you want to use the factory for the next product?** Per the agent: *"Yes. /scope-project + run-sequence removed the two most-tedious chores (decomposition copy-paste and per-spec status flipping); 4 specs shipped in ~6.5min with one human-readable command. The friction items are real but small — none broke the workflow, they just left small gaps I filled by hand."* Net signal: **v0.0.11 is the first release that ships an entire 4-spec product in one CLI invocation.** The friction has shifted entirely to observability + edge cases.
+
+##### v0.0.12 — shipped 2026-05-06 (4/4 specs first-iter; init-script + observability friction shapes for v0.0.13)
+
+The "validate-phase reliability + brownfield onramp + observability + DoD trust" cluster shipped (harness quote normalization + `spec/test-name-quote-chars` lint, runtime live progress + cause-of-iteration + monotonic-DoD-pass detection + `--quiet`, runtime dedup status verify + filesChanged debug telemetry + agent stderrTail capture, literal DoD shell commands + `spec/dod-needs-explicit-command` lint, `factory init --adopt` + `factory finish-task` + `factory-spec-review` hard dep, smoke-boot scenarios in `/scope-project`). Run executed in `~/dev/url-shortener-v0.0.12/` against the published 0.0.12 packages.
+
+**Predictions (locked before the run):**
+
+1. The 1-iter convergence streak resumes (v0.0.11's iter-2 was caused by validate-phase friction the v0.0.12 cluster addressed at the source).
+2. The new live progress + cause-of-iteration line shows up in the captured log.
+3. `factory finish-task` works end-to-end for the move-to-done step.
+4. The `spec/dod-needs-explicit-command` lint catches DoD bullets the agent might author imprecisely.
+
+**Actuals:**
+
+| Spec | Iterations | Wall-clock | Tokens (charged) |
+|---|---|---|---|
+| shorten-endpoint | 1 | 168s | 8,594 |
+| redirect-endpoint | 1 | 70s | 3,368 |
+| click-tracking | 1 | 145s | 8,388 |
+| stats-endpoint | 1 | 74s | 4,378 |
+| **Total (4 specs)** | **4** | **7m 35s (455.4s)** | **24,728** |
+
+| Metric | v0.0.7 | v0.0.8 | v0.0.9 | v0.0.10 | v0.0.11 | v0.0.12 |
+|---|---|---|---|---|---|---|
+| Specs shipped | 4 | 5 | 4 | 4 | 4 | **4 (linear)** |
+| Wall-clock | 5m 9s | 6m 26s | 6m 26s | 5m 12s | 6m 32s | **7m 35s** |
+| Wall-clock per spec | 77 s | 77 s | 77 s | 78 s | 98 s | **114 s** |
+| Charged tokens | 17,009 | 20,900 | 17,009 | 17,422 | 21,138 | **24,728** |
+| Tokens per spec | ~4,250 | ~4,180 | ~4,180 | ~4,355 | ~5,285 | **~6,182** |
+| Iterations / spec | 1 each | 1 each | 1 each | 1 each | 1 each (3) + 2 (1) | **1 each** ✓ |
+| Maintainer interventions | 32 | ~3-8 | ~3-8 | 7 | 1 invocation | **1 invocation** ✓ |
+
+**End-to-end smoke:** all `curl` calls in the cookbook behave per spec.
+
+**Top 3 friction points (per agent's JOURNAL):**
+
+1. **`factory init` ships a `biome.json` incompatible with the bundled Biome version.** Scaffold writes `"include"` (Biome 1.x); `package.json` pins `^2.4.4` which resolves to 2.4.14, where the key is `"includes"`. Every greenfield run has to hand-patch this to make `pnpm check` green and satisfy the DoD lint gate. **NEW v0.0.13 BACKLOG entry — highest impact (every adopter pays the tax).**
+2. **`spec/dod-needs-explicit-command` warns on natural-language DoD lines.** "typecheck + lint + tests green" is what every author writes; the linter wants `(\`pnpm typecheck\`)`, `(\`pnpm check\`)`, `(\`bun test src\`)`. Both `factory init` and `/scope-project` know which scripts exist in `package.json` — they could emit the project-default DoD block automatically. Fresh users re-discover the same warning four times per cluster. **NEW v0.0.13 BACKLOG entry — ergonomics fix to the v0.0.12 lint we just shipped.**
+3. **`.factory/` is not pre-created by `factory init`.** Runtime creates it on first use, but anything that writes there before runtime starts (e.g., `tee .factory/run-sequence.log`) fails at startup. **NEW v0.0.13 BACKLOG entry — `~10 LOC fix.**
+
+**Honorable mentions** (per agent): `factory finish-task --all-converged` for batch ship-cycle move-to-done; default `--quiet` for non-TTY stdout (the per-iteration `[runtime]` lines pollute captured logs). Both → NEW v0.0.13 BACKLOG entries.
+
+**Predicted-vs-actual scoring:**
+
+| Prediction | Outcome | Notes |
+|---|---|---|
+| #1 1-iter convergence streak resumes | ✅ Landed | 4/4 first-iter convergence — the streak resets at v0.0.12. The v0.0.11 iter-2 was caused by missing run-sequence observability + a transient stale-dist; both addressed. |
+| #2 Live progress in captured log | ✅ Landed (with friction) | The `[runtime]` lines show up in the captured log AND pollute it (friction honorable mention #2). The default needs an auto-quiet for non-TTY. |
+| #3 `factory finish-task` works end-to-end | ✅ Landed | Per-spec move worked; batch mode wanted (honorable mention #1). |
+| #4 dod-needs-explicit-command catches imprecise DoD | ⚠️ Partially landed | Catches them, but as friction #2 above — the lint fires too readily on natural-language DoD lines without offering an alternative. |
+
+**Surprises (the high-value entries):**
+
+- **First baseline where ALL friction is `factory init`-shaped.** The 3 ranked friction items + 2 honorable mentions are all init-script / CLI-default ergonomics. Zero runtime/judge friction. The factory's runtime + judge layers have stabilized; iteration is now on the bootstrap surface.
+- **Per-spec wall-clock crept again to 114s.** This is the second consecutive baseline where the per-spec invariant (~77-78s through v0.0.10) is no longer holding. Possibly attributable to: (a) the live-progress instrumentation adding minor overhead, (b) larger spec bodies due to the literal-DoD-command requirement, or (c) prompt-cache invalidation from v0.0.12's prompt edits. Worth investigating before the trend solidifies — flag for v0.0.13 surveillance.
+- **The `dod-needs-explicit-command` lint we just shipped became its own friction point on the very next baseline.** Classic case of "shipped the catch, didn't ship the fix." The ergonomics complement (auto-emit a default DoD block from `factory.config.json` script names) is the natural v0.0.13 follow-up.
+- **Verdict held — agent recommended unconditionally.** Per the agent: *"Yes — status-aware run-sequence plus the shared-Constraints discipline of /scope-project turned a 4-feature backend into one approve-and-watch command, and the few friction points (biome scaffold mismatch, DoD-line linter, missing .factory/) are all init-script-shaped fixes that should be easy wins for v0.0.13."* This is the second consecutive baseline (v0.0.11, v0.0.12) where the verdict is "yes, would use again, friction is small."
+
+**Mapped BACKLOG entries:**
+- Friction #1 (biome.json scaffold mismatch) → NEW v0.0.13 entry — highest leverage.
+- Friction #2 (dod-needs-explicit-command ergonomics) → NEW v0.0.13 entry — auto-emit DoD template from `package.json` scripts.
+- Friction #3 (`.factory/` not pre-created) → NEW v0.0.13 entry — small init-template addition.
+- Honorable mention #1 (`factory finish-task --all-converged`) → NEW v0.0.13 entry — batch CLI ergonomics.
+- Honorable mention #2 (default `--quiet` for non-TTY) → NEW v0.0.13 entry — progress-output discipline.
+
+**Would you want to use the factory for the next product?** Per the agent: *"Yes — status-aware run-sequence plus the shared-Constraints discipline of /scope-project turned a 4-feature backend into one approve-and-watch command."* Net signal: **v0.0.12's friction is purely init-script-shaped polish; the runtime+judge+sequence-runner triad is mature.**
+
 ##### v0.1.0 — pending
 
 After scheduler (Layer 5) ships. The maintainer prompt should reduce to "scope this product, ship it overnight" with no hand-driving. If we're not there by v0.1.0, the scheduler isn't done.
