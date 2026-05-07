@@ -582,6 +582,84 @@ The "validate-phase reliability + brownfield onramp + observability + DoD trust"
 
 **Would you want to use the factory for the next product?** Per the agent: *"Yes — status-aware run-sequence plus the shared-Constraints discipline of /scope-project turned a 4-feature backend into one approve-and-watch command."* Net signal: **v0.0.12's friction is purely init-script-shaped polish; the runtime+judge+sequence-runner triad is mature.**
 
+##### v0.0.13 — shipped 2026-05-07 (3 v0.0.13 wins confirmed; 3 must-fix bugs surfaced — first regression-heavy ship)
+
+The "init-script ergonomics + brownfield-adopter polish + architectural cycle-break" cluster shipped (factory init first-contact polish, auto-quiet for non-TTY, factory finish-task --all-converged, per-scenario coverage-trip detection, peer-dep cycle-break, schema emitter Node-native + Trusted Publishing OIDC). Run executed in `~/dev/url-shortener-v0.0.13/` against the published 0.0.13 packages.
+
+**Predictions (locked before the run):**
+
+1. v0.0.13's `factory init` first-contact polish lands clean — `pnpm check` exits 0 on day zero, `.factory/` exists, `factory.config.json` carries `dod.template`.
+2. The 1-iter-per-spec convergence streak resumes (v0.0.13 cluster shipped 6/6 first-iter; the dogfood inherits stability).
+3. Auto-quiet under non-TTY suppresses `[runtime]` progress in captured logs.
+4. `factory finish-task --all-converged` works as one batch command for move-to-done.
+5. Trusted Publishing OIDC means the published 0.0.13 packages have verifiable provenance attestations on npm.
+
+**Actuals:**
+
+| Spec | Iterations | Wall-clock | Tokens (charged) | Result |
+|---|---|---|---|---|
+| `shorten` | 1 | 130s | 7,301 | converged |
+| `redirect` | 1 | 80s | 3,893 | converged |
+| `click-tracking` | **5** | 248s | 11,405 | **no-converge** (phantom — see friction #1) |
+| `stats` (run-2) | 1 | 81s | 4,305 | converged |
+| **Total (4 specs across 2 invocations)** | **8** | **~9m 10s (550s)** | **26,904** | 4/4 work landed; 1 spec hit phantom no-converge that recovered after manual edit |
+
+| Metric | v0.0.7 | v0.0.8 | v0.0.9 | v0.0.10 | v0.0.11 | v0.0.12 | v0.0.13 |
+|---|---|---|---|---|---|---|---|
+| Specs shipped | 4 | 5 | 4 | 4 | 4 | 4 | **4 (linear)** |
+| Wall-clock | 5m 9s | 6m 26s | 6m 26s | 5m 12s | 6m 32s | 7m 35s | **9m 10s** ⚠ |
+| Wall-clock per spec | 77 s | 77 s | 77 s | 78 s | 98 s | 114 s | **138 s** ⚠ |
+| Charged tokens | 17,009 | 20,900 | 17,009 | 17,422 | 21,138 | 24,728 | **26,904** ⚠ |
+| Iterations / spec | 1 each | 1 each | 1 each | 1 each | 1 each (3) + 2 (1) | 1 each | **1 each (3) + 5 phantom (1)** |
+| Maintainer interventions | 32 | ~3-8 | ~3-8 | 7 | 1 invocation | 1 invocation | **2 invocations + 1 spec edit + 1 manual mv-back** |
+
+**End-to-end smoke:** all `curl` calls in the cookbook behave per spec.
+
+**Top 3 friction points (per agent's JOURNAL):**
+
+1. **Validator strips apostrophes from `bun test -t <pattern>` — phantom no-converge.** Regression of v0.0.12's `normalizeTestNamePattern`. The `click-tracking` spec used `"slug's log"` in a `test:` line; the runtime stripped the apostrophe before passing to bun's regex matcher; bun never found the test. 5 wasted iterations × ~50s + ~11k tokens before the dogfooder gave up and renamed the test. **The implement-validate loop becomes unsound when the validator's test discovery is lossy on a character class.** **NEW v0.0.14 BACKLOG entry — MUST-FIX, lead candidate.**
+2. **`workspace:*` shipped to npm — `npx @wifo/factory-core init` fails with `EUNSUPPORTEDPROTOCOL`.** v0.0.13.x's CI publish switch from `pnpm publish` to `npm publish` lost the auto-rewrite of `workspace:*` to real semver. Every fresh user hits this on first contact. Workaround via `pnpm.overrides` exists but makes the scaffold dirty. **NEW v0.0.14 BACKLOG entry — MUST-FIX.**
+3. **`factory spec review` broken on published packages — `createRequire` hits CJS resolution against ESM-only exports map.** v0.0.13 kept the v0.0.12 createRequire workaround for the cycle; createRequire does CJS resolution; spec-review's exports map only has `import` + `types`. Silent exit 0; reviewer can't review. Workspace works (symlinks bypass exports map); npm-published fails. **NEW v0.0.14 BACKLOG entry — MUST-FIX.**
+
+**Honorable mentions (per agent):**
+- `finish-task --all-converged` ships specs that run-sequence called `no-converge` (definitional drift between two parts of toolchain).
+- `--context-dir` default differs across `factory-runtime` (`./.factory`) / `factory finish-task` (`./context`) / `factory-context` (`./context`).
+- Scaffold's `biome.json` fails its own `pnpm check` until `--write` runs (lineWidth=100 multi-line rule trips on biome's own template).
+- Day-0 DoD gates fail on freshly-scaffolded tree (empty src/, no test files, biome rule mismatches itself).
+- YAML colon-in-string parse trap on frontmatter (lint catches; auto-quote would prevent re-discovery).
+- Skill-injection noise reaches subprocess agents (session-start hooks inject false-positive Vercel/Next.js context into every `claude -p` invocation).
+
+**Predicted-vs-actual scoring:**
+
+| Prediction | Outcome | Notes |
+|---|---|---|
+| #1 v0.0.13 init first-contact polish lands clean | ⚠️ Partially landed | `dod.template` confirmed working ✓; biome key migration semantically right ✓; BUT `pnpm check` still fails on day zero (lineWidth rule on biome's own template) — the scaffold passes its DoD claims only after a `--write`. Friction #6 in honorable mentions. |
+| #2 1-iter convergence streak resumes | ❌ Did NOT land | `click-tracking` hit 5 iters of phantom no-converge. The streak broke for the WRONG reason (validator bug, not implementation difficulty). Implementation was correct iter 1. |
+| #3 Auto-quiet under non-TTY suppresses progress | ✅ Landed cleanly | Confirmed by the dogfooder: `tee` capture had no `[runtime]` progress lines; only clean status. |
+| #4 finish-task --all-converged works | ⚠️ Partially landed | The flag SHIPS the specs (mechanic works); but it ships specs whose run-sequence verdict was `no-converge`. Definitional drift — friction #4 in honorable mentions. |
+| #5 Trusted Publishing OIDC verifiable provenance | ✅ Landed | All 6 packages have sigstore attestations; Trusted Publishing config validated on the v0.0.13 tag-fire. |
+
+**Surprises (the high-value entries):**
+
+- **First regression-heavy ship in 4 baselines.** v0.0.10 / v0.0.11 / v0.0.12 each shipped with friction in the polish tier. v0.0.13 surfaced 3 hard MUST-FIX correctness bugs — apostrophe-strip soundness, workspace:* publish, spec-review broken in the artifact. The factory's "trust the validator" loop is unsound when the validator is lossy. Sharp reminder that v0.0.12's wins (cycle-break, etc.) didn't actually fix what the BACKLOG claimed.
+- **The 3 v0.0.13 wins ARE real and confirmed.** `dod.template` auto-emit saves the per-cluster 4× spec/dod-needs-explicit-command warning. Status-aware sequence walking auto-promotes drafting → ready in-memory. Auto-quiet keeps captured logs clean. None broke; all earned their slot. The wins are buried under the bugs but they're real.
+- **Per-spec wall-clock invariant explanation.** The 78 → 98 → 114 → 138 trend has TWO drivers: (a) smoke-boot scenarios add subprocess + port-bind overhead (~50s/spec where applicable); (b) phantom no-converge on click-tracking dragged the average. Shorten 130s = 80s typical + 50s smoke-boot. Redirect 80s, stats 81s — back to the v0.0.10-era invariant. The trend isn't real if you exclude smoke-boot specs and phantom failures. Worth one more BASELINE point to confirm.
+- **Verdict still positive — but conditional.** Per the agent: *"Yes — the spec-driven loop, the in-memory store of forensic context records, and the status-aware sequence walking are real productivity wins, but only if v0.0.14 fixes the apostrophe-strip bug, the workspace:* publish bug, and the --all-converged definitional drift; otherwise the runtime's iteration loop will keep burning tokens on phantom failures that look identical to real ones."* The "would you use it again" verdict held but the price tag named v0.0.14 explicitly.
+- **`factory-context get/tree/list` proved their forensic value.** The dogfooder explicitly noted: *"Without them I'd never have diagnosed the apostrophe bug — the run-sequence summary didn't surface enough detail."* The provenance DAG's value scales as the runtime gets harder to trust.
+
+**Mapped BACKLOG entries (9 total — 3 must-fix + 6 polish/ergonomics):**
+- Friction #1 (apostrophe-strip phantom no-converge) → NEW v0.0.14 entry — MUST-FIX, lead candidate.
+- Friction #2 (workspace:* shipped to npm) → NEW v0.0.14 entry — MUST-FIX.
+- Friction #3 (factory spec review broken on published packages) → NEW v0.0.14 entry — MUST-FIX.
+- Honorable mention #1 (finish-task --all-converged definitional drift) → NEW v0.0.14 entry.
+- Honorable mention #2 (--context-dir default mismatch) → NEW v0.0.14 entry.
+- Honorable mention #3 (scaffold biome.json fails own pnpm check) → NEW v0.0.14 entry.
+- Honorable mention #4 (day-0 DoD gates fail) → NEW v0.0.14 entry.
+- Honorable mention #5 (YAML colon-in-string trap) → NEW v0.0.14 entry.
+- Honorable mention #6 (skill-injection noise reaches subprocess agents) → NEW v0.0.14 entry.
+
+**Would you want to use the factory for the next product?** Per the agent: *"Yes — but only if v0.0.14 fixes the apostrophe-strip bug, the workspace:* publish bug, and the --all-converged definitional drift."* Net signal: **v0.0.13's friction is regression-tier, not polish-tier — the verdict held only because the 3 must-fix bugs all have known causes and small fixes.** v0.0.14 must ship the recovery cluster before the verdict can stay green.
+
 ##### v0.1.0 — pending
 
 After scheduler (Layer 5) ships. The maintainer prompt should reduce to "scope this product, ship it overnight" with no hand-driving. If we're not there by v0.1.0, the scheduler isn't done.
