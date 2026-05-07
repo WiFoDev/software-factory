@@ -1,8 +1,10 @@
-import { describe, expect, test } from 'bun:test';
+import { beforeAll, describe, expect, test } from 'bun:test';
+import { chmodSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runTestSatisfaction, stripAnsi, tailDetail } from './test';
 
 const HARNESS_ROOT = resolve(import.meta.dir, '../..');
+const FAKE_BUN = resolve(HARNESS_ROOT, 'test-fixtures/fake-bun.sh');
 
 describe('stripAnsi', () => {
   test('removes CSI colour sequences', () => {
@@ -72,6 +74,68 @@ describe('runTestSatisfaction', () => {
     );
     expect(result.status).toBe('error');
     expect(result.detail).toContain('runner/spawn-failed');
+  });
+
+  describe('coverage trip detection (v0.0.13)', () => {
+    beforeAll(() => {
+      // Ensure the fixture is executable regardless of git mode bits.
+      chmodSync(FAKE_BUN, 0o755);
+    });
+
+    test('0 fail + nonzero exit classified as pass with coverage-threshold-tripped detail', async () => {
+      const result = await runTestSatisfaction(
+        { kind: 'test', value: 'coverage-trip.test.ts', line: 1 },
+        { cwd: HARNESS_ROOT, timeoutMs: 30_000, bunPath: FAKE_BUN },
+      );
+      expect(result.status).toBe('pass');
+      expect(result.detail).toContain('harness/coverage-threshold-tripped');
+      expect(result.detail).toContain('coverage threshold of 0.8 not met');
+      // The bun pass count is preserved in the detail tail.
+      expect(result.detail).toContain('1 pass');
+      expect(result.exitCode).not.toBe(0);
+    }, 30_000);
+
+    test('real test failures still classified as fail (regression-pin)', async () => {
+      const result = await runTestSatisfaction(
+        { kind: 'test', value: 'real-fail.test.ts', line: 1 },
+        { cwd: HARNESS_ROOT, timeoutMs: 30_000, bunPath: FAKE_BUN },
+      );
+      expect(result.status).toBe('fail');
+      expect(result.detail).not.toContain('harness/coverage-threshold-tripped');
+      expect(result.detail).toContain('1 fail');
+      expect(result.exitCode).not.toBe(0);
+    }, 30_000);
+
+    test('fake-bun coverage-threshold output shape recognized via stdout parse', async () => {
+      const result = await runTestSatisfaction(
+        { kind: 'test', value: 'coverage-trip.test.ts', line: 1 },
+        { cwd: HARNESS_ROOT, timeoutMs: 30_000, bunPath: FAKE_BUN },
+      );
+      expect(result.status).toBe('pass');
+      expect(result.detail).toContain('harness/coverage-threshold-tripped');
+      // The 1 pass count from bun's output is preserved in the detail tail.
+      expect(result.detail).toContain('1 pass');
+    }, 30_000);
+
+    test('fake-bun 0 fail + exit 0 still pass with no coverage-trip prefix', async () => {
+      const result = await runTestSatisfaction(
+        { kind: 'test', value: 'clean-pass.test.ts', line: 1 },
+        { cwd: HARNESS_ROOT, timeoutMs: 30_000, bunPath: FAKE_BUN },
+      );
+      expect(result.status).toBe('pass');
+      expect(result.exitCode).toBe(0);
+      expect(result.detail).not.toContain('harness/coverage-threshold-tripped');
+    }, 30_000);
+
+    test('0 fail + nonzero exit without coverage marker still classified as fail', async () => {
+      const result = await runTestSatisfaction(
+        { kind: 'test', value: 'no-marker.test.ts', line: 1 },
+        { cwd: HARNESS_ROOT, timeoutMs: 30_000, bunPath: FAKE_BUN },
+      );
+      expect(result.status).toBe('fail');
+      expect(result.detail).not.toContain('harness/coverage-threshold-tripped');
+      expect(result.exitCode).not.toBe(0);
+    }, 30_000);
   });
 
   test('times out cleanly without crashing the process', async () => {

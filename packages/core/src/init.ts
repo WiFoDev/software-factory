@@ -3,7 +3,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { CliIo } from './cli.js';
 import {
-  BIOME_CONFIG_TEMPLATE,
+  BIOME_JSON_TEMPLATE,
   FACTORY_CONFIG_TEMPLATE,
   GITIGNORE_TEMPLATE,
   PACKAGE_JSON_TEMPLATE,
@@ -30,7 +30,15 @@ const IGNORE_IF_PRESENT = new Set([
 
 // Entries that `--adopt` ensures are present in the host's .gitignore. Idempotent:
 // each entry only appends if not already a literal line in the existing file.
-const GITIGNORE_FACTORY_ENTRIES = ['.factory', '.factory-spec-review-cache'];
+//
+// v0.0.13 — `.factory` (the dir itself) is no longer gitignored; it's tracked
+// via a committed `.gitkeep`. Only the per-record subdirs the runtime writes
+// (`worktrees/`, `twin-recordings/`) are ignored.
+const GITIGNORE_FACTORY_ENTRIES = [
+  '.factory/worktrees/',
+  '.factory/twin-recordings/',
+  '.factory-spec-review-cache',
+];
 
 interface PlannedFile {
   relPath: string;
@@ -50,13 +58,14 @@ function planFiles(name: string): PlannedFile[] {
       relPath: 'factory.config.json',
       contents: `${JSON.stringify(FACTORY_CONFIG_TEMPLATE, null, 2)}\n`,
     },
-    { relPath: 'biome.json', contents: BIOME_CONFIG_TEMPLATE },
+    { relPath: 'biome.json', contents: `${JSON.stringify(BIOME_JSON_TEMPLATE, null, 2)}\n` },
     {
       relPath: '.claude/commands/scope-project.md',
       contents: readScopeProjectCommandTemplate(),
     },
     { relPath: 'README.md', contents: README_TEMPLATE.replaceAll('{{name}}', name) },
     { relPath: 'src/.gitkeep', contents: '' },
+    { relPath: '.factory/.gitkeep', contents: '' },
     { relPath: 'docs/specs/done/.gitkeep', contents: '' },
     { relPath: 'docs/technical-plans/done/.gitkeep', contents: '' },
   ];

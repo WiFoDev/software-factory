@@ -6,23 +6,25 @@ A toolkit for **spec-driven, agent-friendly software development**. You write a 
 
 ---
 
-## v0.0.12: validate-phase reliability + brownfield-adopter onramp + observability + DoD trust
+## v0.0.13: init-script ergonomics + brownfield-adopter polish + architectural cycle-break
 
-**Observability:** `factory-runtime run` and `run-sequence` now emit one stderr line per phase boundary (`[runtime] iter <N> implement (84s, 32k charged tokens, 7 files changed)`) plus a cause-of-iteration line at iter N+1 start (`retrying: 1 failed scenario (S-2); 0 failed dod gates`). New `--quiet` flag (and `factory.config.json runtime.quiet`) suppresses progress. A monotonic-DoD-pass + identical-validate-fail warning surfaces suspected tooling-mismatch loops without changing behavior.
+**`factory init` first-contact polish.** Three init-template fixes that close every greenfield friction the v0.0.12 BASELINE flagged: (a) `BIOME_JSON_TEMPLATE` migrates to Biome 2.x's `"includes"` key (the scaffold's `^2.4.4` Biome dep no longer mismatches the schema); (b) scaffold writes `.factory/.gitkeep` + extends `.gitignore` with `.factory/worktrees/`, `.factory/twin-recordings/` (idempotent); (c) `factory.config.json` gains `dod.template?: string[]` derived from `package.json` scripts at init time, and `/scope-project` reads it as the canonical DoD section body — closes the per-cluster 4× `spec/dod-needs-explicit-command` warning the v0.0.12 BASELINE measured.
 
-**Brownfield onramp:** new `factory init --adopt` walks the templates but skips `package.json` / `tsconfig.json` / `biome.json` if present (logged), creating only factory-specific bits (`docs/specs/`, `factory.config.json`, `.claude/commands/scope-project.md`, `.gitignore` appended if missing). New `factory finish-task <spec-id>` CLI subcommand (+`finishTask` library helper) moves a converged spec to `<dir>/done/` and emits a `factory-spec-shipped` record. The runtime emits `converged → ship via 'factory finish-task <id>'` post-convergence (read-only). `@wifo/factory-spec-review` is now a hard dep of `@wifo/factory-core` — single install brings the reviewer.
+**Auto-quiet for non-TTY stderr + `factory finish-task --all-converged`.** When `process.stderr.isTTY` is false (pipe / `tee` / CI capture), the `[runtime]` progress lines auto-suppress; new `--no-quiet` (and `--progress` alias) opts back in. New `factory finish-task --all-converged [--since <factorySequenceId>]` walks the most recent factory-sequence and moves every converged spec to `<dir>/done/` in one command — closes the only step that didn't auto-progress with the rest of `run-sequence`.
 
-**DoD trust contract:** `factory spec lint` adds `spec/dod-needs-explicit-command` (warning) when a DoD bullet looks like a runtime gate without a backtick command. `dodPhase` drops the script-name-guessing path: bullets without backtick commands → `status: 'skipped', reason: 'dod-gate-no-command-found'`. `SPEC_TEMPLATE.md` updated with worked examples. `/scope-project` enumerates HTTP entrypoint trigger keywords and appends a smoke-boot scenario when matched — closes the v0.0.11 short-url BASELINE "library shipped, server doesn't boot" gap.
+**Cycle-break: `@wifo/factory-spec-review` becomes a `peerDependency` of `@wifo/factory-core`.** v0.0.12's `dependencies` declaration created a workspace cycle that bit hard during the tag-fire (5 retry commits to make the publish workflow green). v0.0.13 moves spec-review to `peerDependencies` with auto-install on pnpm 8+ / npm 7+ — preserves the brownfield zero-config goal, eliminates the cycle. v0.0.12's `createRequire` workaround in `core/cli.ts` reverts to a static import; publish.yml reverts to `pnpm -r build`. Legacy npm < 7 caveat documented.
 
-**Polish:** harness `parseTestLine` strips/replaces curly quotes / smart quotes / backticks before substring match (with new `spec/test-name-quote-chars` lint warning); `run-sequence` already-converged dedup verifies actual convergence by aggregating `factory-phase` records (closes v0.0.11 ship bug); `factory-implement-report.payload.filesChangedDebug?` and `failureDetail.stderrTail?` add diagnostic telemetry for the v0.0.11 BASELINE undercount + agent-exit-nonzero investigations.
+**Bun-as-test-only.** `packages/core/scripts/emit-json-schema.ts` rewritten to use `node:fs` + standard ESM. Build script switches `bun run scripts/...` → `tsx scripts/...`. `pnpm build` and `pnpm typecheck` are now Node-only. **bun is required only for `pnpm test`** — every package's test runner is `bun test src` (intentional and unchanged).
 
-**Release lineage:** v0.0.1 framework → v0.0.2 single-shot agent → v0.0.3 closed loop → v0.0.4 spec quality + bootstrap → v0.0.5 npm publish + implement-guidelines → v0.0.6 v0.0.5.x cluster → v0.0.7 real-product workflow → v0.0.8 discoverability + scaffold drops → v0.0.9 status-aware sequence + per-spec timeout → v0.0.10 trust contract → v0.0.11 worktree-sandbox + trust-layer calibration → **v0.0.12 validate-phase reliability + brownfield onramp + observability + DoD trust**.
+**Polish:** harness gains per-scenario coverage-trip detection (option b — parse `0 fail` + `coverage threshold ... not met` + nonzero exit → classify as `pass` with `harness/coverage-threshold-tripped:` detail prefix). Closes the CORE-836 friction v0.0.12 shipped a half-fix for. `--coverage=false` was descoped because bun 1.3.x rejects the flag.
+
+**Release lineage:** v0.0.1 framework → v0.0.2 single-shot agent → v0.0.3 closed loop → v0.0.4 spec quality + bootstrap → v0.0.5 npm publish + implement-guidelines → v0.0.6 v0.0.5.x cluster → v0.0.7 real-product workflow → v0.0.8 discoverability + scaffold drops → v0.0.9 status-aware sequence + per-spec timeout → v0.0.10 trust contract → v0.0.11 worktree-sandbox + trust-layer calibration → v0.0.12 validate-phase reliability + brownfield onramp + observability + DoD trust → **v0.0.13 init-script ergonomics + brownfield polish + architectural cycle-break**.
 
 Inspired by the [StrongDM Software Factory](https://factory.strongdm.ai/) model.
 
 ---
 
-## The canonical workflow (v0.0.12)
+## The canonical workflow (v0.0.13)
 
 The recommended end-to-end shape from a fresh directory to a shipped product:
 
@@ -46,7 +48,7 @@ factory-context tree <factorySequenceId> --direction down   # walk the entire pr
 
 For one feature (not a multi-feature product), substitute `/scope-task <feature>` and `factory-runtime run <spec>` for the slash command + sequence-runner.
 
-**Empirical evidence (longitudinal in [`BASELINE.md`](./BASELINE.md)):** the canonical URL-shortener (4-5 specs, JSON-over-HTTP + click tracking + stats) ships in 5-10 minutes wall-clock + ~20-30k raw tokens, all DoD shell gates green. Versus v0.0.5's manual ~32 maintainer interventions to ship the same product, v0.0.10 / v0.0.11 / v0.0.12 collapses to ~3-8. Add `--worktree` to keep the maintainer's main tree untouched; `factory finish-task <id>` (v0.0.12+) ships each converged spec to `<dir>/done/` with one command.
+**Empirical evidence (longitudinal in [`BASELINE.md`](./BASELINE.md)):** the canonical URL-shortener (4-5 specs, JSON-over-HTTP + click tracking + stats) ships in 5-10 minutes wall-clock + ~20-30k raw tokens, all DoD shell gates green. Versus v0.0.5's manual ~32 maintainer interventions, v0.0.10 / v0.0.11 / v0.0.12 / v0.0.13 collapses to ~1-3. Add `--worktree` to keep the maintainer's main tree untouched; `factory finish-task --all-converged` (v0.0.13+) ships every converged spec from a sequence in one command.
 
 **Three modes of use:**
 
@@ -278,6 +280,25 @@ One spec per file, named after the spec's `id` frontmatter (kebab-case). Specs l
 - **Bun** for running the harness and tests.
 - **Node 22+** as the supported runtime.
 - **`claude` CLI on PATH** for the agent-driven flow AND for `factory spec review`. Sign in once via your Claude Pro/Max subscription; both surfaces spawn `claude -p` headless on your behalf — no `ANTHROPIC_API_KEY` needed. `--no-implement` lets you skip this for the runtime; `factory spec review --claude-bin <fake>` (with `@wifo/factory-spec-review`'s `fake-claude-judge.ts`) lets you skip it for the reviewer.
+
+### bun is required for `pnpm test` only (v0.0.13+)
+
+**bun is required for `pnpm test` only** — the workspace's test runner is `bun test src` per package. `pnpm build` and `pnpm typecheck` are Node-native (Node 22+); the JSON-schema emitter runs via `tsx scripts/emit-json-schema.ts` with no bun on PATH at build time. `pnpm install` for consumers of the published packages does NOT require bun. The CI workflow keeps `oven-sh/setup-bun` because the test phase still uses `bun test`; the build phase is bun-free.
+
+### Peer dependency note (v0.0.13+)
+
+`@wifo/factory-spec-review` is a **non-optional peer dependency** of
+`@wifo/factory-core` (moved from `dependencies` in v0.0.13 to break the
+core ↔ spec-review workspace cycle). Modern package managers auto-install
+peer deps, so the documented happy path is unchanged:
+
+- **pnpm 8+ / npm 7+:** `pnpm add -D @wifo/factory-core` (or the npm equivalent)
+  brings in `@wifo/factory-spec-review` for free.
+- **Legacy npm (< 7):** install both packages explicitly:
+
+  ```sh
+  npm i @wifo/factory-core @wifo/factory-spec-review
+  ```
 
 ## What's new in v0.0.4
 

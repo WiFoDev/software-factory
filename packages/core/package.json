@@ -1,6 +1,6 @@
 {
   "name": "@wifo/factory-core",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "description": "Universal spec format, schema, parser, and lint CLI for software factories",
   "license": "MIT",
   "author": "Luis (WiFoDev)",
@@ -31,18 +31,26 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && bun run scripts/emit-json-schema.ts",
+    "build": "tsc -p tsconfig.build.json && tsx scripts/emit-json-schema.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test"
   },
   "dependencies": {
-    "@wifo/factory-spec-review": "workspace:*",
     "yaml": "^2.5.0",
     "zod": "^3.23.8",
     "zod-to-json-schema": "^3.23.0"
   },
+  "peerDependencies": {
+    "@wifo/factory-spec-review": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@wifo/factory-spec-review": {
+      "optional": false
+    }
+  },
   "devDependencies": {
     "@types/bun": "^1.1.14",
-    "ajv": "^8.17.0"
+    "ajv": "^8.17.0",
+    "tsx": "^4.0.0"
   }
 }

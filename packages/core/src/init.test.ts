@@ -91,7 +91,7 @@ describe('runInit — happy path', () => {
       .replace(/[^a-z0-9_-]+/g, '-')
       .replace(/^-+/, '');
     expect(pkg.name).toBe(expectedName);
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.12');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.13');
 
     // tsconfig.json is self-contained.
     const tsconfig = JSON.parse(readFileSync(join(dir, 'tsconfig.json'), 'utf8'));
@@ -163,7 +163,7 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     run(['--name', 'test'], io.io);
     expect(io.exitCode()).toBe(0);
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.12');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.13');
     // Existing devDep stays alongside.
     expect(pkg.devDependencies['@types/bun']).toBeDefined();
   });
@@ -195,6 +195,13 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
         maxPromptTokens: 100000,
         noJudge: false,
       },
+      dod: {
+        template: [
+          'typecheck clean (`pnpm typecheck`)',
+          'tests green (`pnpm test`)',
+          'biome clean (`pnpm check`)',
+        ],
+      },
     });
   });
 
@@ -218,15 +225,15 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     expect(stat.isFile()).toBe(true);
   });
 
-  test('scaffold dependencies pin @wifo/factory-* at ^0.0.12', () => {
+  test('scaffold dependencies pin @wifo/factory-* at ^0.0.13', () => {
     const io = makeIo();
     run(['--name', 'test'], io.io);
     expect(io.exitCode()).toBe(0);
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.12');
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.12');
-    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.12');
-    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.12');
+    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.13');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.13');
+    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.13');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.13');
   });
 
   test('scaffold README contains Multi-spec products section', () => {
@@ -248,7 +255,7 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     expect(pkg.scripts).toEqual({
       typecheck: 'tsc --noEmit',
       test: 'bun test src',
-      check: 'biome check',
+      check: 'biome check --no-errors-on-unmatched',
       build: 'tsc -p tsconfig.build.json',
     });
     expect(Object.keys(pkg.scripts)).toEqual(['typecheck', 'test', 'check', 'build']);
@@ -273,10 +280,12 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     expect(biome.$schema).toBe('https://biomejs.dev/schemas/2.4.4/schema.json');
     expect(biome.linter.enabled).toBe(true);
     expect(biome.formatter.enabled).toBe(true);
-    expect(biome.files.include).toContain('src/**/*.ts');
+    // v0.0.13 — Biome 2.x uses `files.includes`, not `files.include`.
+    expect(biome.files.includes).toContain('src/**/*.ts');
+    expect(biome.files.include).toBeUndefined();
   });
 
-  test('scaffold is self-contained: README + slash command + config + deps all at v0.0.12', () => {
+  test('scaffold is self-contained: README + slash command + config + deps all at v0.0.13', () => {
     const io = makeIo();
     run(['--name', 'test'], io.io);
     expect(io.exitCode()).toBe(0);
@@ -293,12 +302,12 @@ describe('runInit — v0.0.5.1 first-contact UX scaffolds', () => {
     // factory.config.json provides defaults (v0.0.5.1+).
     expect(existsSync(join(dir, 'factory.config.json'))).toBe(true);
 
-    // package.json deps at ^0.0.12.
+    // package.json deps at ^0.0.13.
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.12');
-    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.12');
-    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.12');
-    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.12');
+    expect(pkg.dependencies['@wifo/factory-core']).toBe('^0.0.13');
+    expect(pkg.dependencies['@wifo/factory-runtime']).toBe('^0.0.13');
+    expect(pkg.dependencies['@wifo/factory-context']).toBe('^0.0.13');
+    expect(pkg.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.13');
   });
 });
 
@@ -341,7 +350,7 @@ describe('runInit — fail-fast on preexisting targets', () => {
   });
 });
 
-describe('runInit — v0.0.12 --adopt mode', () => {
+describe('runInit — v0.0.13 --adopt mode', () => {
   test('factory init --adopt skips existing package.json/tsconfig.json/biome.json and logs skips', () => {
     writeFileSync(join(dir, 'package.json'), '{"name":"existing","version":"1.0.0"}');
     writeFileSync(join(dir, 'tsconfig.json'), '{"compilerOptions":{}}');
@@ -407,11 +416,14 @@ describe('runInit — v0.0.12 --adopt mode', () => {
     expect(io2.exitCode()).toBe(0);
     const after2 = readFileSync(join(dir, '.gitignore'), 'utf8');
 
-    // Second run does not duplicate factory entries.
+    // Second run does not duplicate factory entries (v0.0.13 — entries are the
+    // per-record subdirs, not bare `.factory`).
     expect(after1).toBe(after2);
-    const factoryCount = (after2.match(/^\.factory$/gm) ?? []).length;
+    const worktreesCount = (after2.match(/^\.factory\/worktrees\/$/gm) ?? []).length;
+    const twinCount = (after2.match(/^\.factory\/twin-recordings\/$/gm) ?? []).length;
     const cacheCount = (after2.match(/^\.factory-spec-review-cache$/gm) ?? []).length;
-    expect(factoryCount).toBe(1);
+    expect(worktreesCount).toBe(1);
+    expect(twinCount).toBe(1);
     expect(cacheCount).toBe(1);
   });
 
@@ -422,6 +434,95 @@ describe('runInit — v0.0.12 --adopt mode', () => {
     expect(io.exitCode()).toBe(0);
     // done/ subdir IS created even though parent existed.
     expect(existsSync(join(dir, 'docs/specs/done/.gitkeep'))).toBe(true);
+  });
+});
+
+describe('runInit — v0.0.13 init-scaffold polishes', () => {
+  test('factory init creates .factory/.gitkeep and extends .gitignore with factory subdir patterns', () => {
+    const io = makeIo();
+    run(['--name', 'test'], io.io);
+    expect(io.exitCode()).toBe(0);
+
+    // .factory/.gitkeep is created on init so `tee .factory/run-sequence.log`
+    // and other early-record writes don't fail before the runtime mkdirs.
+    const gitkeep = join(dir, '.factory/.gitkeep');
+    expect(existsSync(gitkeep)).toBe(true);
+    expect(statSync(gitkeep).size).toBe(0);
+    expect(statSync(join(dir, '.factory')).isDirectory()).toBe(true);
+
+    // .gitignore lists the per-record subdirs the runtime writes — but NOT
+    // `.factory/` itself (the dir is tracked because .gitkeep is committed).
+    const gitignore = readFileSync(join(dir, '.gitignore'), 'utf8');
+    const lines = gitignore.split('\n').map((line) => line.trim());
+    expect(lines).toContain('.factory/worktrees/');
+    expect(lines).toContain('.factory/twin-recordings/');
+    expect(lines).toContain('.factory-spec-review-cache');
+    // Existing v0.0.6 entry preserved.
+    expect(lines).toContain('node_modules');
+    // .factory itself is NOT a literal-line entry (only its subdirs are).
+    expect(lines).not.toContain('.factory');
+  });
+
+  test('factory init append to .gitignore is idempotent and preserves pre-existing entries', () => {
+    // Pre-existing .gitignore with custom entries the user authored. Use
+    // --adopt mode (the only mode that tolerates a pre-existing .gitignore).
+    writeFileSync(join(dir, '.gitignore'), 'node_modules\nmy-custom-entry/\n*.local.json\n');
+
+    const io1 = makeIo();
+    run(['--adopt'], io1.io);
+    expect(io1.exitCode()).toBe(0);
+
+    const after1 = readFileSync(join(dir, '.gitignore'), 'utf8');
+    // Pre-existing user entries preserved verbatim.
+    expect(after1).toContain('my-custom-entry/');
+    expect(after1).toContain('*.local.json');
+    // Factory subdir patterns appended.
+    expect(after1).toContain('.factory/worktrees/');
+    expect(after1).toContain('.factory/twin-recordings/');
+    expect(after1).toContain('.factory-spec-review-cache');
+
+    // Re-run: idempotent — does NOT duplicate factory entries.
+    const io2 = makeIo();
+    run(['--adopt'], io2.io);
+    expect(io2.exitCode()).toBe(0);
+    const after2 = readFileSync(join(dir, '.gitignore'), 'utf8');
+    expect(after2).toBe(after1);
+
+    // Each factory entry appears exactly once.
+    const worktreesCount = (after2.match(/^\.factory\/worktrees\/$/gm) ?? []).length;
+    const twinCount = (after2.match(/^\.factory\/twin-recordings\/$/gm) ?? []).length;
+    const cacheCount = (after2.match(/^\.factory-spec-review-cache$/gm) ?? []).length;
+    expect(worktreesCount).toBe(1);
+    expect(twinCount).toBe(1);
+    expect(cacheCount).toBe(1);
+  });
+
+  test('factory init scaffold passes pnpm check on first run', async () => {
+    const io = makeIo();
+    run(['--name', 'biome-pin-test'], io.io);
+    expect(io.exitCode()).toBe(0);
+
+    // We don't pnpm-install in tests — instead we invoke the same biome major
+    // the scaffold pins (^2.4.4) directly via `bunx --no-install`, with the
+    // same flag the scaffold's `check` script uses. If the binary isn't
+    // cached locally (CI cold start), skip with a clear log rather than fail
+    // (the assertion is empirical, not a unit invariant).
+    const result =
+      await Bun.$`bunx --no-install '@biomejs/biome@2.4.4' check --no-errors-on-unmatched ${dir}`
+        .quiet()
+        .nothrow();
+    if (result.exitCode === 1 && result.stderr.toString().includes('Could not find')) {
+      // biome 2.x not cached — skip empirical assertion. The schema-key
+      // regression-pin in init-templates.test.ts still guards key drift.
+      return;
+    }
+    if (result.exitCode !== 0) {
+      // Surface biome's complaint so future drift is debuggable.
+      throw new Error(
+        `biome check exited ${result.exitCode}\nstdout:\n${result.stdout.toString()}\nstderr:\n${result.stderr.toString()}`,
+      );
+    }
+    expect(result.exitCode).toBe(0);
   });
 });
 

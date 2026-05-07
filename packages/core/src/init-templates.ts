@@ -12,18 +12,22 @@ export const PACKAGE_JSON_TEMPLATE = {
   scripts: {
     typecheck: 'tsc --noEmit',
     test: 'bun test src',
-    check: 'biome check',
+    // `--no-errors-on-unmatched` lets `pnpm check` exit 0 on a freshly-
+    // scaffolded tree (only .gitkeeps exist; no .ts files yet). Without it,
+    // Biome 2.x errors with "No files were processed" — exactly the v0.0.12
+    // BASELINE first-contact friction this v0.0.13 spec closes.
+    check: 'biome check --no-errors-on-unmatched',
     build: 'tsc -p tsconfig.build.json',
   },
   dependencies: {
-    '@wifo/factory-context': '^0.0.12',
-    '@wifo/factory-core': '^0.0.12',
-    '@wifo/factory-runtime': '^0.0.12',
+    '@wifo/factory-context': '^0.0.13',
+    '@wifo/factory-core': '^0.0.13',
+    '@wifo/factory-runtime': '^0.0.13',
   },
   devDependencies: {
     '@biomejs/biome': '^2.4.4',
     '@types/bun': '^1.1.14',
-    '@wifo/factory-spec-review': '^0.0.12',
+    '@wifo/factory-spec-review': '^0.0.13',
     typescript: '^5.6.0',
   },
 } as const;
@@ -54,10 +58,14 @@ export const TSCONFIG_TEMPLATE = {
   exclude: ['node_modules', '.factory'],
 } as const;
 
-// Verbatim copy of examples/slugify/.gitignore — kept byte-equivalent so the
-// scaffold matches what people copy by hand today.
+// v0.0.13 — `.factory/` itself is tracked (a `.gitkeep` is committed) so users
+// see the dir exists from the start; only the per-record subdirs the runtime
+// writes (`worktrees/`, `twin-recordings/`) are gitignored. Verbatim copy of
+// examples/slugify/.gitignore — kept byte-equivalent so the scaffold matches
+// what people copy by hand today.
 export const GITIGNORE_TEMPLATE = `node_modules
-.factory
+.factory/worktrees/
+.factory/twin-recordings/
 *.log
 .DS_Store
 .factory-spec-review-cache
@@ -77,6 +85,14 @@ export function readScopeProjectCommandTemplate(): string {
 // Canonical defaults documented for the v0.0.5 URL-shortener workflow. Users
 // edit to taste; CLI flags always override. Internal-only — NOT exported from
 // `core/src/index.ts`.
+//
+// v0.0.13 — adds `dod.template`: literal-command DoD bullets derived from the
+// scaffold's `scripts: { typecheck, test, check }`. `/scope-project` reads this
+// at spec-author time and emits the same block into every generated spec's
+// `## Definition of Done`, so the v0.0.12 `spec/dod-needs-explicit-command`
+// lint stays green from the first author. `build` is intentionally excluded —
+// build is a publish prereq, not a per-spec DoD gate. Order matches the
+// PACKAGE_JSON_TEMPLATE.scripts insertion order.
 export const FACTORY_CONFIG_TEMPLATE = {
   runtime: {
     maxIterations: 5,
@@ -84,23 +100,36 @@ export const FACTORY_CONFIG_TEMPLATE = {
     maxPromptTokens: 100000,
     noJudge: false,
   },
+  dod: {
+    template: [
+      'typecheck clean (`pnpm typecheck`)',
+      'tests green (`pnpm test`)',
+      'biome clean (`pnpm check`)',
+    ],
+  },
 } as const;
 
 // Minimal biome.json shipped with the scaffold so `pnpm check` resolves a real
 // config out of the box. Mirrors the monorepo's biome.json shape (linter +
 // formatter both on; recommended ruleset; src/** scoped) without project-
-// specific overrides. JSON-serialized with 2-space indent. Internal-only —
-// NOT exported from `core/src/index.ts`.
-export const BIOME_CONFIG_TEMPLATE = `${JSON.stringify(
-  {
-    $schema: 'https://biomejs.dev/schemas/2.4.4/schema.json',
-    linter: { enabled: true, rules: { recommended: true } },
-    formatter: { enabled: true, indentWidth: 2, lineWidth: 100 },
-    files: { include: ['src/**/*.ts', 'src/**/*.tsx'] },
-  },
-  null,
-  2,
-)}\n`;
+// specific overrides. Internal-only — NOT exported from `core/src/index.ts`.
+//
+// v0.0.13 — schema migrates from Biome 1.x's `files.include` key to Biome 2.x's
+// `files.includes` key. The schema major MUST stay in lockstep with the
+// `@biomejs/biome` major pinned in `PACKAGE_JSON_TEMPLATE.devDependencies`
+// (currently `^2.4.4`). If a future scaffold change bumps Biome to 3.x, this
+// template must update in the same commit; otherwise `pnpm check` errors on
+// schema-key parse failures against a freshly-scaffolded tree.
+export const BIOME_JSON_TEMPLATE = {
+  $schema: 'https://biomejs.dev/schemas/2.4.4/schema.json',
+  linter: { enabled: true, rules: { recommended: true } },
+  // `indentStyle: 'space'` matches the 2-space JSON.stringify output `init.ts`
+  // serializes this template to. Without it, Biome 2.x's default `tab`
+  // indentStyle would self-flag the scaffolded biome.json on the very first
+  // `pnpm check` run — exactly the friction this v0.0.13 spec closes.
+  formatter: { enabled: true, indentStyle: 'space', indentWidth: 2, lineWidth: 100 },
+  files: { includes: ['src/**/*.ts', 'src/**/*.tsx'] },
+} as const;
 
 export const README_TEMPLATE = `# {{name}}
 
@@ -177,4 +206,8 @@ For a single feature (one spec, not a product), use \`/scope-task\` — it lives
 - \`.factory/\` holds run records. It's gitignored — diffable history lives in commits.
 - \`--no-judge\` skips LLM-judged satisfactions (no \`ANTHROPIC_API_KEY\` needed).
 - \`--no-implement\` drops to validate-only mode (no \`claude\` spawn).
+
+## Prerequisites: bun is required for \`pnpm test\` only
+
+**bun is required for \`pnpm test\` only** — the workspace's test runner is \`bun test src\` per package. \`pnpm build\` and \`pnpm typecheck\` are Node-native (Node 22+); \`pnpm install\` for consumers of the published \`@wifo/factory-*\` packages does NOT require bun.
 `;

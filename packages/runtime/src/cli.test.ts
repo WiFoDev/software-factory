@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { type CliIo, runCli } from './cli.js';
+import { type CliIo, resolveQuiet, runCli } from './cli.js';
 
 const RUNTIME_ROOT = resolve(import.meta.dir, '..');
 const ALL_PASS = join(RUNTIME_ROOT, 'test-fixtures/all-pass.md');
@@ -1533,7 +1533,9 @@ describe('factory-runtime CLI — v0.0.12 --quiet (S-2)', () => {
       await Bun.$`rm -rf ${ctxA}`.quiet().nothrow();
     }
 
-    // Without --quiet, progress lines appear on stderr.
+    // With --no-quiet, progress lines appear on stderr regardless of
+    // stderr.isTTY (v0.0.13 — explicit opt-in keeps this deterministic
+    // across TTY/non-TTY test environments).
     const ctxB = mkdtempSync(join(tmpdir(), 'runtime-cli-quiet-off-'));
     const capOff = makeIo();
     try {
@@ -1544,6 +1546,7 @@ describe('factory-runtime CLI — v0.0.12 --quiet (S-2)', () => {
           '--no-judge',
           '--no-implement',
           '--skip-dod-phase',
+          '--no-quiet',
           '--context-dir',
           ctxB,
         ],
@@ -1670,6 +1673,93 @@ describe('factory-runtime CLI — v0.0.11 --check-holdouts (S-3)', () => {
     } finally {
       process.chdir(prevCwd);
       await Bun.$`rm -rf ${work}`.quiet().nothrow();
+    }
+  });
+});
+
+// ----- v0.0.13 — resolveQuiet precedence chain (S-1, S-2, S-3) ---------
+
+describe('factory-runtime CLI — v0.0.13 resolveQuiet precedence', () => {
+  test('non-TTY stderr triggers auto-quiet by default', () => {
+    // S-1: no CLI flag, no config → fall through to auto-detect. Non-TTY
+    // stderr means progress would pollute captured logs, so quiet=true.
+    expect(resolveQuiet({ cliFlag: undefined, configValue: undefined, isTTY: false })).toBe(true);
+  });
+
+  test('TTY stderr preserves v0.0.12 progress + cause-line default', () => {
+    // S-1: real terminal → auto-detect leaves quiet=false, preserving the
+    // v0.0.12 default-on progress lines.
+    expect(resolveQuiet({ cliFlag: undefined, configValue: undefined, isTTY: true })).toBe(false);
+  });
+
+  test('--no-quiet overrides auto-detect on non-TTY stderr', () => {
+    // S-2: CLI flag wins over auto-detect. --no-quiet (cliFlag=false) opts
+    // back into progress even when stderr is non-TTY.
+    expect(resolveQuiet({ cliFlag: false, configValue: undefined, isTTY: false })).toBe(false);
+  });
+
+  test('--progress is accepted as --no-quiet alias', () => {
+    // S-2: --progress sets cliFlag=false (same as --no-quiet); the
+    // resolution is identical since the helper only sees the resolved
+    // boolean.
+    expect(resolveQuiet({ cliFlag: false, configValue: undefined, isTTY: false })).toBe(false);
+    // Confirm --progress + TTY also keeps quiet=false (no surprise flip).
+    expect(resolveQuiet({ cliFlag: false, configValue: undefined, isTTY: true })).toBe(false);
+  });
+
+  test('factory.config.json runtime.quiet overrides auto-detect', () => {
+    // S-3: config wins over auto-detect. Explicit `runtime.quiet: false`
+    // keeps progress emission on even when stderr is non-TTY.
+    expect(resolveQuiet({ cliFlag: undefined, configValue: false, isTTY: false })).toBe(false);
+    // Conversely, `runtime.quiet: true` suppresses progress even on TTY.
+    expect(resolveQuiet({ cliFlag: undefined, configValue: true, isTTY: true })).toBe(true);
+  });
+
+  test('--quiet CLI flag wins over config', () => {
+    // S-3: CLI flag sits at the top of the chain, beating config and
+    // auto-detect alike. --quiet always quiets.
+    expect(resolveQuiet({ cliFlag: true, configValue: false, isTTY: true })).toBe(true);
+    expect(resolveQuiet({ cliFlag: true, configValue: true, isTTY: false })).toBe(true);
+    // Symmetric: --no-quiet beats config: true.
+    expect(resolveQuiet({ cliFlag: false, configValue: true, isTTY: false })).toBe(false);
+  });
+
+  test('precedence chain: full truth table for all 12 input combinations', () => {
+    // CLI yes/no/unset × config yes/no/unset × TTY true/false. When
+    // cliFlag is set, it wins regardless of config or TTY. When cliFlag
+    // is unset and config is set, config wins regardless of TTY. Only
+    // when both are unset does TTY drive the result (!isTTY → quiet).
+    const cases: Array<{
+      cliFlag: boolean | undefined;
+      configValue: boolean | undefined;
+      isTTY: boolean;
+      expected: boolean;
+    }> = [
+      // CLI flag set → CLI wins
+      { cliFlag: true, configValue: undefined, isTTY: true, expected: true },
+      { cliFlag: true, configValue: undefined, isTTY: false, expected: true },
+      { cliFlag: false, configValue: undefined, isTTY: true, expected: false },
+      { cliFlag: false, configValue: undefined, isTTY: false, expected: false },
+      // CLI unset, config set → config wins
+      { cliFlag: undefined, configValue: true, isTTY: true, expected: true },
+      { cliFlag: undefined, configValue: true, isTTY: false, expected: true },
+      { cliFlag: undefined, configValue: false, isTTY: true, expected: false },
+      { cliFlag: undefined, configValue: false, isTTY: false, expected: false },
+      // CLI + config both unset → TTY drives
+      { cliFlag: undefined, configValue: undefined, isTTY: true, expected: false },
+      { cliFlag: undefined, configValue: undefined, isTTY: false, expected: true },
+      // CLI overrides config (both directions)
+      { cliFlag: true, configValue: false, isTTY: true, expected: true },
+      { cliFlag: false, configValue: true, isTTY: false, expected: false },
+    ];
+    for (const c of cases) {
+      expect(
+        resolveQuiet({
+          cliFlag: c.cliFlag,
+          configValue: c.configValue,
+          isTTY: c.isTTY,
+        }),
+      ).toBe(c.expected);
     }
   });
 });

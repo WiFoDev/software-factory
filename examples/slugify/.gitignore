@@ -1,5 +1,6 @@
 node_modules
-.factory
+.factory/worktrees/
+.factory/twin-recordings/
 *.log
 .DS_Store
 .factory-spec-review-cache

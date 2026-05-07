@@ -35,12 +35,12 @@ function readPackageJson(rel: string): PackageJson {
 }
 
 describe('publish-meta — workspace package metadata (S-1)', () => {
-  test('every workspace package has v0.0.12 + publishConfig + npm metadata fields', () => {
+  test('every workspace package has v0.0.13 + publishConfig + npm metadata fields', () => {
     for (const name of WORKSPACE_PACKAGES) {
       const pkgPath = `packages/${name}/package.json`;
       const pkg = readPackageJson(pkgPath);
 
-      expect(pkg.version).toMatch(/^0\.0\.12$/);
+      expect(pkg.version).toMatch(/^0\.0\.13$/);
       expect(pkg.license).toBe('MIT');
       expect(pkg.author).toBe('Luis (WiFoDev)');
 
@@ -133,7 +133,7 @@ describe('publish-meta — pnpm pack --dry-run (S-2)', () => {
       if (!tarball) continue;
 
       expect(tarball.name).toBe(`@wifo/factory-${name}`);
-      expect(tarball.version).toMatch(/^0\.0\.12$/);
+      expect(tarball.version).toMatch(/^0\.0\.13$/);
 
       const paths = tarball.files.map((f) => f.path);
       expect(paths).toContain('README.md');
@@ -188,6 +188,44 @@ describe('publish-meta — caveat sweep (S-4)', () => {
     for (const needle of FORBIDDEN_STRINGS) {
       expect(README_TEMPLATE).not.toContain(needle);
     }
+  });
+});
+
+describe('publish-meta — v0.0.13 cycle-break (S-1)', () => {
+  test('factory-core declares @wifo/factory-spec-review as a non-optional peer dependency', () => {
+    const pkg = readPackageJson('packages/core/package.json') as PackageJson & {
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    };
+    expect(pkg.peerDependencies).toBeDefined();
+    expect(pkg.peerDependencies?.['@wifo/factory-spec-review']).toBe('workspace:*');
+    expect(pkg.peerDependenciesMeta).toBeDefined();
+    expect(pkg.peerDependenciesMeta?.['@wifo/factory-spec-review']).toBeDefined();
+    expect(pkg.peerDependenciesMeta?.['@wifo/factory-spec-review']?.optional).toBe(false);
+  });
+
+  test('factory-core does NOT declare @wifo/factory-spec-review under dependencies', () => {
+    const pkg = readPackageJson('packages/core/package.json');
+    expect(pkg.dependencies?.['@wifo/factory-spec-review']).toBeUndefined();
+  });
+});
+
+describe('publish-meta — v0.0.13 schema-emitter Node-native (S-2)', () => {
+  test('factory-core build script uses tsx instead of bun run', () => {
+    const pkg = readPackageJson('packages/core/package.json');
+    const build = pkg.scripts?.build ?? '';
+    expect(build).toContain('tsx');
+    expect(build).toContain('scripts/emit-json-schema.ts');
+    expect(build).not.toContain('bun run');
+  });
+
+  test('factory-core has tsx in devDependencies', () => {
+    const pkg = readPackageJson('packages/core/package.json');
+    expect(pkg.devDependencies).toBeDefined();
+    expect(pkg.devDependencies?.tsx).toBeDefined();
+    expect(pkg.devDependencies?.tsx).toMatch(/^\^?4\./);
+    // tsx is a build-time-only tool; must NOT leak into runtime dependencies.
+    expect(pkg.dependencies?.tsx).toBeUndefined();
   });
 });
 

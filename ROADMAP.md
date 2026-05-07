@@ -4,7 +4,33 @@ This file is the **direction**. `BACKLOG.md` is the candidate pile. The roadmap 
 
 ---
 
-## Where we are: v0.0.12 — shipped
+## Where we are: v0.0.13 — shipped
+
+**Theme: init-script ergonomics + brownfield-adopter polish + architectural cycle-break.** v0.0.13 closes 8 BACKLOG entries surfaced from the v0.0.12 BASELINE (5 init-script frictions + 1 carve-out re-shape) and the v0.0.12 tag-fire (2 architectural items). Six sibling specs ship together — first cluster to converge 6/6 first-iter in one `run-sequence` invocation with zero recovery.
+
+### What v0.0.13 added
+
+| # | Piece | Notes |
+|---|---|---|
+| 1 | **`factory init` first-contact polish** *(factory-core)* | Three init-template fixes closing every greenfield friction the v0.0.12 BASELINE flagged: (a) `BIOME_JSON_TEMPLATE` migrates `"include"` → `"includes"` (Biome 2.x); (b) scaffold writes `.factory/.gitkeep` + extends `.gitignore` with `.factory/worktrees/`, `.factory/twin-recordings/` (idempotent); (c) `factory.config.json` gains `dod.template?: string[]` derived from `package.json` scripts at init time, consumed by `/scope-project` as canonical DoD body — closes the per-cluster 4× `spec/dod-needs-explicit-command` warning. |
+| 2 | **Auto-quiet for non-TTY stderr** *(factory-runtime)* | When `process.stderr.isTTY` is false (pipe / `tee` / CI), the `[runtime]` progress lines auto-suppress. New `--no-quiet` (and `--progress` alias) opts back in. Precedence: CLI flag > `factory.config.json runtime.quiet` > auto-detect > built-in default. |
+| 3 | **`factory finish-task --all-converged`** *(factory-core)* | Batch ship-cycle move-to-done. Walks the most recent `factory-sequence` (or one named via `--since`); moves each converged spec to `<dir>/done/<id>.md`; emits `factory-spec-shipped` records. Mutually exclusive with positional `<spec-id>`. |
+| 4 | **Per-scenario coverage-trip detection** *(factory-harness)* | v0.0.12's option (a) (`--coverage=false`) was descoped (bun 1.3.x rejects the flag); v0.0.13 ships option (b). Runner parses stdout for `0 fail` + `coverage threshold ... not met` markers AND nonzero exit → classifies as `pass` with detail prefix `harness/coverage-threshold-tripped:`. Real test failures still classify as `fail`. |
+| 5 | **`@wifo/factory-spec-review` moves to `peerDependencies` of `@wifo/factory-core`** *(factory-core)* | Closes the workspace cycle that v0.0.12's `dependencies` declaration introduced. pnpm 8+ / npm 7+ auto-install peer deps; v0.0.12's createRequire workaround in `core/cli.ts` reverts to a static import; `.github/workflows/publish.yml` reverts to `pnpm -r build` (single line, no per-package list, no `--workspace-concurrency`). Legacy npm < 7 caveat documented. |
+| 6 | **Bun-as-test-only — schema emitter is Node-native** *(factory-core)* | `scripts/emit-json-schema.ts` rewritten to `node:fs` + standard ESM. Build script switches `bun run scripts/...` → `tsx scripts/...`. `tsx` joins `factory-core`'s `devDependencies`. `pnpm build` + `pnpm typecheck` are Node-only — bun is required only for `pnpm test`. Documented in top-level README + AGENTS.md + scaffold README. |
+
+### Reconciliations worth knowing
+
+- **All 6 packages bumped to 0.0.13 in lockstep.** Keeps scaffold's `^0.0.13` deps uniformly resolvable.
+- **v0.0.13 ships 6/6 first-iter convergence in one `run-sequence` invocation.** Cleanest dogfood evidence to date — no recovery, no transient stale-dist, no agent-exit-nonzero. 71m wall-clock, 169k charged tokens. The runtime + judge + sequence-runner triad is stable.
+- **Peer-dep auto-install requires pnpm 8+ or npm 7+.** Legacy npm < 7 users install both packages explicitly; one-line caveat in install docs.
+- **bun stays as the test runner.** `bun test src` per package is intentional and unchanged. setup-bun GitHub Actions step stays for the test phase.
+- **`factory init --adopt` (v0.0.12) and the v0.0.13 init-template additions compose cleanly.** `IGNORE_IF_PRESENT` set still skips pre-existing JSON files; the new `.factory/.gitkeep` + `.gitignore` extension is append-only.
+- **Public API surface deltas:** all 6 packages' export counts unchanged from v0.0.12. v0.0.13 is mostly internal logic + dep-declaration changes + scaffold-template updates. The biggest user-visible changes (`--no-quiet`, `--all-converged`, `dod.template`) are field-level on existing types or new CLI flags on existing subcommands.
+
+---
+
+## Where we were: v0.0.12 — shipped
 
 **Theme: validate-phase reliability + brownfield-adopter onramp + observability + DoD trust.** v0.0.12 closes 12 BACKLOG entries surfaced across the v0.0.11 ship, the OLH CORE-836 dogfood, and the v0.0.11 short-url BASELINE. Six sibling specs ship together in one cluster — the largest ship to date.
 

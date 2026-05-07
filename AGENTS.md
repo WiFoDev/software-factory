@@ -115,6 +115,10 @@ These are the failure modes most likely to bite an agent. Each has shipped as a 
 
 **❌ Don't backtick-wrap test paths in `Satisfaction:` lines.** Write `test: src/foo.test.ts "name"`, not `` test: `src/foo.test.ts` "name" ``. The harness tolerates both forms (since v0.0.6) but bare paths are canonical.
 
+### bun is required for `pnpm test` only (v0.0.13+)
+
+**bun is required for `pnpm test` only** — every workspace package's `scripts.test` is `bun test src` per package. `pnpm build` and `pnpm typecheck` are Node-native (Node 22+); the JSON-schema emitter runs via `tsx scripts/emit-json-schema.ts` with no bun on PATH at build time. `pnpm install` for consumers of the published packages does NOT require bun.
+
 ---
 
 ## 6. The full primitives reference

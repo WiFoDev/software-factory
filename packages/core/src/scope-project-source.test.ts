@@ -100,6 +100,28 @@ describe('/scope-project slash command source', () => {
     expect(source).toContain('`Bun.serve`');
     expect(source).toContain('`serve(`');
   });
+
+  test('scope-project source documents dod.template precedence over canonical defaults', () => {
+    // v0.0.13 — `/scope-project` reads `factory.config.json.dod.template` and
+    // emits it as the body of every generated spec's `## Definition of Done`.
+    // The slash-command source must document this precedence so a future
+    // model running this slash command knows to prefer the per-project
+    // template over the canonical typecheck/test/check defaults.
+    const source = readFileSync(SLASH_COMMAND, 'utf8');
+    expect(source).toContain('factory.config.json');
+    expect(source).toContain('dod.template');
+    // The fallback path is documented when the field is missing/empty.
+    expect(source).toMatch(/(canonical defaults|fall back)/i);
+    // Precedence guidance lives inside Step 2 (Generate specs) so the model
+    // sees it while writing the DoD section.
+    const step2Index = source.indexOf('## Step 2: Generate specs');
+    const step3Index = source.indexOf('## Step 3:');
+    const dodTemplateIndex = source.indexOf('dod.template');
+    expect(step2Index).toBeGreaterThan(-1);
+    expect(step3Index).toBeGreaterThan(-1);
+    expect(dodTemplateIndex).toBeGreaterThan(step2Index);
+    expect(dodTemplateIndex).toBeLessThan(step3Index);
+  });
 });
 
 describe('packages/core/README.md documents /scope-project', () => {

@@ -6,6 +6,46 @@ For the project's forward direction and shipped-release retrospectives, see [`RO
 
 ---
 
+## [0.0.13] — 2026-05-06
+
+**Theme: init-script ergonomics + brownfield-adopter polish + architectural cycle-break.** v0.0.13 closes 8 BACKLOG entries surfaced across the v0.0.12 BASELINE (5 init-script frictions + 1 carve-out re-shape) and the v0.0.12 tag-fire (2 architectural items). Six sibling specs ship together — first cluster to converge 6/6 first-iter in a single `run-sequence` invocation with zero recovery.
+
+### Added
+
+- **`factory init` first-contact polish** *(factory-core)*. Three init-template fixes that close every greenfield friction the v0.0.12 BASELINE flagged: (a) `BIOME_JSON_TEMPLATE` migrates from Biome 1.x's `"include"` key to Biome 2.x's `"includes"` (matching the pinned major); (b) scaffold writes `.factory/.gitkeep` + appends `.factory/worktrees/`, `.factory/twin-recordings/` to `.gitignore` (idempotent); (c) `factory.config.json` gains `dod.template?: string[]` derived from `package.json` scripts at init time, and `/scope-project` reads it as the canonical DoD section body — closes the per-cluster 4× `spec/dod-needs-explicit-command` warning the v0.0.12 BASELINE measured.
+- **Auto-quiet for non-TTY stderr** *(factory-runtime)*. When `process.stderr.isTTY` is false (pipe / `tee` / CI capture), the `[runtime]` progress lines auto-suppress. New `--no-quiet` (and `--progress` alias) opts back into progress for non-TTY contexts that want it. Precedence: CLI flag > `factory.config.json runtime.quiet` > auto-detect > built-in default. Closes the v0.0.12 BASELINE honorable mention "live progress pollutes captured logs."
+- **`factory finish-task --all-converged`** *(factory-core)*. Batch ship-cycle move-to-done. Walks the most recent `factory-sequence` (or one named via `--since <factorySequenceId>`); moves each converged spec from `<dir>/<id>.md` to `<dir>/done/<id>.md`; emits one `factory-spec-shipped` record per moved spec. Mutually exclusive with the positional `<spec-id>` form. Closes the only step that didn't auto-progress with the rest of `run-sequence`.
+- **Per-scenario coverage-trip detection** *(factory-harness)*. v0.0.12's option (a) (`--coverage=false`) was descoped because bun 1.3.x rejects the flag; v0.0.13 ships option (b) — the runner parses bun's stdout for `0 fail` + `coverage threshold ... not met` markers AND a nonzero exit, classifying the result as `pass` with detail prefix `harness/coverage-threshold-tripped:` rather than `fail`. Real test failures still classify as `fail`; the carve-out is conservative.
+- **Bun-as-test-only — schema emitter is Node-native** *(factory-core)*. `packages/core/scripts/emit-json-schema.ts` rewritten to use `node:fs` + standard ESM. Build script changes from `bun run scripts/...` to `tsx scripts/...`. `tsx` joins `devDependencies` of `@wifo/factory-core`. `pnpm build` and `pnpm typecheck` are now Node-only — bun is required only for `pnpm test` (the test runner is `bun test src` per package — intentional and unchanged). Documented in top-level README + AGENTS.md + scaffold README.
+
+### Changed
+
+- **`@wifo/factory-spec-review` is now a `peerDependency` of `@wifo/factory-core`** (was `dependencies` in v0.0.12). pnpm 8+ and npm 7+ auto-install peer deps, so the v0.0.12 brownfield zero-config goal is preserved for the major package managers. The build-graph cycle introduced in v0.0.12 disappears: peer deps don't form build-time edges. Legacy npm < 7 caveat documented in `packages/core/README.md` + top-level README.
+- **`packages/core/src/cli.ts` reverts to a static `import { runReviewCli } from '@wifo/factory-spec-review/cli'`** — the v0.0.12 `createRequire(import.meta.url)` workaround is removed (the cycle is gone, no need to defer type resolution).
+- **`.github/workflows/publish.yml` build step reverts to `pnpm -r build`** (single line). The v0.0.12 explicit per-package list and `--workspace-concurrency=1` flag are removed. Build-before-typecheck order preserved (independent constraint).
+- **All six `@wifo/factory-*` packages bumped to `0.0.13`** in lockstep. `init-templates.ts` `PACKAGE_JSON_TEMPLATE.dependencies` bumped from `^0.0.12` to `^0.0.13` for every `@wifo/factory-*` dep.
+
+### Public API surface
+
+| Package | v0.0.12 | v0.0.13 |
+|---|---|---|
+| `@wifo/factory-core` | 34 | 34 |
+| `@wifo/factory-context` | 18 | 18 |
+| `@wifo/factory-harness` | ~16 | ~16 |
+| `@wifo/factory-runtime` | 26 | 26 |
+| `@wifo/factory-spec-review` | 10 | 10 |
+| `@wifo/factory-twin` | ~7 | ~7 |
+
+### Reconciliations worth knowing
+
+- **v0.0.13 is the first cluster to ship 6/6 first-iter via one `run-sequence` invocation with zero recovery.** Total: 71m wall-clock, 169k charged tokens. v0.0.10 (5/5 in 81m) was the prior best; v0.0.11 had iter-2 retry on one spec; v0.0.12 took 4 invocations due to `--coverage=false` recovery. The v0.0.13 ship is the cleanest dogfood evidence to date that the runtime is stable.
+- **Peer-dep auto-install requires pnpm 8+ or npm 7+.** Legacy npm users get a clear stderr message; the install-docs caveat is one-line in both top-level README and `packages/core/README.md`.
+- **bun is still required for `pnpm test`.** Every package's test script is `bun test src` — that's the workspace's chosen test runner, intentional and unchanged. The setup-bun GitHub Actions step also stays for the test phase.
+- **`factory init --adopt` (shipped v0.0.12) interacts cleanly with the v0.0.13 init-template additions.** The `IGNORE_IF_PRESENT` set still skips pre-existing `package.json`/`tsconfig.json`/`biome.json`. The new `.factory/.gitkeep` and `.gitignore` extension are append-only — no overwrite.
+- **v0.0.13 explicitly does NOT ship**: vitest/jest equivalents for coverage-trip detection (deferred — bun-only); `factory-cli` umbrella package for the cycle-break (option b from the v0.0.13 BACKLOG entry — out of scope; peer-dep is the lighter v0.0.13 solution); migrating tests off bun (out of scope; bun test stays); JSON-line streaming progress format; per-channel progress fd; auto-fire `factory finish-task` on convergence.
+
+---
+
 ## [0.0.12] — 2026-05-05
 
 **Theme: validate-phase reliability + brownfield-adopter onramp + observability + DoD trust.** v0.0.12 closes 12 BACKLOG entries surfaced across the v0.0.11 ship, the OLH CORE-836 dogfood, and the v0.0.11 short-url BASELINE. Six specs ship together: quote normalization + lint warning in the harness; cause-of-iteration / live-progress / tooling-mismatch detection in the runtime; dedup-status correctness + filesChanged debug telemetry + agent-exit stderr-tail capture; literal-command DoD trust contract; `factory init --adopt` + `factory finish-task` + `factory-spec-review` as hard dep; smoke-boot scenarios in `/scope-project`.

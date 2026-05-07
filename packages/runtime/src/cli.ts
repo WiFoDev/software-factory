@@ -31,7 +31,8 @@ Flags (run + run-sequence):
   --skip-dod-phase                 Drop the DoD-verifier phase (v0.0.10; restores v0.0.9 graph)
   --check-holdouts                 Run holdouts each iteration; both visible AND holdouts must pass (v0.0.11; default off)
   --worktree                       Run inside an isolated git worktree at .factory/worktrees/<runId>/ (v0.0.11; default off)
-  --quiet                          Suppress [runtime] stderr progress lines (v0.0.12; default off)
+  --quiet                          Suppress [runtime] stderr progress lines (v0.0.12)
+  --no-quiet, --progress           Force-emit progress lines even when stderr is non-TTY (v0.0.13)
   --max-prompt-tokens <n>          Per-phase cap on agent input tokens (default: 100000)
   --claude-bin <path>              Path to the claude executable (default: 'claude' on PATH)
   --twin-mode <record|replay|off>  Twin recording mode (default: record)
@@ -98,6 +99,36 @@ function readFactoryConfig(cwd: string): FactoryConfig | null {
   }
 }
 
+// v0.0.13 — pure helper resolving the precedence chain for the `quiet` flag.
+// CLI flag (--quiet / --no-quiet / --progress) > factory.config.json
+// runtime.quiet > auto-detect (process.stderr.isTTY === false → quiet) >
+// built-in default false. Extracted so tests don't need to stub
+// process.stderr.isTTY.
+export interface ResolveQuietInput {
+  cliFlag: boolean | undefined;
+  configValue: boolean | undefined;
+  isTTY: boolean;
+}
+
+export function resolveQuiet({ cliFlag, configValue, isTTY }: ResolveQuietInput): boolean {
+  if (cliFlag !== undefined) return cliFlag;
+  if (configValue !== undefined) return configValue;
+  return !isTTY;
+}
+
+// v0.0.13 — Determine the effective CLI quiet flag from argv. parseArgs sets
+// `--quiet` and `--no-quiet` as independent booleans; if both appear, the
+// later occurrence wins. `--progress` is an alias for `--no-quiet`. Returns
+// undefined when none of the three flags appears.
+function readCliQuietFlag(args: string[]): boolean | undefined {
+  let result: boolean | undefined;
+  for (const arg of args) {
+    if (arg === '--quiet') result = true;
+    else if (arg === '--no-quiet' || arg === '--progress') result = false;
+  }
+  return result;
+}
+
 const defaultIo: CliIo = {
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),
@@ -150,6 +181,8 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
         'check-holdouts': { type: 'boolean' },
         worktree: { type: 'boolean' },
         quiet: { type: 'boolean' },
+        'no-quiet': { type: 'boolean' },
+        progress: { type: 'boolean' },
         'max-prompt-tokens': { type: 'string' },
         'max-agent-timeout-ms': { type: 'string' },
         'claude-bin': { type: 'string' },
@@ -335,9 +368,17 @@ async function runRun(args: string[], io: CliIo): Promise<void> {
   const checkHoldouts = checkHoldoutsFromCli || fileRuntime?.checkHoldouts === true;
   // v0.0.11 — --worktree opts the run into the isolated-worktree sandbox.
   const useWorktree = parsed.values.worktree === true;
-  // v0.0.12 — --quiet: CLI flag wins over config; built-in default false.
-  const quietFromCli = parsed.values.quiet === true;
-  const quiet = quietFromCli || fileRuntime?.quiet === true;
+  // v0.0.13 — quiet precedence: CLI flag (--quiet/--no-quiet/--progress) >
+  // factory.config.json runtime.quiet > auto-detect (stderr.isTTY === false
+  // → quiet=true) > built-in default false. parseArgs treats --quiet and
+  // --no-quiet as independent booleans, so we re-scan argv to honor "later
+  // wins" when both are passed.
+  const cliQuietFlag = readCliQuietFlag(args);
+  const quiet = resolveQuiet({
+    cliFlag: cliQuietFlag,
+    configValue: fileRuntime?.quiet,
+    isTTY: process.stderr.isTTY === true,
+  });
 
   // --twin-mode: validate set membership (record|replay|off). The 'off'
   // value drives `opts.twin = 'off'`; others drive `opts.twin = { mode, ... }`.
@@ -508,6 +549,9 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
         'skip-dod-phase': { type: 'boolean' },
         'check-holdouts': { type: 'boolean' },
         worktree: { type: 'boolean' },
+        quiet: { type: 'boolean' },
+        'no-quiet': { type: 'boolean' },
+        progress: { type: 'boolean' },
         'max-prompt-tokens': { type: 'string' },
         'claude-bin': { type: 'string' },
         'twin-mode': { type: 'string' },
@@ -628,6 +672,14 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
   // an absent flag falls through to config.
   const includeDraftingFromCli = parsed.values['include-drafting'] === true;
   const includeDrafting = includeDraftingFromCli || fileRuntime?.includeDrafting === true;
+  // v0.0.13 — quiet precedence: CLI flag > config > auto-detect (stderr.isTTY
+  // === false → quiet=true) > built-in default false. Mirrors `runRun`.
+  const cliQuietFlag = readCliQuietFlag(args);
+  const quiet = resolveQuiet({
+    cliFlag: cliQuietFlag,
+    configValue: fileRuntime?.quiet,
+    isTTY: process.stderr.isTTY === true,
+  });
 
   const twinModeRaw = parsed.values['twin-mode'];
   let twinOption: ImplementPhaseOptions['twin'];
@@ -721,6 +773,7 @@ async function runRunSequence(args: string[], io: CliIo): Promise<void> {
         ...(maxAgentTimeoutMs !== undefined ? { maxAgentTimeoutMs } : {}),
         ...(checkHoldouts ? { checkHoldouts: true } : {}),
         ...(useWorktree ? { worktree: true } : {}),
+        ...(quiet ? { quiet: true } : {}),
         continueOnFail,
         includeDrafting,
         skipLog: (line: string) => io.stdout(`${line}\n`),

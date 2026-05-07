@@ -208,19 +208,8 @@ describe('runCli — top-level dispatch', () => {
   });
 });
 
-describe('runCli — v0.0.12 spec review hard-dep resolution (S-2)', () => {
-  test('factory-cores package.json declares @wifo/factory-spec-review in dependencies (not optionalDependencies)', () => {
-    const pkgPath = resolve(import.meta.dir, '..', 'package.json');
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-    expect(pkg.dependencies['@wifo/factory-spec-review']).toBeDefined();
-    expect(pkg.optionalDependencies?.['@wifo/factory-spec-review']).toBeUndefined();
-  });
-
+describe('runCli — v0.0.13 spec review cycle-break (S-2)', () => {
   test('factory spec review resolves @wifo/factory-spec-review without optional-dep fallback', async () => {
-    // The dispatcher imports `@wifo/factory-spec-review/cli` through the
-    // standard package resolver — if this ESM import succeeds, factory-core's
-    // resolution works zero-config. The legacy 'spec/review-unavailable' code
-    // path was removed; the source must not reference it.
     const mod = await import('@wifo/factory-spec-review/cli');
     expect(typeof mod.runReviewCli).toBe('function');
 
@@ -228,9 +217,23 @@ describe('runCli — v0.0.12 spec review hard-dep resolution (S-2)', () => {
     expect(cliSource).not.toContain('spec/review-unavailable');
     expect(cliSource).not.toContain('function findPackageRoot');
   });
+
+  test('core/cli.ts uses static import for runReviewCli (v0.0.13 cycle-break)', () => {
+    const cliSource = readFileSync(resolve(import.meta.dir, 'cli.ts'), 'utf8');
+    expect(cliSource).toContain("import { runReviewCli } from '@wifo/factory-spec-review/cli';");
+    // The v0.0.13 createRequire workaround is gone.
+    expect(cliSource).not.toContain('createRequire(import.meta.url)');
+    expect(cliSource).not.toContain("requireSpecReview('@wifo/factory-spec-review/cli')");
+  });
+
+  test('core/cli.ts no longer imports createRequire from node:module', () => {
+    const cliSource = readFileSync(resolve(import.meta.dir, 'cli.ts'), 'utf8');
+    expect(cliSource).not.toContain("from 'node:module'");
+    expect(cliSource).not.toContain('createRequire');
+  });
 });
 
-describe('runCli — v0.0.12 factory finish-task (S-3)', () => {
+describe('runCli — v0.0.13 factory finish-task (S-3)', () => {
   // The CLI subcommand `factory finish-task <id>` calls the library helper
   // `finishTask({ specId, dir, contextDir })` (exported from
   // `packages/core/src/index.ts`). These tests exercise that helper directly —
@@ -407,6 +410,17 @@ describe('runCli — v0.0.12 factory finish-task (S-3)', () => {
     }
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toContain('refusing to move');
+  });
+});
+
+describe('runCli — v0.0.13 factory finish-task --all-converged (S-3 mutual-exclusion)', () => {
+  test('factory finish-task rejects positional id + --all-converged combination', () => {
+    const io = makeIo();
+    run(['finish-task', 'my-spec', '--all-converged'], io.io);
+    expect(io.exitCode()).toBe(2);
+    expect(io.stderr()).toContain(
+      'factory: --all-converged is mutually exclusive with positional <spec-id>',
+    );
   });
 });
 

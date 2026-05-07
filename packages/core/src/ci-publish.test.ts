@@ -83,17 +83,12 @@ describe('ci-publish — workflow structure (S-1)', () => {
     const typecheckIdx = findIndex((s) => s.run === 'pnpm typecheck');
     const testIdx = findIndex((s) => s.run === 'pnpm test');
     const checkIdx = findIndex((s) => s.run === 'pnpm check');
-    // v0.0.12 — build step accepts either `pnpm -r build` (with optional
-    // `--workspace-concurrency=<n>`) OR an explicit multi-line per-package
-    // order (`pnpm --filter @wifo/factory-<name> build` × N) — the latter
-    // sidesteps the core ↔ spec-review cyclic workspace dep.
+    // v0.0.13 — cycle-break removed the per-package fallback; canonical shape
+    // is `pnpm -r build` (one line).
     const buildIdx = findIndex(
-      (s) =>
-        typeof s.run === 'string' &&
-        (/pnpm\s+-r\s+(--workspace-concurrency=\d+\s+)?build\b/.test(s.run) ||
-          /pnpm\s+--filter\s+@wifo\/factory-\S+\s+build/.test(s.run)),
+      (s) => typeof s.run === 'string' && /^pnpm\s+-r\s+build\s*$/.test(s.run),
     );
-    // v0.0.12 — publish step is idempotent (per-package loop with `npm view`
+    // v0.0.13 — publish step is idempotent (per-package loop with `npm view`
     // skip-if-published guard) instead of `pnpm publish -r`. Match either
     // shape to keep the invariant assertion stable across the change.
     const publishIdx = findIndex(
@@ -107,7 +102,7 @@ describe('ci-publish — workflow structure (S-1)', () => {
     expect(setupPnpmIdx).toBeGreaterThan(checkoutIdx);
     expect(setupNodeIdx).toBeGreaterThan(setupPnpmIdx);
     expect(installIdx).toBeGreaterThan(setupNodeIdx);
-    // v0.0.12 — build runs BEFORE typecheck so cross-package type resolution
+    // v0.0.13 — build runs BEFORE typecheck so cross-package type resolution
     // (e.g., harness → @wifo/factory-core) finds workspace-linked dist/.
     expect(buildIdx).toBeGreaterThan(installIdx);
     expect(typecheckIdx).toBeGreaterThan(buildIdx);
@@ -138,6 +133,32 @@ describe('ci-publish — workflow structure (S-1)', () => {
     expect(publishStep).toBeDefined();
     const env = publishStep?.env ?? {};
     expect(env.NPM_TOKEN).toBe('${{ secrets.NPM_TOKEN }}');
+  });
+});
+
+describe('ci-publish — v0.0.13 cycle-break (S-3)', () => {
+  test('publish.yml build step uses pnpm -r build (cycle removed in v0.0.13)', () => {
+    const wf = loadWorkflow();
+    const steps = wf.jobs?.publish?.steps ?? [];
+    const buildStep = steps.find(
+      (s) => typeof s.run === 'string' && /pnpm\s+-r\s+build/.test(s.run),
+    );
+    expect(buildStep).toBeDefined();
+    const cmd = (buildStep?.run ?? '').trim();
+    // Canonical shape: a single-line `pnpm -r build`. No --workspace-concurrency
+    // flag, no per-package --filter list.
+    expect(cmd).toBe('pnpm -r build');
+    expect(cmd).not.toContain('--workspace-concurrency');
+    expect(cmd).not.toContain('--filter');
+  });
+
+  test('buildIdx matcher accepts pnpm -r build canonical shape', () => {
+    const wf = loadWorkflow();
+    const steps = wf.jobs?.publish?.steps ?? [];
+    const buildIdx = steps.findIndex(
+      (s) => typeof s.run === 'string' && /^pnpm\s+-r\s+build\s*$/.test(s.run),
+    );
+    expect(buildIdx).toBeGreaterThanOrEqual(0);
   });
 });
 

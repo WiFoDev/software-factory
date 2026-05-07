@@ -76,6 +76,12 @@ depends-on:
 - Test paths in `Satisfaction:` lines are written **bare** (no backticks): `test: src/foo.test.ts "name"`, NOT `test: \`src/foo.test.ts\` "name"`.
 - Each scenario has at least one `test:` line. `judge:` lines are optional and used for fuzzy criteria (log clarity, error UX) that unit tests can't capture.
 
+### Definition of Done — `dod.template` precedence (v0.0.13+)
+
+If `factory.config.json` in `<cwd>` has a `dod.template` field (a `string[]` of literal-command DoD bullet bodies), use it as the body of every generated spec's `## Definition of Done` section: emit each entry as `- <entry>`, plus the `All scenarios pass.` line. **The literal backtick-wrapped commands in each entry MUST be preserved verbatim** — the v0.0.12 `spec/dod-needs-explicit-command` lint flags DoD bullets that name a runtime gate (typecheck, tests, biome) without embedding the shell command in backticks. `factory init` ships `dod.template` defaults derived from the scaffold's `package.json` scripts, so a freshly-scaffolded repo emits lint-clean DoD blocks from the very first `/scope-project` invocation.
+
+If `factory.config.json` is missing, malformed, or has no `dod.template` field, fall back to the canonical defaults (typecheck/tests/biome). The maintainer can override per-project by editing `factory.config.json.dod.template`.
+
 ### HTTP entrypoint smoke-boot scenarios
 
 If a spec introduces an HTTP entrypoint (mentions any of: `createServer`, `listen(<port>)`, `app.listen`, `http.createServer`, `Bun.serve`, `serve(`), append a smoke-boot scenario like the worked example below. This forces the production entrypoint (`src/main.ts` or the spec-named equivalent) into existence — without it, the implement phase tends to ship working library code while leaving `bun src/main.ts` 404'ing because the entrypoint never gets written.

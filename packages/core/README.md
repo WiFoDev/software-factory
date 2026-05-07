@@ -12,6 +12,10 @@
 pnpm add -D @wifo/factory-core
 ```
 
+### bun is required for `pnpm test` only (v0.0.13+)
+
+**bun is required for `pnpm test` only** — every workspace package's `scripts.test` is `bun test src` (the chosen test runner). `pnpm build` and `pnpm typecheck` are Node-native (Node 22+); the JSON-schema emitter runs via `tsx scripts/emit-json-schema.ts` with no bun on PATH at build time. `pnpm install` for consumers of the published packages does NOT require bun.
+
 Or use without installing via `npx`:
 
 ```sh
@@ -19,6 +23,25 @@ npx -y @wifo/factory-core init --name my-project
 ```
 
 `factory init` is the recommended bootstrap path — see the canonical workflow below.
+
+### Peer dependency note (v0.0.13+)
+
+`@wifo/factory-spec-review` is a **non-optional peer dependency** of
+`@wifo/factory-core` — it powers `factory spec review` and the documented
+happy path requires it.
+
+- **pnpm 8+ / npm 7+** auto-install peer dependencies, so `pnpm add -D @wifo/factory-core`
+  (or `npm i -D @wifo/factory-core`) brings in `@wifo/factory-spec-review` for free.
+- **Legacy npm (< 7)** does NOT auto-install peers. Install both packages explicitly:
+
+  ```sh
+  npm i @wifo/factory-core @wifo/factory-spec-review
+  ```
+
+The shift from `dependencies` to `peerDependencies` in v0.0.13 breaks the
+core ↔ spec-review workspace cycle that bit during the v0.0.12 publish.
+The runtime resolution is unchanged: `import '@wifo/factory-spec-review/cli'`
+works zero-config under any modern package manager.
 
 ## When to reach for it
 
@@ -41,11 +64,26 @@ factory spec review <path> [flags]            # Quality review (8 LLM judges)
 factory spec watch <path> [--review] [...]    # Continuous lint+review on save (v0.0.10+)
 factory spec schema                           # Emit JSON Schema for editor intellisense
 factory finish-task <id> [--dir <p>] [--context-dir <p>]   # Move converged spec to done/ + emit factory-spec-shipped (v0.0.12+)
+factory finish-task --all-converged [--since <factorySequenceId>] [--dir <p>] [--context-dir <p>]
+                                              # Batch-ship every converged spec under a factory-sequence (v0.0.13+)
 ```
 
 `factory init --adopt` (v0.0.12+) is the brownfield-adopter onramp: walks the same template plan as `factory init` but **skips** files in `IGNORE_IF_PRESENT` (`package.json`, `tsconfig.json`, `biome.json`, `bunfig.toml`, `README.md`) when they already exist, **appends** factory entries (`.factory`, `.factory-spec-review-cache`) to a pre-existing `.gitignore`, and **creates** only the factory-specific bits (`docs/specs/done/`, `docs/technical-plans/done/`, `factory.config.json`, `.claude/commands/scope-project.md`). Idempotent — running twice never duplicates `.gitignore` entries. Does NOT mutate your `package.json` (a future `--write-deps` will opt-in to that).
 
 `factory finish-task <id>` (v0.0.12+) ships a converged spec: moves `<dir>/<id>.md` to `<dir>/done/<id>.md` (creating `done/` if missing) and emits a `factory-spec-shipped` context record parented on the converged `factory-run` so the lifecycle is reconstructible from the store alone. Refuses to run if no converged `factory-run` exists for the given spec id. The runtime emits a `factory-runtime: <id> converged → ship via 'factory finish-task <id>'` hint on stdout when a spec converges.
+
+`factory finish-task --all-converged` (v0.0.13+) batch-ships every converged spec under a single `factory-sequence` — the natural counterpart to `factory-runtime run-sequence`, which already ships clusters of 4-6 specs in one invocation. With no flag, it walks the **most recent** factory-sequence (largest `recordedAt`; tie-break on lex-larger id). `--since <factorySequenceId>` overrides the default to target a specific sequence (full id only — no prefix matching). Mutually exclusive with the positional `<spec-id>` form (passing both exits 2). Errored specs in the same sequence stay at `<dir>/<id>.md` for the maintainer to retry; per-spec move failures abort the batch.
+
+```sh
+# Ship every converged spec from the most recent run-sequence:
+factory finish-task --all-converged
+# → factory: shipped core-store-and-slug → done/ (run aa000000)
+#   factory: shipped shorten-endpoint → done/ (run bb000000)
+#   factory: shipped 2 specs from sequence 00112233
+
+# Retroactively ship from an earlier sequence:
+factory finish-task --all-converged --since 00112233aabbccdd
+```
 
 Key flags (`spec review`):
 
@@ -143,6 +181,12 @@ Invoke from any Claude Code session in a factory-bootstrapped project:
 Output: 4-6 spec files under `docs/specs/`, first `status: ready`, rest `status: drafting`, every spec populates `depends-on`. Worked-example output: [`docs/baselines/scope-project-fixtures/url-shortener/`](../../docs/baselines/scope-project-fixtures/url-shortener/).
 
 **Smoke-boot extension (v0.0.12+).** When a generated spec mentions an HTTP entrypoint pattern (`createServer`, `listen(<port>)`, `app.listen`, `http.createServer`, `Bun.serve`, `serve(`), `/scope-project` appends a smoke-boot scenario that spawns `bun src/main.ts`, probes a route, and kills the process. The smoke-boot test forces the production entrypoint into existence — closing the v0.0.11 BASELINE gap where library code shipped but `bun src/main.ts` 404'd because no `test:` line ever forced the entrypoint to be written.
+
+**Init-scaffold polishes (v0.0.13+).** Three first-contact frictions surfaced in the v0.0.12 BASELINE close in this release:
+
+- **`biome.json` schema migrates to Biome 2.x.** The scaffold pins `@biomejs/biome ^2.4.4` (a 2.x release) but until v0.0.13 emitted the Biome 1.x `files.include` key, so `pnpm check` errored on first run. v0.0.13 emits `files.includes` (Biome 2.x) and adds `formatter.indentStyle: 'space'` so the JSON-stringified config is self-consistent. The schema major must stay locked to the pinned biome major.
+- **`.factory/` is pre-created via `.gitkeep`.** Pre-v0.0.13, `.factory/` was created lazily by the runtime, so any pre-runtime tooling (e.g., `tee .factory/run-sequence.log`) failed until first run. v0.0.13 ships `.factory/.gitkeep` in the scaffold so the dir exists from `git clone` time. `.gitignore` now lists `.factory/worktrees/` and `.factory/twin-recordings/` (the per-record subdirs the runtime writes); `.factory/` itself is tracked so users see the dir without ambiguity.
+- **`factory.config.json` gains `dod.template`.** A `string[]` of literal-command DoD bullet bodies derived from the scaffold's `package.json` scripts (typecheck, test, check). `/scope-project` reads this at spec-author time and emits the same block into every generated spec's `## Definition of Done`, so the v0.0.12 `spec/dod-needs-explicit-command` lint stays green from the very first author. `build` is intentionally excluded — build is a publish prereq, not a per-spec DoD gate. Override per-project by editing `factory.config.json.dod.template`.
 
 ### `/scope-task`
 

@@ -14,12 +14,34 @@ export interface FinishTaskOptions {
   contextDir: string;
 }
 
+/**
+ * v0.0.13 — batch ship every converged spec from a factory-sequence in one
+ * call. Mutually exclusive with the per-spec form: pass `allConverged: true`
+ * to opt in. `since` pins to a specific factory-sequence id; omit to walk
+ * the most recent factory-sequence.
+ */
+export interface FinishTaskBatchOptions {
+  allConverged: true;
+  since?: string;
+  dir: string;
+  contextDir: string;
+}
+
 export interface FinishTaskResult {
   shippedRecordId: string;
   fromPath: string;
   toPath: string;
   /** The converged factory-run record's id whose lineage adopted the new record. */
   runId: string;
+  /** The shipped spec's id. */
+  specId: string;
+}
+
+export interface FinishTaskBatchResult {
+  /** The factory-sequence whose converged specs were walked. */
+  factorySequenceId: string;
+  /** Per-spec ship results, one entry per converged + moved spec. */
+  shipped: FinishTaskResult[];
 }
 
 interface ContextRecordEnvelope {
@@ -128,14 +150,64 @@ async function writeRecord(dir: string, record: ContextRecordEnvelope): Promise<
   }
 }
 
+async function shipOneSpec(
+  specId: string,
+  runId: string,
+  dirAbs: string,
+  contextDirAbs: string,
+): Promise<FinishTaskResult> {
+  const fromPath = join(dirAbs, `${specId}.md`);
+  const toPath = join(dirAbs, 'done', `${specId}.md`);
+  if (!existsSync(fromPath)) {
+    throw new Error(`factory: spec file not found: ${fromPath}`);
+  }
+  await mkdir(dirname(toPath), { recursive: true });
+  await rename(fromPath, toPath);
+
+  const shippedAt = new Date().toISOString();
+  const payload = {
+    specId,
+    shippedAt,
+    fromPath,
+    toPath,
+  };
+  const parents = [runId];
+  const id = hashRecord({ type: 'factory-spec-shipped', parents, payload });
+  const record: ContextRecordEnvelope = {
+    version: 1,
+    id,
+    type: 'factory-spec-shipped',
+    recordedAt: shippedAt,
+    parents,
+    payload,
+  };
+  await writeRecord(contextDirAbs, record);
+
+  return { shippedRecordId: id, fromPath, toPath, runId, specId };
+}
+
 /**
  * Mark a converged spec as shipped: move its file to `<dir>/done/` and
  * persist a `factory-spec-shipped` context record parented on the converged
  * `factory-run` so the lifecycle is reconstructible from the store alone.
  *
  * Refuses to move if no converged factory-run exists for the spec id.
+ *
+ * v0.0.13 — overloaded to also accept `{ allConverged: true, since? }` to
+ * batch-ship every converged spec under a factory-sequence in one call.
  */
-export async function finishTask(opts: FinishTaskOptions): Promise<FinishTaskResult> {
+export function finishTask(opts: FinishTaskOptions): Promise<FinishTaskResult>;
+export function finishTask(opts: FinishTaskBatchOptions): Promise<FinishTaskBatchResult>;
+export async function finishTask(
+  opts: FinishTaskOptions | FinishTaskBatchOptions,
+): Promise<FinishTaskResult | FinishTaskBatchResult> {
+  if ('allConverged' in opts && opts.allConverged === true) {
+    return finishTaskBatch(opts);
+  }
+  return finishTaskOne(opts as FinishTaskOptions);
+}
+
+async function finishTaskOne(opts: FinishTaskOptions): Promise<FinishTaskResult> {
   const { specId, dir, contextDir } = opts;
   const dirAbs = resolve(dir);
   const contextDirAbs = resolve(contextDir);
@@ -155,32 +227,84 @@ export async function finishTask(opts: FinishTaskOptions): Promise<FinishTaskRes
     );
   }
 
-  const fromPath = join(dirAbs, `${specId}.md`);
-  const toPath = join(dirAbs, 'done', `${specId}.md`);
-  if (!existsSync(fromPath)) {
-    throw new Error(`factory: spec file not found: ${fromPath}`);
+  return shipOneSpec(specId, converged.id, dirAbs, contextDirAbs);
+}
+
+async function finishTaskBatch(opts: FinishTaskBatchOptions): Promise<FinishTaskBatchResult> {
+  const { since, dir, contextDir } = opts;
+  const dirAbs = resolve(dir);
+  const contextDirAbs = resolve(contextDir);
+
+  const all = await readAllRecords(contextDirAbs);
+  const sequences = all.filter((r) => r.type === 'factory-sequence');
+
+  let target: ContextRecordEnvelope | undefined;
+  if (since !== undefined) {
+    target = sequences.find((s) => s.id === since);
+    if (target === undefined) {
+      throw new Error(`factory: no factory-sequence found with id ${since}`);
+    }
+  } else {
+    if (sequences.length === 0) {
+      throw new Error(
+        `factory: no factory-sequence found in context dir; --all-converged requires at least one run-sequence invocation. Use 'factory finish-task <spec-id>' for individual specs.`,
+      );
+    }
+    // Most recent by recordedAt; tie-break on lex-larger id (deterministic).
+    const sorted = [...sequences].sort((a, b) => {
+      if (a.recordedAt !== b.recordedAt) return a.recordedAt < b.recordedAt ? 1 : -1;
+      return a.id < b.id ? 1 : -1;
+    });
+    target = sorted[0];
   }
-  await mkdir(dirname(toPath), { recursive: true });
-  await rename(fromPath, toPath);
+  if (target === undefined) {
+    // Defensive — covered above, but TS narrowing.
+    throw new Error(
+      `factory: no factory-sequence found in context dir; --all-converged requires at least one run-sequence invocation. Use 'factory finish-task <spec-id>' for individual specs.`,
+    );
+  }
 
-  const shippedAt = new Date().toISOString();
-  const payload = {
-    specId,
-    shippedAt,
-    fromPath,
-    toPath,
-  };
-  const parents = [converged.id];
-  const id = hashRecord({ type: 'factory-spec-shipped', parents, payload });
-  const record: ContextRecordEnvelope = {
-    version: 1,
-    id,
-    type: 'factory-spec-shipped',
-    recordedAt: shippedAt,
-    parents,
-    payload,
-  };
-  await writeRecord(contextDirAbs, record);
+  const sequenceId = target.id;
 
-  return { shippedRecordId: id, fromPath, toPath, runId: converged.id };
+  // Walk descendant factory-run records (parents include this sequence id).
+  // Dedup by specId — keep the most recent converged run per spec.
+  const runs = all
+    .filter((r) => r.type === 'factory-run')
+    .filter((r) => r.parents.includes(sequenceId));
+  const bySpec = new Map<string, ContextRecordEnvelope>();
+  for (const run of runs) {
+    const payload = run.payload as { specId?: unknown };
+    if (typeof payload.specId !== 'string') continue;
+    if (!isRunConverged(run.id, all)) continue;
+    const existing = bySpec.get(payload.specId);
+    if (existing === undefined || existing.recordedAt < run.recordedAt) {
+      bySpec.set(payload.specId, run);
+    }
+  }
+
+  // Order by the sequence's topoOrder for stable, semantically meaningful
+  // output. Specs not present in topoOrder fall through to alphabetic.
+  const seqPayload = target.payload as { topoOrder?: unknown };
+  const topoOrder = Array.isArray(seqPayload.topoOrder)
+    ? seqPayload.topoOrder.filter((x): x is string => typeof x === 'string')
+    : [];
+  const orderIndex = new Map<string, number>();
+  for (let i = 0; i < topoOrder.length; i++) {
+    const id = topoOrder[i];
+    if (id !== undefined) orderIndex.set(id, i);
+  }
+  const ordered = Array.from(bySpec.entries()).sort(([aId], [bId]) => {
+    const ai = orderIndex.get(aId) ?? Number.MAX_SAFE_INTEGER;
+    const bi = orderIndex.get(bId) ?? Number.MAX_SAFE_INTEGER;
+    if (ai !== bi) return ai - bi;
+    return aId < bId ? -1 : aId > bId ? 1 : 0;
+  });
+
+  const shipped: FinishTaskResult[] = [];
+  for (const [specId, run] of ordered) {
+    const result = await shipOneSpec(specId, run.id, dirAbs, contextDirAbs);
+    shipped.push(result);
+  }
+
+  return { factorySequenceId: sequenceId, shipped };
 }

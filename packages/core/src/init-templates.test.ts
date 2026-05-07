@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  BIOME_CONFIG_TEMPLATE,
+  BIOME_JSON_TEMPLATE,
+  FACTORY_CONFIG_TEMPLATE,
   GITIGNORE_TEMPLATE,
   PACKAGE_JSON_TEMPLATE,
   README_TEMPLATE,
@@ -12,18 +13,18 @@ import {
 
 describe('init-templates', () => {
   test('PACKAGE_JSON_TEMPLATE has the expected keys + workspace-stripped semver deps', () => {
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.12');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.12');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.12');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.13');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.13');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.13');
     expect(PACKAGE_JSON_TEMPLATE.type).toBe('module');
     expect(PACKAGE_JSON_TEMPLATE.private).toBe(true);
   });
 
-  test('PACKAGE_JSON_TEMPLATE pins @wifo/factory-* deps at ^0.0.12', () => {
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.12');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.12');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.12');
-    expect(PACKAGE_JSON_TEMPLATE.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.12');
+  test('PACKAGE_JSON_TEMPLATE pins @wifo/factory-* deps at ^0.0.13', () => {
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.13');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.13');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.13');
+    expect(PACKAGE_JSON_TEMPLATE.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.13');
   });
 
   test('TSCONFIG_TEMPLATE is self-contained — does NOT extend a relative path', () => {
@@ -49,6 +50,10 @@ describe('init-templates', () => {
     }
     const slugifyContents = readFileSync(slugifyGitignore, 'utf8');
     expect(GITIGNORE_TEMPLATE).toBe(slugifyContents);
+  });
+
+  test('scaffold README documents bun-as-test-only requirement', () => {
+    expect(README_TEMPLATE).toContain('bun is required for `pnpm test` only');
   });
 
   test('README_TEMPLATE has a {{name}} placeholder and lacks the v0.0.4 caveat', () => {
@@ -107,7 +112,7 @@ describe('init-templates', () => {
     expect(PACKAGE_JSON_TEMPLATE.scripts).toEqual({
       typecheck: 'tsc --noEmit',
       test: 'bun test src',
-      check: 'biome check',
+      check: 'biome check --no-errors-on-unmatched',
       build: 'tsc -p tsconfig.build.json',
     });
     // Insertion-order ⇒ JSON.stringify order matches the natural CI sequence.
@@ -124,11 +129,60 @@ describe('init-templates', () => {
     expect(PACKAGE_JSON_TEMPLATE.devDependencies.typescript).toBe('^5.6.0');
   });
 
-  test('BIOME_CONFIG_TEMPLATE has the minimal canonical shape', () => {
-    const parsed = JSON.parse(BIOME_CONFIG_TEMPLATE);
-    expect(parsed.$schema).toBe('https://biomejs.dev/schemas/2.4.4/schema.json');
-    expect(parsed.linter).toEqual({ enabled: true, rules: { recommended: true } });
-    expect(parsed.formatter).toEqual({ enabled: true, indentWidth: 2, lineWidth: 100 });
-    expect(parsed.files).toEqual({ include: ['src/**/*.ts', 'src/**/*.tsx'] });
+  test('BIOME_JSON_TEMPLATE has the minimal canonical shape', () => {
+    expect(BIOME_JSON_TEMPLATE.$schema).toBe('https://biomejs.dev/schemas/2.4.4/schema.json');
+    expect(BIOME_JSON_TEMPLATE.linter).toEqual({ enabled: true, rules: { recommended: true } });
+    expect(BIOME_JSON_TEMPLATE.formatter).toEqual({
+      enabled: true,
+      indentStyle: 'space',
+      indentWidth: 2,
+      lineWidth: 100,
+    });
+    expect(BIOME_JSON_TEMPLATE.files).toEqual({
+      includes: ['src/**/*.ts', 'src/**/*.tsx'],
+    });
+  });
+
+  test('BIOME_JSON_TEMPLATE uses the includes key matching the pinned Biome major', () => {
+    // Spec S-1: schema major must stay in lockstep with @biomejs/biome major.
+    // Today: pin = ^2.4.4 → Biome 2.x → key = `includes` (NOT `include`, which
+    // was the Biome 1.x spelling). Regression-pin the keys explicitly so any
+    // future drift surfaces in this test, not at user-side `pnpm check` time.
+    const keys = Object.keys(BIOME_JSON_TEMPLATE);
+    expect(keys).toEqual(['$schema', 'linter', 'formatter', 'files']);
+    expect(BIOME_JSON_TEMPLATE.files).toHaveProperty('includes');
+    expect(BIOME_JSON_TEMPLATE.files).not.toHaveProperty('include');
+    // Schema URL major matches the pinned biome major.
+    const biomePin = PACKAGE_JSON_TEMPLATE.devDependencies['@biomejs/biome'];
+    const biomeMajor = biomePin.replace(/^\^/, '').split('.')[0];
+    expect(BIOME_JSON_TEMPLATE.$schema).toContain(`/schemas/${biomeMajor}.`);
+  });
+
+  test('FACTORY_CONFIG_TEMPLATE includes dod.template derived from package.json scripts', () => {
+    // Spec S-3: dod.template is `string[]`; entries are literal-command DoD
+    // bullets backed by the scaffold's typecheck/test/check scripts. Order
+    // matches PACKAGE_JSON_TEMPLATE.scripts (typecheck → test → check); `build`
+    // is intentionally excluded (publish prereq, not a DoD gate).
+    expect(FACTORY_CONFIG_TEMPLATE.dod).toBeDefined();
+    expect(FACTORY_CONFIG_TEMPLATE.dod.template).toEqual([
+      'typecheck clean (`pnpm typecheck`)',
+      'tests green (`pnpm test`)',
+      'biome clean (`pnpm check`)',
+    ]);
+    // Each entry embeds the literal shell command in backticks (v0.0.13
+    // spec/dod-needs-explicit-command lint contract).
+    for (const entry of FACTORY_CONFIG_TEMPLATE.dod.template) {
+      expect(entry).toMatch(/`pnpm (typecheck|test|check)`/);
+    }
+    // Three entries map 1:1 to the typecheck/test/check scripts; `build` is
+    // intentionally excluded.
+    expect(FACTORY_CONFIG_TEMPLATE.dod.template).toHaveLength(3);
+    const scriptNames = Object.keys(PACKAGE_JSON_TEMPLATE.scripts);
+    expect(scriptNames).toContain('typecheck');
+    expect(scriptNames).toContain('test');
+    expect(scriptNames).toContain('check');
+    expect(scriptNames).toContain('build');
+    // build is NOT in the DoD template.
+    expect(FACTORY_CONFIG_TEMPLATE.dod.template.join('\n')).not.toContain('pnpm build');
   });
 });

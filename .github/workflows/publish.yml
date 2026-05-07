@@ -40,18 +40,8 @@ jobs:
       # Build must run before typecheck/test/check so cross-package
       # type resolution (e.g., harness importing @wifo/factory-core)
       # finds the workspace-linked `dist/` from a fresh checkout.
-      # Explicit per-package order sidesteps the core ↔ spec-review
-      # cyclic workspace edge (added in v0.0.12 brownfield spec) — pnpm's
-      # topo sort with cycles can't pick a working order on its own.
       - name: build
-        run: |
-          set -e
-          pnpm --filter @wifo/factory-context build
-          pnpm --filter @wifo/factory-twin build
-          pnpm --filter @wifo/factory-core build
-          pnpm --filter @wifo/factory-harness build
-          pnpm --filter @wifo/factory-spec-review build
-          pnpm --filter @wifo/factory-runtime build
+        run: pnpm -r build
 
       - name: typecheck
         run: pnpm typecheck

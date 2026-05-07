@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { runReviewCli } from '@wifo/factory-spec-review/cli';
 import { finishTask } from './finish-task.js';
 import { runInit } from './init.js';
 import { getFrontmatterJsonSchema } from './json-schema.js';
@@ -22,6 +22,9 @@ const USAGE = `Usage:
                                      Move a converged spec from <dir>/<id>.md to
                                      <dir>/done/<id>.md and persist a
                                      factory-spec-shipped record
+  factory finish-task --all-converged [--since <factorySequenceId>]
+                                     Batch-ship every converged spec under a
+                                     factory-sequence (default: most recent)
 `;
 
 export interface CliIo {
@@ -70,17 +73,8 @@ export function runCli(argv: string[], io: CliIo = defaultIo): void {
     return;
   }
   if (command === 'review') {
-    // v0.0.12 — `@wifo/factory-spec-review` is a hard dep of `@wifo/factory-core`.
-    // Resolved via `createRequire` rather than a static import to avoid a
-    // build-time cycle (core ← spec-review ← core); the runtime resolution
-    // still goes through the standard package resolver, so
-    // `npx -p @wifo/factory-core factory spec review` works zero-config.
     void (async () => {
       try {
-        const requireSpecReview = createRequire(import.meta.url);
-        const { runReviewCli } = requireSpecReview('@wifo/factory-spec-review/cli') as {
-          runReviewCli: (argv: string[], io: CliIo) => Promise<void>;
-        };
         await runReviewCli(rest, io);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -107,6 +101,8 @@ function runFinishTask(args: string[], io: CliIo): void {
       options: {
         dir: { type: 'string' },
         'context-dir': { type: 'string' },
+        'all-converged': { type: 'boolean' },
+        since: { type: 'string' },
       },
       allowPositionals: true,
       strict: true,
@@ -117,12 +113,27 @@ function runFinishTask(args: string[], io: CliIo): void {
     io.exit(2);
     return;
   }
-  const specId = parsed.positionals[0];
-  if (specId === undefined) {
+
+  const allConverged = parsed.values['all-converged'] === true;
+  const since = typeof parsed.values.since === 'string' ? parsed.values.since : undefined;
+  const positionalSpecId = parsed.positionals[0];
+
+  if (allConverged && positionalSpecId !== undefined) {
+    io.stderr('factory: --all-converged is mutually exclusive with positional <spec-id>\n');
+    io.exit(2);
+    return;
+  }
+  if (!allConverged && since !== undefined) {
+    io.stderr('factory: --since requires --all-converged\n');
+    io.exit(2);
+    return;
+  }
+  if (!allConverged && positionalSpecId === undefined) {
     io.stderr(`Missing <spec-id>\n${USAGE}`);
     io.exit(2);
     return;
   }
+
   const dir = typeof parsed.values.dir === 'string' ? parsed.values.dir : 'docs/specs';
   const contextDirRaw =
     typeof parsed.values['context-dir'] === 'string' ? parsed.values['context-dir'] : './context';
@@ -131,9 +142,27 @@ function runFinishTask(args: string[], io: CliIo): void {
 
   void (async () => {
     try {
+      if (allConverged) {
+        const result = await finishTask({
+          allConverged: true,
+          dir: dirAbs,
+          contextDir,
+          ...(since !== undefined ? { since } : {}),
+        });
+        for (const r of result.shipped) {
+          io.stdout(`factory: shipped ${r.specId} → done/ (run ${r.runId.slice(0, 8)})\n`);
+        }
+        io.stdout(
+          `factory: shipped ${result.shipped.length} specs from sequence ${result.factorySequenceId.slice(0, 8)}\n`,
+        );
+        io.exit(0);
+        return;
+      }
+      const specId = positionalSpecId as string;
       const result = await finishTask({ specId, dir: dirAbs, contextDir });
-      const shortRunId = result.runId.slice(0, 8);
-      io.stdout(`factory: shipped ${specId} → ${result.toPath} (run ${shortRunId})\n`);
+      io.stdout(
+        `factory: shipped ${specId} → ${result.toPath} (run ${result.runId.slice(0, 8)})\n`,
+      );
       io.exit(0);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
