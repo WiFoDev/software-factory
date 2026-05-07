@@ -93,13 +93,13 @@ describe('ci-publish — workflow structure (S-1)', () => {
         (/^pnpm\s+-r\s+(--workspace-concurrency=\d+\s+)?build\s*$/.test(s.run) ||
           /pnpm\s+--filter\s+@wifo\/factory-\S+\s+build/.test(s.run)),
     );
-    // v0.0.13 — publish step is idempotent (per-package loop with `npm view`
-    // skip-if-published guard) instead of `pnpm publish -r`. Match either
-    // shape to keep the invariant assertion stable across the change.
+    // v0.0.13.x — publish step is idempotent (per-package loop with `npm view`
+    // skip-if-published guard). Accepts either `pnpm publish -r ...`,
+    // `pnpm publish ...`, or `pnpm --filter <name> publish ...` shapes.
     const publishIdx = findIndex(
       (s) =>
         typeof s.run === 'string' &&
-        s.run.includes('pnpm publish') &&
+        /pnpm\s+(--filter\s+\S+\s+)?publish/.test(s.run) &&
         s.run.includes('--access public'),
     );
 
@@ -133,7 +133,7 @@ describe('ci-publish — workflow structure (S-1)', () => {
     // publish step's env contains NPM_TOKEN bound to the secret
     const steps = wf.jobs?.publish?.steps ?? [];
     const publishStep = steps.find(
-      (s) => typeof s.run === 'string' && s.run.includes('pnpm publish'),
+      (s) => typeof s.run === 'string' && /pnpm\s+(--filter\s+\S+\s+)?publish/.test(s.run),
     );
     expect(publishStep).toBeDefined();
     const env = publishStep?.env ?? {};
@@ -199,11 +199,13 @@ describe('ci-publish — gates + flags (S-3)', () => {
     const wf = loadWorkflow();
     const steps = wf.jobs?.publish?.steps ?? [];
     const publishStep = steps.find(
-      (s) => typeof s.run === 'string' && s.run.includes('pnpm publish'),
+      (s) => typeof s.run === 'string' && /pnpm\s+(--filter\s+\S+\s+)?publish/.test(s.run),
     );
     expect(publishStep).toBeDefined();
     const cmd = publishStep?.run ?? '';
-    expect(cmd).toContain('-r');
+    // v0.0.13.x — accepts either `-r` (single-shot) or `--filter <name>`
+    // (idempotent per-package loop) shapes.
+    expect(/(\s-r\s|--filter\s)/.test(cmd)).toBe(true);
     expect(cmd).toContain('--access public');
     expect(cmd).toContain('--no-git-checks');
   });
