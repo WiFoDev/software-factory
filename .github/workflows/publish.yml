@@ -65,12 +65,6 @@ jobs:
       - name: check
         run: pnpm check
 
-      - name: ensure npm version supports Trusted Publishing
-        # npm 11.5+ added native OIDC auth for Trusted Publishing. The npm
-        # bundled with Node 22 LTS may be older; explicit upgrade
-        # guarantees the publish step has the OIDC handshake code path.
-        run: npm install -g npm@latest
-
       - name: publish
         # Idempotent per-package publish via npm Trusted Publishing (OIDC).
         # The `permissions: id-token: write` block at the workflow level
@@ -103,7 +97,11 @@ jobs:
             remote_version=$(npm view "$name" version 2>/dev/null || echo "0.0.0")
             if [ "$local_version" != "$remote_version" ]; then
               echo "::notice::Publishing $name@$local_version (registry was at $remote_version) via Trusted Publishing"
-              (cd "$pkg_dir" && npm publish --access public --provenance)
+              # `npx -y npm@latest` runs a recent npm CLI without the
+              # `npm install -g npm@latest` self-upgrade bug (where
+              # promise-retry resolves against the in-progress install).
+              # npm 11.5+ has native Trusted Publishing OIDC support.
+              (cd "$pkg_dir" && npx -y npm@latest publish --access public --provenance)
               published=$((published + 1))
             else
               echo "::notice::Skipping $name@$local_version (already on npm)"
