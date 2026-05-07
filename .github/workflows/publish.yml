@@ -70,8 +70,12 @@ jobs:
         # version is already on npm. Lets us re-tag a release (e.g., for
         # GitHub Releases page hygiene after a manual `pnpm publish`)
         # without the workflow failing on duplicate-version errors.
+        # Writes ~/.npmrc with the literal NPM_TOKEN — actions/setup-node
+        # writes a placeholder-style .npmrc to $RUNNER_TEMP that pnpm
+        # doesn't reliably resolve in per-package publish flows.
         run: |
           set -e
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
           published=0
           skipped=0
           for pkg_dir in packages/*/; do
@@ -80,10 +84,6 @@ jobs:
             remote_version=$(npm view "$name" version 2>/dev/null || echo "0.0.0")
             if [ "$local_version" != "$remote_version" ]; then
               echo "::notice::Publishing $name@$local_version (registry was at $remote_version)"
-              # `pnpm publish -r --filter <name>` — the `-r` flag is what
-              # activates the npmrc auth context (actions/setup-node writes
-              # the auth token into $RUNNER_TEMP/.npmrc, but pnpm only reads
-              # it under recursive-publish mode).
               pnpm publish -r --filter "$name" --access public --no-git-checks
               published=$((published + 1))
             else
