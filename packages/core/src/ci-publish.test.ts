@@ -99,7 +99,7 @@ describe('ci-publish — workflow structure (S-1)', () => {
     const publishIdx = findIndex(
       (s) =>
         typeof s.run === 'string' &&
-        /pnpm\s+(--filter\s+\S+\s+)?publish/.test(s.run) &&
+        /(pnpm\s+(--filter\s+\S+\s+)?|npm\s+)publish/.test(s.run) &&
         s.run.includes('--access public'),
     );
 
@@ -137,7 +137,7 @@ describe('ci-publish — workflow structure (S-1)', () => {
     // were replaced by OIDC short-lived tokens in v0.0.13.x).
     const steps = wf.jobs?.publish?.steps ?? [];
     const publishStep = steps.find(
-      (s) => typeof s.run === 'string' && /pnpm\s+(--filter\s+\S+\s+)?publish/.test(s.run),
+      (s) => typeof s.run === 'string' && /(pnpm\s+(--filter\s+\S+\s+)?|npm\s+)publish/.test(s.run),
     );
     expect(publishStep).toBeDefined();
     const cmd = publishStep?.run ?? '';
@@ -203,19 +203,18 @@ describe('ci-publish — manual fallback preserved (S-2)', () => {
 });
 
 describe('ci-publish — gates + flags (S-3)', () => {
-  test('workflow uses --no-git-checks flag', () => {
+  test('workflow uses --access public + --provenance flags', () => {
     const wf = loadWorkflow();
     const steps = wf.jobs?.publish?.steps ?? [];
     const publishStep = steps.find(
-      (s) => typeof s.run === 'string' && /pnpm\s+(--filter\s+\S+\s+)?publish/.test(s.run),
+      (s) => typeof s.run === 'string' && /(pnpm\s+(--filter\s+\S+\s+)?|npm\s+)publish/.test(s.run),
     );
     expect(publishStep).toBeDefined();
     const cmd = publishStep?.run ?? '';
-    // v0.0.13.x — accepts either `-r` (single-shot) or `--filter <name>`
-    // (idempotent per-package loop) shapes.
-    expect(/(\s-r\s|--filter\s)/.test(cmd)).toBe(true);
     expect(cmd).toContain('--access public');
-    expect(cmd).toContain('--no-git-checks');
+    // v0.0.13.x — `--provenance` is required by Trusted Publishing AND
+    // produces sigstore attestations on the package's npm page.
+    expect(cmd).toContain('--provenance');
   });
 
   test('RELEASING.md documents --no-git-checks rationale', () => {

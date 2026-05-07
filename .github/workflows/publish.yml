@@ -65,16 +65,28 @@ jobs:
       - name: check
         run: pnpm check
 
+      - name: ensure npm version supports Trusted Publishing
+        # npm 11.5+ added native OIDC auth for Trusted Publishing. The npm
+        # bundled with Node 22 LTS may be older; explicit upgrade
+        # guarantees the publish step has the OIDC handshake code path.
+        run: npm install -g npm@latest
+
       - name: publish
         # Idempotent per-package publish via npm Trusted Publishing (OIDC).
         # The `permissions: id-token: write` block at the workflow level
-        # gives this job a short-lived OIDC token; npm verifies it against
-        # the package's "Trusted Publishers" config on npmjs.com and
-        # authenticates without any long-lived NPM_TOKEN secret. See
-        # RELEASING.md for the per-package npm-side setup.
+        # provides ACTIONS_ID_TOKEN_REQUEST_{URL,TOKEN} env vars; npm CLI
+        # reads them to mint an OIDC token and exchange it with npm's
+        # registry. npm verifies the token's claims against each package's
+        # "Trusted Publishers" config on npmjs.com — no long-lived
+        # NPM_TOKEN secret. See RELEASING.md for the per-package setup.
+        #
+        # Uses `npm publish` directly (not `pnpm publish`) because pnpm's
+        # bundled publish logic doesn't reliably forward the OIDC env to
+        # the underlying npm CLI. Each package is published from its own
+        # directory; the dist/ artifacts were built earlier in the job.
         #
         # `--provenance` opts into sigstore attestations alongside the
-        # publish — required for trusted publishing AND visible on the
+        # publish — required for Trusted Publishing AND visible on the
         # package's npm page as a verifiable provenance link.
         #
         # Per-package skip-if-already-published guard makes re-tagging
@@ -91,7 +103,7 @@ jobs:
             remote_version=$(npm view "$name" version 2>/dev/null || echo "0.0.0")
             if [ "$local_version" != "$remote_version" ]; then
               echo "::notice::Publishing $name@$local_version (registry was at $remote_version) via Trusted Publishing"
-              pnpm publish -r --filter "$name" --access public --no-git-checks --provenance
+              (cd "$pkg_dir" && npm publish --access public --provenance)
               published=$((published + 1))
             else
               echo "::notice::Skipping $name@$local_version (already on npm)"
