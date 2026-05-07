@@ -9,7 +9,7 @@ Two paths exist for cutting an `@wifo/factory-*` release: the CI flow (canonical
 3. Commit on `main`.
 4. Tag the commit: `git tag v0.0.X && git push origin v0.0.X`.
 
-Pushing a tag matching `v[0-9]+.[0-9]+.[0-9]+` triggers `.github/workflows/publish.yml`. The workflow runs the same gates as `pnpm release` — typecheck → test → check → build — and on success runs `pnpm publish -r --access public --no-git-checks` against the npm registry, authenticating via the `NPM_TOKEN` secret.
+Pushing a tag matching `v[0-9]+.[0-9]+.[0-9]+` triggers `.github/workflows/publish.yml`. The workflow runs the same gates as `pnpm release` — typecheck → test → check → build — and on success runs a per-package `pnpm publish -r --filter <name> --access public --no-git-checks --provenance` for each package whose local version differs from npm's. Authentication is via **npm Trusted Publishing (OIDC)** — the workflow's `id-token: write` permission grants a short-lived OIDC token that npm verifies against each package's Trusted Publishers config. No long-lived `NPM_TOKEN` secret is involved. `--provenance` adds sigstore attestations visible on the package's npm page.
 
 The workflow does NOT trigger on push to `main`. Tag creation stays maintainer-driven so the maintainer reviews tags before they ship.
 
@@ -23,15 +23,25 @@ pnpm release
 
 This runs `pnpm typecheck && pnpm test && pnpm check && pnpm -r build && pnpm publish -r --access public`. The publish step prompts for the npm OTP from the maintainer's authenticator. The script does NOT pass `--no-git-checks`, so an unstaged change aborts the publish — that safety check matters more for manual runs (where uncommitted edits are easy to forget) than for CI (where `actions/checkout@v4` always produces a clean tree).
 
-## Setting up `NPM_TOKEN`
+## Setting up Trusted Publishing
 
-The workflow needs an **automation** token (not the default publish token, which requires TOTP per publish):
+Each `@wifo/factory-*` package must be configured on npmjs.com to trust this GitHub Actions workflow before the CI publish flow can authenticate. Trusted Publishing replaces the old `NPM_TOKEN`-secret approach (long-lived tokens are a credential-leak surface; OIDC short-lived tokens aren't).
 
-1. From a maintainer account with publish access to the `@wifo` scope, run `npm token create --type=automation`.
-2. Copy the resulting `npm_...` token.
-3. Set the GitHub repo secret: `gh secret set NPM_TOKEN -b "npm_..."`.
+For each of the six packages (`@wifo/factory-context`, `-core`, `-harness`, `-runtime`, `-spec-review`, `-twin`):
 
-The token is single-purpose (publish only). Rotate it with `npm token revoke <id>` + `npm token create --type=automation` if leaked.
+1. Visit `https://www.npmjs.com/package/@wifo/factory-<name>/access` (must be signed in as a maintainer with publish rights).
+2. Open the **Trusted Publishers** tab.
+3. Click **Add trusted publisher** → choose **GitHub Actions**.
+4. Fill the form:
+   - **Organization or user:** `WiFoDev`
+   - **Repository:** `software-factory`
+   - **Workflow filename:** `publish.yml`
+   - **Environment** (optional, leave blank unless using a deploy environment)
+5. Save.
+
+Once all six packages have the trusted publisher set, every tag-push to `v[0-9]+.[0-9]+.[0-9]+` will publish via OIDC — no secrets to manage. Trusted publishers can be revoked anytime from the same Access page if the workflow is compromised.
+
+**Why not `NPM_TOKEN`?** Long-lived automation tokens leak into commit history, screen-shares, lock files, and CI logs more often than anyone admits — and a single token grants publish rights to every package in the scope. OIDC tokens are short-lived (5-min default), bound to a specific workflow run, and cannot be exfiltrated by reading them once. npm's docs flag the token approach as a security risk and steer all CI/CD to Trusted Publishing.
 
 ## After publish: verify + GitHub release
 

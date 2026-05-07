@@ -122,22 +122,29 @@ describe('ci-publish — workflow structure (S-1)', () => {
     expect(nodeVersion).toBe('22');
   });
 
-  test('publish workflow declares NPM_TOKEN secret + id-token permission', () => {
+  test('publish workflow declares OIDC id-token permission for Trusted Publishing', () => {
     const wf = loadWorkflow();
 
-    // workflow-level permissions
+    // workflow-level permissions: contents:read for checkout, id-token:write
+    // for the OIDC token npm Trusted Publishing verifies against each
+    // package's Trusted Publishers config on npmjs.com.
     const perms = wf.permissions ?? {};
     expect(perms.contents).toBe('read');
     expect(perms['id-token']).toBe('write');
 
-    // publish step's env contains NPM_TOKEN bound to the secret
+    // The publish step uses --provenance (required by Trusted Publishing)
+    // and does NOT carry an NPM_TOKEN env binding (long-lived secrets
+    // were replaced by OIDC short-lived tokens in v0.0.13.x).
     const steps = wf.jobs?.publish?.steps ?? [];
     const publishStep = steps.find(
       (s) => typeof s.run === 'string' && /pnpm\s+(--filter\s+\S+\s+)?publish/.test(s.run),
     );
     expect(publishStep).toBeDefined();
+    const cmd = publishStep?.run ?? '';
+    expect(cmd).toContain('--provenance');
     const env = publishStep?.env ?? {};
-    expect(env.NPM_TOKEN).toBe('${{ secrets.NPM_TOKEN }}');
+    expect(env.NPM_TOKEN).toBeUndefined();
+    expect(env.NODE_AUTH_TOKEN).toBeUndefined();
   });
 });
 
@@ -181,12 +188,13 @@ describe('ci-publish — manual fallback preserved (S-2)', () => {
     const contents = readFileSync(RELEASING_PATH, 'utf8');
     expect(contents).toContain('## CI flow (canonical)');
     expect(contents).toContain('## Manual flow (fallback)');
-    expect(contents).toContain('## Setting up `NPM_TOKEN`');
+    // v0.0.13.x — Trusted Publishing replaced the NPM_TOKEN-secret approach.
+    expect(contents).toContain('## Setting up Trusted Publishing');
     expect(contents).toContain('## After publish: verify + GitHub release');
     expect(contents).toContain('## Why `--no-git-checks` in CI but not manual');
 
-    // Secret-setup step is documented (gh secret set NPM_TOKEN ...)
-    expect(contents).toMatch(/gh secret set NPM_TOKEN/);
+    // Trusted-publisher setup is documented (npmjs.com → Trusted Publishers)
+    expect(contents).toMatch(/Trusted Publisher/);
     // Tag-driven trigger is documented
     expect(contents).toMatch(/v\[0-9\]\+\.\[0-9\]\+\.\[0-9\]\+|vX\.Y\.Z|v0\.0\.X/);
     // Manual fallback command is documented

@@ -66,16 +66,23 @@ jobs:
         run: pnpm check
 
       - name: publish
-        # Idempotent per-package publish: skip any package whose local
-        # version is already on npm. Lets us re-tag a release (e.g., for
-        # GitHub Releases page hygiene after a manual `pnpm publish`)
-        # without the workflow failing on duplicate-version errors.
-        # Writes ~/.npmrc with the literal NPM_TOKEN — actions/setup-node
-        # writes a placeholder-style .npmrc to $RUNNER_TEMP that pnpm
-        # doesn't reliably resolve in per-package publish flows.
+        # Idempotent per-package publish via npm Trusted Publishing (OIDC).
+        # The `permissions: id-token: write` block at the workflow level
+        # gives this job a short-lived OIDC token; npm verifies it against
+        # the package's "Trusted Publishers" config on npmjs.com and
+        # authenticates without any long-lived NPM_TOKEN secret. See
+        # RELEASING.md for the per-package npm-side setup.
+        #
+        # `--provenance` opts into sigstore attestations alongside the
+        # publish — required for trusted publishing AND visible on the
+        # package's npm page as a verifiable provenance link.
+        #
+        # Per-package skip-if-already-published guard makes re-tagging
+        # safe (e.g., for GitHub Releases page hygiene after a partial
+        # publish). The publish step runs once per package whose local
+        # version differs from npm's.
         run: |
           set -e
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
           published=0
           skipped=0
           for pkg_dir in packages/*/; do
@@ -83,8 +90,8 @@ jobs:
             local_version=$(jq -r '.version' "${pkg_dir}package.json")
             remote_version=$(npm view "$name" version 2>/dev/null || echo "0.0.0")
             if [ "$local_version" != "$remote_version" ]; then
-              echo "::notice::Publishing $name@$local_version (registry was at $remote_version)"
-              pnpm publish -r --filter "$name" --access public --no-git-checks
+              echo "::notice::Publishing $name@$local_version (registry was at $remote_version) via Trusted Publishing"
+              pnpm publish -r --filter "$name" --access public --no-git-checks --provenance
               published=$((published + 1))
             else
               echo "::notice::Skipping $name@$local_version (already on npm)"
@@ -92,6 +99,3 @@ jobs:
             fi
           done
           echo "::notice::publish summary — published=$published skipped=$skipped"
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
