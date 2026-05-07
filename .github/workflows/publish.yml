@@ -80,10 +80,11 @@ jobs:
             remote_version=$(npm view "$name" version 2>/dev/null || echo "0.0.0")
             if [ "$local_version" != "$remote_version" ]; then
               echo "::notice::Publishing $name@$local_version (registry was at $remote_version)"
-              # Use `pnpm --filter <name>` instead of `(cd && pnpm)` — staying
-              # at the workspace root preserves the npmrc auth context that
-              # actions/setup-node writes to $RUNNER_TEMP/.npmrc.
-              pnpm --filter "$name" publish --access public --no-git-checks
+              # `pnpm publish -r --filter <name>` — the `-r` flag is what
+              # activates the npmrc auth context (actions/setup-node writes
+              # the auth token into $RUNNER_TEMP/.npmrc, but pnpm only reads
+              # it under recursive-publish mode).
+              pnpm publish -r --filter "$name" --access public --no-git-checks
               published=$((published + 1))
             else
               echo "::notice::Skipping $name@$local_version (already on npm)"
