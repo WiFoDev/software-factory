@@ -99,7 +99,7 @@ describe('ci-publish — workflow structure (S-1)', () => {
     const publishIdx = findIndex(
       (s) =>
         typeof s.run === 'string' &&
-        /(pnpm\s+(--filter\s+\S+\s+)?|npm\s+)publish/.test(s.run) &&
+        /(pnpm\s+(--filter\s+\S+\s+)?|(npx\s+(-y\s+)?)?npm(@\S+)?\s+)publish/.test(s.run) &&
         s.run.includes('--access public'),
     );
 
@@ -137,7 +137,7 @@ describe('ci-publish — workflow structure (S-1)', () => {
     // were replaced by OIDC short-lived tokens in v0.0.13.x).
     const steps = wf.jobs?.publish?.steps ?? [];
     const publishStep = steps.find(
-      (s) => typeof s.run === 'string' && /(pnpm\s+(--filter\s+\S+\s+)?|npm\s+)publish/.test(s.run),
+      (s) => typeof s.run === 'string' && /(pnpm\s+(--filter\s+\S+\s+)?|(npx\s+(-y\s+)?)?npm(@\S+)?\s+)publish/.test(s.run),
     );
     expect(publishStep).toBeDefined();
     const cmd = publishStep?.run ?? '';
@@ -207,7 +207,7 @@ describe('ci-publish — gates + flags (S-3)', () => {
     const wf = loadWorkflow();
     const steps = wf.jobs?.publish?.steps ?? [];
     const publishStep = steps.find(
-      (s) => typeof s.run === 'string' && /(pnpm\s+(--filter\s+\S+\s+)?|npm\s+)publish/.test(s.run),
+      (s) => typeof s.run === 'string' && /(pnpm\s+(--filter\s+\S+\s+)?|(npx\s+(-y\s+)?)?npm(@\S+)?\s+)publish/.test(s.run),
     );
     expect(publishStep).toBeDefined();
     const cmd = publishStep?.run ?? '';
