@@ -83,10 +83,15 @@ describe('ci-publish — workflow structure (S-1)', () => {
     const typecheckIdx = findIndex((s) => s.run === 'pnpm typecheck');
     const testIdx = findIndex((s) => s.run === 'pnpm test');
     const checkIdx = findIndex((s) => s.run === 'pnpm check');
-    // v0.0.13 — cycle-break removed the per-package fallback; canonical shape
-    // is `pnpm -r build` (one line).
+    // v0.0.13.x — peerDeps cycle-break didn't escape pnpm's cycle detector
+    // (peer deps form build-graph edges in pnpm). Build step accepts EITHER
+    // `pnpm -r build` OR per-package `pnpm --filter` lines (the cycle
+    // workaround inherited from v0.0.12). Match either shape.
     const buildIdx = findIndex(
-      (s) => typeof s.run === 'string' && /^pnpm\s+-r\s+build\s*$/.test(s.run),
+      (s) =>
+        typeof s.run === 'string' &&
+        (/^pnpm\s+-r\s+(--workspace-concurrency=\d+\s+)?build\s*$/.test(s.run) ||
+          /pnpm\s+--filter\s+@wifo\/factory-\S+\s+build/.test(s.run)),
     );
     // v0.0.13 — publish step is idempotent (per-package loop with `npm view`
     // skip-if-published guard) instead of `pnpm publish -r`. Match either
@@ -136,29 +141,27 @@ describe('ci-publish — workflow structure (S-1)', () => {
   });
 });
 
-describe('ci-publish — v0.0.13 cycle-break (S-3)', () => {
-  test('publish.yml build step uses pnpm -r build (cycle removed in v0.0.13)', () => {
+describe('ci-publish — v0.0.13.x build sequence (cycle workaround)', () => {
+  test('publish.yml build step uses per-package sequence to sidestep peer-dep cycle', () => {
+    // The v0.0.13 cycle-break (move spec-review to peerDependencies of core)
+    // expressed the right runtime semantic but did NOT eliminate the
+    // build-graph cycle from pnpm's POV — pnpm treats peer deps as cycle
+    // edges. The per-package build sequence inherited from v0.0.12 stays.
     const wf = loadWorkflow();
     const steps = wf.jobs?.publish?.steps ?? [];
     const buildStep = steps.find(
-      (s) => typeof s.run === 'string' && /pnpm\s+-r\s+build/.test(s.run),
+      (s) =>
+        typeof s.run === 'string' && /pnpm\s+--filter\s+@wifo\/factory-\S+\s+build/.test(s.run),
     );
     expect(buildStep).toBeDefined();
-    const cmd = (buildStep?.run ?? '').trim();
-    // Canonical shape: a single-line `pnpm -r build`. No --workspace-concurrency
-    // flag, no per-package --filter list.
-    expect(cmd).toBe('pnpm -r build');
-    expect(cmd).not.toContain('--workspace-concurrency');
-    expect(cmd).not.toContain('--filter');
-  });
-
-  test('buildIdx matcher accepts pnpm -r build canonical shape', () => {
-    const wf = loadWorkflow();
-    const steps = wf.jobs?.publish?.steps ?? [];
-    const buildIdx = steps.findIndex(
-      (s) => typeof s.run === 'string' && /^pnpm\s+-r\s+build\s*$/.test(s.run),
-    );
-    expect(buildIdx).toBeGreaterThanOrEqual(0);
+    // Sequence covers all 6 packages.
+    const cmd = buildStep?.run ?? '';
+    expect(cmd).toContain('@wifo/factory-context');
+    expect(cmd).toContain('@wifo/factory-twin');
+    expect(cmd).toContain('@wifo/factory-core');
+    expect(cmd).toContain('@wifo/factory-harness');
+    expect(cmd).toContain('@wifo/factory-spec-review');
+    expect(cmd).toContain('@wifo/factory-runtime');
   });
 });
 

@@ -218,18 +218,16 @@ describe('runCli — v0.0.13 spec review cycle-break (S-2)', () => {
     expect(cliSource).not.toContain('function findPackageRoot');
   });
 
-  test('core/cli.ts uses static import for runReviewCli (v0.0.13 cycle-break)', () => {
+  test('core/cli.ts uses createRequire for runReviewCli (peer-dep cycle workaround)', () => {
+    // v0.0.13 moved spec-review to peerDependencies of core, but pnpm
+    // treats peer deps as cycle edges — the build-graph cycle survived.
+    // The createRequire workaround (originally v0.0.12) stays: it lets
+    // tsc avoid resolving spec-review's types at build time, while the
+    // runtime resolves the package via the standard resolver.
     const cliSource = readFileSync(resolve(import.meta.dir, 'cli.ts'), 'utf8');
-    expect(cliSource).toContain("import { runReviewCli } from '@wifo/factory-spec-review/cli';");
-    // The v0.0.13 createRequire workaround is gone.
-    expect(cliSource).not.toContain('createRequire(import.meta.url)');
-    expect(cliSource).not.toContain("requireSpecReview('@wifo/factory-spec-review/cli')");
-  });
-
-  test('core/cli.ts no longer imports createRequire from node:module', () => {
-    const cliSource = readFileSync(resolve(import.meta.dir, 'cli.ts'), 'utf8');
-    expect(cliSource).not.toContain("from 'node:module'");
-    expect(cliSource).not.toContain('createRequire');
+    expect(cliSource).toContain('createRequire(import.meta.url)');
+    expect(cliSource).toContain("requireSpecReview('@wifo/factory-spec-review/cli')");
+    expect(cliSource).toContain("import { createRequire } from 'node:module';");
   });
 });
 

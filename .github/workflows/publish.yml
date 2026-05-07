@@ -40,8 +40,21 @@ jobs:
       # Build must run before typecheck/test/check so cross-package
       # type resolution (e.g., harness importing @wifo/factory-core)
       # finds the workspace-linked `dist/` from a fresh checkout.
+      # Explicit per-package order: pnpm treats `peerDependencies` as
+      # cycle edges, so the v0.0.13 move of `@wifo/factory-spec-review`
+      # to peerDeps of `@wifo/factory-core` did NOT eliminate the
+      # workspace cycle from pnpm's POV (only the runtime install
+      # semantic improved). `pnpm -r build` still parallelizes across
+      # the cycle and races; explicit sequencing sidesteps it.
       - name: build
-        run: pnpm -r build
+        run: |
+          set -e
+          pnpm --filter @wifo/factory-context build
+          pnpm --filter @wifo/factory-twin build
+          pnpm --filter @wifo/factory-core build
+          pnpm --filter @wifo/factory-harness build
+          pnpm --filter @wifo/factory-spec-review build
+          pnpm --filter @wifo/factory-runtime build
 
       - name: typecheck
         run: pnpm typecheck
