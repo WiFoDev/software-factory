@@ -75,6 +75,25 @@ export function parseCoverageTrip(stdout: string): { tripped: boolean; marker?: 
   return { tripped: true, marker: lineMatch[0].trim() };
 }
 
+// v0.0.14 safety net: when bun's `-t <pattern>` regex matches no tests, bun
+// emits a `regex "<pattern>" matched 0 tests` line and exits non-zero. That's
+// a tooling/discovery problem, not a test failure — classify it as `error`
+// with a canonical detail prefix so the runtime's iteration loop doesn't
+// re-run the implement phase trying to fix non-existent assertion failures.
+const REGEX_NO_MATCH_RE = /regex .+ matched 0 tests/i;
+
+/**
+ * Parse bun's output for the regex-no-match signature: a line of the shape
+ * `regex "<pattern>" matched 0 tests`. Returned alongside the matched line so
+ * callers can surface it in the `harness/test-name-regex-no-match` detail.
+ */
+export function parseRegexNoMatch(stdout: string): { matched: boolean; marker?: string } {
+  const stripped = stripAnsi(stdout);
+  const lineMatch = stripped.match(REGEX_NO_MATCH_RE);
+  if (!lineMatch) return { matched: false };
+  return { matched: true, marker: lineMatch[0].trim() };
+}
+
 // `bun test -t <pattern>` interprets the pattern as a regex. Spec authors
 // almost always write satisfactions as literal substrings (e.g.
 // `"... at ^0.0.5"`); escape the standard regex metacharacters so a literal
@@ -189,6 +208,25 @@ export async function runTestSatisfaction(
             status: 'pass',
             durationMs,
             detail: `harness/coverage-threshold-tripped: ${trip.marker}; ${tailDetail(combined)}`,
+            exitCode,
+          });
+          return;
+        }
+        // v0.0.14: a non-zero exit with `regex matched 0 tests` is a tooling/
+        // discovery problem (the spec's `-t` pattern doesn't match any test in
+        // the file) — classify as `error`, NOT `fail`, so the runtime treats
+        // it as a halting condition rather than re-running the implement phase.
+        const noMatch = parseRegexNoMatch(combined);
+        if (noMatch.matched) {
+          const parsed = parseTestLine(satisfaction.value);
+          const fileLabel = parsed.file ?? '<no-file>';
+          settle({
+            kind: 'test',
+            value: satisfaction.value,
+            line: satisfaction.line,
+            status: 'error',
+            durationMs,
+            detail: `harness/test-name-regex-no-match: ${noMatch.marker} in ${fileLabel}; ${tailDetail(combined)}`,
             exitCode,
           });
           return;

@@ -224,12 +224,11 @@ describe('runHarness', () => {
     expect(lines.some((l) => l.includes('6 judge calls planned'))).toBe(true);
   });
 
-  test('test name with apostrophe matches it() name without apostrophe under normalization', async () => {
-    // Verify normalization end-to-end: the spec's `test:` pattern carries an
-    // apostrophe that the implementation dropped from the actual `it()` name.
-    // The runner must strip apostrophes from the pattern before passing -t so
-    // bun's regex match still hits the un-apostrophed test name. Fake bun
-    // captures the args and asserts the apostrophe is gone.
+  test('test name with apostrophe is preserved verbatim through -t (v0.0.14)', async () => {
+    // v0.0.14: modern Claude preserves apostrophes in `it()` names, so
+    // stripping them on the spec side caused a no-match against the actual
+    // test. The runner must pass the apostrophe through to `bun -t` literally.
+    // Fake bun captures the pattern arg and asserts the apostrophe is intact.
     const tmp = mkdtempSync(join(tmpdir(), 'fake-bun-norm-'));
     try {
       const fakeBun = join(tmp, 'fake-bun.sh');
@@ -244,8 +243,8 @@ describe('runHarness', () => {
           '  if [ "$arg" = "-t" ]; then next_is_pattern=1; fi',
           'done',
           'echo "PATTERN: $pattern"',
-          'if echo "$pattern" | grep -q "\'"; then',
-          '  echo "unexpected apostrophe in pattern"',
+          'if ! echo "$pattern" | grep -q "\'"; then',
+          '  echo "missing apostrophe in pattern (v0.0.14 regression)"',
           '  exit 1',
           'fi',
           'echo "1 pass"',
@@ -276,10 +275,9 @@ describe('runHarness', () => {
       const detail = report.scenarios[0]?.satisfactions[0]?.detail ?? '';
       expect(detail).toContain('1 pass');
       expect(detail).toContain('1 filtered out');
-      // Confirm the harness stripped the apostrophe before -t (regex dots
-      // remain escaped — that's the existing pre-v0.0.12 behavior).
-      expect(detail).not.toContain("v0.0.10's hash");
-      expect(detail).toContain('v0\\.0\\.10s hash');
+      // Confirm the apostrophe survived through to -t. Regex dots are still
+      // escaped (existing pre-v0.0.12 escapeRegex behavior, unchanged).
+      expect(detail).toContain("v0\\.0\\.10's hash");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

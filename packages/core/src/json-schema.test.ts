@@ -64,7 +64,7 @@ describe('getFrontmatterJsonSchema', () => {
   });
 });
 
-describe('emit-json-schema — Node-native rewrite (S-1, v0.0.13)', () => {
+describe('emit-json-schema — Node-native rewrite (S-1, v0.0.14)', () => {
   const REPO_ROOT = join(import.meta.dir, '..', '..', '..');
   const SCRIPT_PATH = join(REPO_ROOT, 'packages', 'core', 'scripts', 'emit-json-schema.ts');
 

@@ -9,7 +9,16 @@ Two paths exist for cutting an `@wifo/factory-*` release: the CI flow (canonical
 3. Commit on `main`.
 4. Tag the commit: `git tag v0.0.X && git push origin v0.0.X`.
 
-Pushing a tag matching `v[0-9]+.[0-9]+.[0-9]+` triggers `.github/workflows/publish.yml`. The workflow runs the same gates as `pnpm release` — typecheck → test → check → build — and on success runs a per-package `pnpm publish -r --filter <name> --access public --no-git-checks --provenance` for each package whose local version differs from npm's. Authentication is via **npm Trusted Publishing (OIDC)** — the workflow's `id-token: write` permission grants a short-lived OIDC token that npm verifies against each package's Trusted Publishers config. No long-lived `NPM_TOKEN` secret is involved. `--provenance` adds sigstore attestations visible on the package's npm page.
+Pushing a tag matching `v[0-9]+.[0-9]+.[0-9]+` triggers `.github/workflows/publish.yml`. The workflow runs the same gates as `pnpm release` — typecheck → test → check → build — and on success publishes each package whose local version differs from npm's via a two-step flow:
+
+1. **`pnpm pack --pack-destination /tmp/factory-tarballs --filter <name>`** — pnpm builds the tarball and rewrites every `workspace:*` reference in the manifest to a real semver (purpose-built for the transformation).
+2. **`npx -y npm@latest publish <tarball> --access public --provenance`** — npm uploads the rewritten tarball using OIDC Trusted Publishing (purpose-built for the auth handshake).
+
+Splitting the two responsibilities across the right tools fixes the v0.0.13 regression where `npm publish` (without pnpm's rewrite) shipped `workspace:*` to npm — every fresh `npx @wifo/factory-core init` consumer hit `EUNSUPPORTEDPROTOCOL`.
+
+Authentication is via **npm Trusted Publishing (OIDC)** — the workflow's `id-token: write` permission grants a short-lived OIDC token that npm verifies against each package's Trusted Publishers config. No long-lived `NPM_TOKEN` secret is involved. `--provenance` adds sigstore attestations visible on the package's npm page.
+
+After every successful publish, a verification loop re-fetches each just-published manifest from npm (`npm view <name>@<version> dependencies peerDependencies --json`) and fails the workflow if any value still contains the substring `workspace:`. This is a regression-pin against the v0.0.13 issue: the next release will fail loudly before users hit the broken install.
 
 The workflow does NOT trigger on push to `main`. Tag creation stays maintainer-driven so the maintainer reviews tags before they ship.
 

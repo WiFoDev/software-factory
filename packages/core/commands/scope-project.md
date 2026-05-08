@@ -76,6 +76,22 @@ depends-on:
 - Test paths in `Satisfaction:` lines are written **bare** (no backticks): `test: src/foo.test.ts "name"`, NOT `test: \`src/foo.test.ts\` "name"`.
 - Each scenario has at least one `test:` line. `judge:` lines are optional and used for fuzzy criteria (log clarity, error UX) that unit tests can't capture.
 
+#### Frontmatter quoting (v0.0.14+)
+
+If a frontmatter value contains a colon (e.g., a generic type like `Map<string, T>`), wrap the value in single quotes to avoid YAML parsing it as a nested mapping. The unquoted form trips the `BLOCK_AS_IMPLICIT_KEY` parser path and the spec fails to load. The `spec/yaml-colon-needs-quoting` lint warning catches it at scoping time, but quoting at author time avoids the friction entirely.
+
+- ✅ Quoted (parses as a single string value):
+
+  ```yaml
+  why: 'clicks: Map<string, Click[]>'
+  ```
+
+- ❌ Unquoted (parses incorrectly as a nested mapping, lint emits a warning):
+
+  ```yaml
+  why: `clicks: Map<string, Click[]>`
+  ```
+
 ### Definition of Done — `dod.template` precedence (v0.0.13+)
 
 If `factory.config.json` in `<cwd>` has a `dod.template` field (a `string[]` of literal-command DoD bullet bodies), use it as the body of every generated spec's `## Definition of Done` section: emit each entry as `- <entry>`, plus the `All scenarios pass.` line. **The literal backtick-wrapped commands in each entry MUST be preserved verbatim** — the v0.0.12 `spec/dod-needs-explicit-command` lint flags DoD bullets that name a runtime gate (typecheck, tests, biome) without embedding the shell command in backticks. `factory init` ships `dod.template` defaults derived from the scaffold's `package.json` scripts, so a freshly-scaffolded repo emits lint-clean DoD blocks from the very first `/scope-project` invocation.

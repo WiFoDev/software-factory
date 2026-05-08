@@ -44,6 +44,18 @@ if (delayMs > 0) {
   await new Promise<void>((r) => setTimeout(r, delayMs));
 }
 
+// v0.0.14 — detect the no-hooks flag in argv. The runtime spawns claude with
+// `--setting-sources project,local` to skip user-level hooks (the source of
+// skill-injection noise) while preserving OAuth/keychain auth. Tests assert
+// the marker fields below to verify the flag and HOME both propagate.
+function findSettingSourcesArg(argv: string[]): string | undefined {
+  const idx = argv.indexOf('--setting-sources');
+  if (idx === -1) return undefined;
+  return argv[idx + 1];
+}
+const settingSourcesArg = findSettingSourcesArg(process.argv);
+const homeIsSet = typeof process.env.HOME === 'string' && process.env.HOME !== '';
+
 function makeEnvelope(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const toolUses = toolUsesRaw !== undefined ? JSON.parse(toolUsesRaw) : ['Read', 'Edit'];
   return {
@@ -61,6 +73,13 @@ function makeEnvelope(overrides: Record<string, unknown> = {}): Record<string, u
     tool_uses: toolUses,
     // Hint for callers to verify stdin propagation worked. Truncated for log size.
     _prompt_first_80: prompt.slice(0, 80),
+    // v0.0.14 — markers for the no-hooks-flag spec. `_setting_sources_arg`
+    // captures the value passed to `--setting-sources` (or undefined when
+    // missing). `_home_set` reflects whether HOME is set in the spawn env
+    // — auth lives in HOME/keychain, so this is the auth-preservation
+    // smoke check.
+    _setting_sources_arg: settingSourcesArg,
+    _home_set: homeIsSet,
     ...overrides,
   };
 }

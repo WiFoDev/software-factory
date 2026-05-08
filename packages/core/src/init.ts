@@ -6,6 +6,8 @@ import {
   BIOME_JSON_TEMPLATE,
   FACTORY_CONFIG_TEMPLATE,
   GITIGNORE_TEMPLATE,
+  INDEX_TEST_TEMPLATE,
+  INDEX_TS_TEMPLATE,
   PACKAGE_JSON_TEMPLATE,
   README_TEMPLATE,
   TSCONFIG_TEMPLATE,
@@ -49,22 +51,23 @@ function planFiles(name: string): PlannedFile[] {
   const pkg = { ...PACKAGE_JSON_TEMPLATE, name };
   return [
     { relPath: 'package.json', contents: `${JSON.stringify(pkg, null, 2)}\n` },
-    {
-      relPath: 'tsconfig.json',
-      contents: `${JSON.stringify(TSCONFIG_TEMPLATE, null, 2)}\n`,
-    },
+    { relPath: 'tsconfig.json', contents: TSCONFIG_TEMPLATE },
     { relPath: '.gitignore', contents: GITIGNORE_TEMPLATE },
     {
       relPath: 'factory.config.json',
       contents: `${JSON.stringify(FACTORY_CONFIG_TEMPLATE, null, 2)}\n`,
     },
-    { relPath: 'biome.json', contents: `${JSON.stringify(BIOME_JSON_TEMPLATE, null, 2)}\n` },
+    { relPath: 'biome.json', contents: BIOME_JSON_TEMPLATE },
     {
       relPath: '.claude/commands/scope-project.md',
       contents: readScopeProjectCommandTemplate(),
     },
     { relPath: 'README.md', contents: README_TEMPLATE.replaceAll('{{name}}', name) },
-    { relPath: 'src/.gitkeep', contents: '' },
+    // v0.0.14 — stub src/ files replace the v0.0.13-era `src/.gitkeep`. Day-zero
+    // `pnpm typecheck` / `pnpm test` need a real .ts file to operate on; the
+    // stubs are tiny and overwritten on first feature scope.
+    { relPath: 'src/index.ts', contents: INDEX_TS_TEMPLATE },
+    { relPath: 'src/index.test.ts', contents: INDEX_TEST_TEMPLATE },
     { relPath: '.factory/.gitkeep', contents: '' },
     { relPath: 'docs/specs/done/.gitkeep', contents: '' },
     { relPath: 'docs/technical-plans/done/.gitkeep', contents: '' },

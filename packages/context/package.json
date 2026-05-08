@@ -1,6 +1,6 @@
 {
   "name": "@wifo/factory-context",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "Filesystem-first context store — typed shared memory for agent phases, with content-addressable records and a DAG of provenance",
   "license": "MIT",
   "author": "Luis (WiFoDev)",

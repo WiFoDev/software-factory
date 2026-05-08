@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { writeRecord } from './store-fs.js';
@@ -18,7 +18,10 @@ function makeRecord(overrides: Partial<ContextRecord> & Pick<ContextRecord, 'id'
   };
 }
 
-async function runCliProc(args: string[]): Promise<{
+async function runCliProc(
+  args: string[],
+  opts: { cwd?: string } = {},
+): Promise<{
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -26,6 +29,7 @@ async function runCliProc(args: string[]): Promise<{
   const proc = Bun.spawn(['bun', CLI, ...args], {
     stdout: 'pipe',
     stderr: 'pipe',
+    ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
   });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -398,5 +402,70 @@ describe('cli — v0.0.10 --context-dir synonym for --dir', () => {
     expect(got.stderr).not.toContain('context/deprecated-flag');
     const parsed = JSON.parse(got.stdout) as ContextRecord;
     expect(parsed).toEqual(note);
+  });
+});
+
+// ----- v0.0.14: universal default ./.factory + factory.config.json (S-2) ----
+
+describe('cli — v0.0.14 default --context-dir resolves to ./.factory', () => {
+  test('factory-context default --context-dir resolves to ./.factory', async () => {
+    // Set up a tmp project with .factory/ holding records and NO ./context/.
+    const project = mkdtempSync(join(tmpdir(), 'context-cli-default-'));
+    const factoryDir = join(project, '.factory');
+    mkdirSync(factoryDir);
+    const note = makeRecord({
+      id: '0000000000000001',
+      type: 'note',
+      recordedAt: '2026-04-28T10:00:00.000Z',
+    });
+    await writeRecord(factoryDir, note);
+
+    // Invoke with NO --dir / --context-dir flag, cwd=project. The CLI's
+    // resolution chain falls back to ./.factory (the v0.0.14 universal default).
+    const r = await runCliProc(['list'], { cwd: project });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim()).toBe(`${note.id}\tnote\t${note.recordedAt}`);
+    expect(r.stderr).not.toContain('context/deprecated-flag');
+
+    // factory.config.json runtime.contextDir wins over the universal default.
+    const customDir = join(project, 'custom-records');
+    mkdirSync(customDir);
+    const otherNote = makeRecord({
+      id: '0000000000000002',
+      type: 'design',
+      recordedAt: '2026-04-29T10:00:00.000Z',
+    });
+    await writeRecord(customDir, otherNote);
+    writeFileSync(
+      join(project, 'factory.config.json'),
+      JSON.stringify({ runtime: { contextDir: './custom-records' } }, null, 2),
+    );
+    const withConfig = await runCliProc(['list'], { cwd: project });
+    expect(withConfig.exitCode).toBe(0);
+    expect(withConfig.stdout.trim()).toBe(`${otherNote.id}\tdesign\t${otherNote.recordedAt}`);
+
+    // CLI flag still wins over factory.config.json.
+    const cliFlagDir = await runCliProc(['list', '--context-dir', factoryDir], { cwd: project });
+    expect(cliFlagDir.exitCode).toBe(0);
+    expect(cliFlagDir.stdout.trim()).toBe(`${note.id}\tnote\t${note.recordedAt}`);
+
+    await Bun.$`rm -rf ${project}`.quiet().nothrow();
+  });
+
+  test('--dir alias from v0.0.10 still works', async () => {
+    const note = makeRecord({
+      id: '0000000000000001',
+      type: 'note',
+      recordedAt: '2026-04-28T10:00:00.000Z',
+    });
+    await writeRecord(dir, note);
+
+    const r = await runCliProc(['list', '--dir', dir]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim()).toBe(`${note.id}\tnote\t${note.recordedAt}`);
+    // The deprecation notice is still emitted on --dir.
+    expect(r.stderr).toContain(
+      'context/deprecated-flag: --dir is deprecated; use --context-dir (will be removed in v0.1.0)',
+    );
   });
 });

@@ -101,8 +101,25 @@ describe('/scope-project slash command source', () => {
     expect(source).toContain('`serve(`');
   });
 
+  test('scope-project source documents the frontmatter colon-quoting rule', () => {
+    const source = readFileSync(SLASH_COMMAND, 'utf8');
+    // Worked example — the quoted form must appear so the model can copy it.
+    expect(source).toContain("why: 'clicks: Map<string, Click[]>'");
+    // Mentions the lint code so the rule and the diagnostic are linked.
+    expect(source).toContain('spec/yaml-colon-needs-quoting');
+    // The guidance lives inside Step 2 (Generate specs) so the model sees
+    // it while authoring frontmatter.
+    const step2Index = source.indexOf('## Step 2: Generate specs');
+    const step3Index = source.indexOf('## Step 3:');
+    const ruleIndex = source.indexOf('spec/yaml-colon-needs-quoting');
+    expect(step2Index).toBeGreaterThan(-1);
+    expect(step3Index).toBeGreaterThan(-1);
+    expect(ruleIndex).toBeGreaterThan(step2Index);
+    expect(ruleIndex).toBeLessThan(step3Index);
+  });
+
   test('scope-project source documents dod.template precedence over canonical defaults', () => {
-    // v0.0.13 — `/scope-project` reads `factory.config.json.dod.template` and
+    // v0.0.14 — `/scope-project` reads `factory.config.json.dod.template` and
     // emits it as the body of every generated spec's `## Definition of Done`.
     // The slash-command source must document this precedence so a future
     // model running this slash command knows to prefer the per-project

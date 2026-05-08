@@ -5,6 +5,8 @@ import {
   BIOME_JSON_TEMPLATE,
   FACTORY_CONFIG_TEMPLATE,
   GITIGNORE_TEMPLATE,
+  INDEX_TEST_TEMPLATE,
+  INDEX_TS_TEMPLATE,
   PACKAGE_JSON_TEMPLATE,
   README_TEMPLATE,
   TSCONFIG_TEMPLATE,
@@ -13,26 +15,27 @@ import {
 
 describe('init-templates', () => {
   test('PACKAGE_JSON_TEMPLATE has the expected keys + workspace-stripped semver deps', () => {
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.13');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.13');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.13');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.14');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.14');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.14');
     expect(PACKAGE_JSON_TEMPLATE.type).toBe('module');
     expect(PACKAGE_JSON_TEMPLATE.private).toBe(true);
   });
 
   test('PACKAGE_JSON_TEMPLATE pins @wifo/factory-* deps at ^0.0.13', () => {
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.13');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.13');
-    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.13');
-    expect(PACKAGE_JSON_TEMPLATE.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.13');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-context']).toBe('^0.0.14');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-core']).toBe('^0.0.14');
+    expect(PACKAGE_JSON_TEMPLATE.dependencies['@wifo/factory-runtime']).toBe('^0.0.14');
+    expect(PACKAGE_JSON_TEMPLATE.devDependencies['@wifo/factory-spec-review']).toBe('^0.0.14');
   });
 
   test('TSCONFIG_TEMPLATE is self-contained — does NOT extend a relative path', () => {
-    expect(TSCONFIG_TEMPLATE).not.toHaveProperty('extends');
-    expect(TSCONFIG_TEMPLATE.compilerOptions.strict).toBe(true);
-    expect(TSCONFIG_TEMPLATE.compilerOptions.verbatimModuleSyntax).toBe(true);
-    expect(TSCONFIG_TEMPLATE.compilerOptions.noUncheckedIndexedAccess).toBe(true);
-    expect(TSCONFIG_TEMPLATE.compilerOptions.types).toEqual(['bun']);
+    const tsconfig = JSON.parse(TSCONFIG_TEMPLATE);
+    expect(tsconfig).not.toHaveProperty('extends');
+    expect(tsconfig.compilerOptions.strict).toBe(true);
+    expect(tsconfig.compilerOptions.verbatimModuleSyntax).toBe(true);
+    expect(tsconfig.compilerOptions.noUncheckedIndexedAccess).toBe(true);
+    expect(tsconfig.compilerOptions.types).toEqual(['bun']);
   });
 
   test('GITIGNORE_TEMPLATE matches examples/slugify/.gitignore byte-for-byte', () => {
@@ -130,17 +133,16 @@ describe('init-templates', () => {
   });
 
   test('BIOME_JSON_TEMPLATE has the minimal canonical shape', () => {
-    expect(BIOME_JSON_TEMPLATE.$schema).toBe('https://biomejs.dev/schemas/2.4.4/schema.json');
-    expect(BIOME_JSON_TEMPLATE.linter).toEqual({ enabled: true, rules: { recommended: true } });
-    expect(BIOME_JSON_TEMPLATE.formatter).toEqual({
+    const biome = JSON.parse(BIOME_JSON_TEMPLATE);
+    expect(biome.$schema).toBe('https://biomejs.dev/schemas/2.4.4/schema.json');
+    expect(biome.linter).toEqual({ enabled: true, rules: { recommended: true } });
+    expect(biome.formatter).toEqual({
       enabled: true,
       indentStyle: 'space',
       indentWidth: 2,
       lineWidth: 100,
     });
-    expect(BIOME_JSON_TEMPLATE.files).toEqual({
-      includes: ['src/**/*.ts', 'src/**/*.tsx'],
-    });
+    expect(biome.files).toEqual({ includes: ['**'] });
   });
 
   test('BIOME_JSON_TEMPLATE uses the includes key matching the pinned Biome major', () => {
@@ -148,14 +150,52 @@ describe('init-templates', () => {
     // Today: pin = ^2.4.4 → Biome 2.x → key = `includes` (NOT `include`, which
     // was the Biome 1.x spelling). Regression-pin the keys explicitly so any
     // future drift surfaces in this test, not at user-side `pnpm check` time.
-    const keys = Object.keys(BIOME_JSON_TEMPLATE);
+    const biome = JSON.parse(BIOME_JSON_TEMPLATE);
+    const keys = Object.keys(biome);
     expect(keys).toEqual(['$schema', 'linter', 'formatter', 'files']);
-    expect(BIOME_JSON_TEMPLATE.files).toHaveProperty('includes');
-    expect(BIOME_JSON_TEMPLATE.files).not.toHaveProperty('include');
+    expect(biome.files).toHaveProperty('includes');
+    expect(biome.files).not.toHaveProperty('include');
     // Schema URL major matches the pinned biome major.
     const biomePin = PACKAGE_JSON_TEMPLATE.devDependencies['@biomejs/biome'];
     const biomeMajor = biomePin.replace(/^\^/, '').split('.')[0];
-    expect(BIOME_JSON_TEMPLATE.$schema).toContain(`/schemas/${biomeMajor}.`);
+    expect(biome.$schema).toContain(`/schemas/${biomeMajor}.`);
+  });
+
+  test('BIOME_JSON_TEMPLATE files.includes is single-line', () => {
+    // Spec S-1: array values with ≤2 elements MUST be single-line in the
+    // template's serialized form. Biome's lineWidth=100 rule self-flags
+    // multi-line short arrays — the v0.0.14 BASELINE friction this closes.
+    expect(BIOME_JSON_TEMPLATE).toContain('"includes": ["**"]');
+    // Negative regression-pin: no multi-line `includes` in the template.
+    expect(BIOME_JSON_TEMPLATE).not.toMatch(/"includes":\s*\[\n/);
+    // Sanity: the template parses as valid JSON.
+    expect(() => JSON.parse(BIOME_JSON_TEMPLATE)).not.toThrow();
+  });
+
+  test('INDEX_TS_TEMPLATE + INDEX_TEST_TEMPLATE exist with expected content', () => {
+    // Spec S-2: stub `src/index.ts` exports a VERSION constant; the test
+    // imports it and asserts its value. The pair makes day-zero
+    // `pnpm typecheck` + `pnpm test` exit 0 against the freshly-scaffolded tree.
+    expect(INDEX_TS_TEMPLATE).toContain('export const VERSION');
+    expect(INDEX_TS_TEMPLATE).toContain('"0.0.0"');
+    expect(INDEX_TS_TEMPLATE.endsWith('\n')).toBe(true);
+
+    expect(INDEX_TEST_TEMPLATE).toContain('from "bun:test"');
+    expect(INDEX_TEST_TEMPLATE).toContain('from "./index.js"');
+    expect(INDEX_TEST_TEMPLATE).toContain('VERSION');
+    expect(INDEX_TEST_TEMPLATE).toContain('expect');
+    expect(INDEX_TEST_TEMPLATE.endsWith('\n')).toBe(true);
+  });
+
+  test('INDEX_TS_TEMPLATE is a single export line under 50 bytes', () => {
+    // Spec S-3: the stub is small enough to be overwritten without ceremony
+    // when the agent writes the first feature scope. One export line, no
+    // comments, no boilerplate.
+    expect(INDEX_TS_TEMPLATE.length).toBeLessThan(50);
+    // Single export line + trailing newline.
+    const lines = INDEX_TS_TEMPLATE.replace(/\n$/, '').split('\n');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^export\s+const\s+VERSION/);
   });
 
   test('FACTORY_CONFIG_TEMPLATE includes dod.template derived from package.json scripts', () => {
@@ -169,7 +209,7 @@ describe('init-templates', () => {
       'tests green (`pnpm test`)',
       'biome clean (`pnpm check`)',
     ]);
-    // Each entry embeds the literal shell command in backticks (v0.0.13
+    // Each entry embeds the literal shell command in backticks (v0.0.14
     // spec/dod-needs-explicit-command lint contract).
     for (const entry of FACTORY_CONFIG_TEMPLATE.dod.template) {
       expect(entry).toMatch(/`pnpm (typecheck|test|check)`/);

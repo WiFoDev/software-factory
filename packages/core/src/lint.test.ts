@@ -745,6 +745,89 @@ describe('lintSpec', () => {
     expect(errs.filter((e) => e.code === 'spec/dod-needs-explicit-command')).toHaveLength(0);
   });
 
+  test('spec/yaml-colon-needs-quoting fires on unquoted colon-space in frontmatter', () => {
+    const sample = [
+      '---',
+      'id: demo-colon-trap',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      'why: `clicks: Map<string, Click[]>`',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    const warnings = errs.filter((e) => e.code === 'spec/yaml-colon-needs-quoting');
+    expect(warnings).toHaveLength(1);
+    const w = warnings[0];
+    if (!w) return;
+    expect(w.severity).toBe('warning');
+    expect(w.message).toContain('unquoted colon-space');
+    expect(w.message).toContain("'clicks: Map<string, Click[]>'");
+    expect(typeof w.line).toBe('number');
+    // Warning, not error — exit code stays 0 (no error-severity entries from
+    // the YAML parser; the friendly warning replaces it).
+    expect(errs.filter((e) => e.severity === 'error')).toHaveLength(0);
+  });
+
+  test('spec/yaml-colon-needs-quoting does not fire on quoted form', () => {
+    const sample = [
+      '---',
+      'id: demo-colon-quoted',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      "why: 'clicks: Map<string, Click[]>'",
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    expect(errs.filter((e) => e.code === 'spec/yaml-colon-needs-quoting')).toHaveLength(0);
+  });
+
+  test('spec/yaml-colon-needs-quoting ignores legitimate nested mappings', () => {
+    const sample = [
+      '---',
+      'id: demo-nested-mapping',
+      'classification: light',
+      'type: feat',
+      'status: ready',
+      'exemplars:',
+      '  - path: foo',
+      '    why: bar',
+      '---',
+      '',
+      '## Scenarios',
+      '**S-1** — happy',
+      '  Given a',
+      '  When b',
+      '  Then c',
+      '  Satisfaction:',
+      '    - test: src/foo.test.ts',
+      '',
+    ].join('\n');
+    const errs = lintSpec(sample);
+    expect(errs.filter((e) => e.code === 'spec/yaml-colon-needs-quoting')).toHaveLength(0);
+    // Sanity: this spec lints clean overall (no false positives anywhere).
+    expect(errs).toEqual([]);
+  });
+
   test('lintSpec skips file existence check for entries that fail id-format', () => {
     const dir = mkdtempSync(join(tmpdir(), 'lint-deps-'));
     try {

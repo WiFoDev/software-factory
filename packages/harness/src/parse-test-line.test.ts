@@ -80,16 +80,22 @@ describe('parseTestLine', () => {
 });
 
 describe('normalizeTestNamePattern', () => {
-  test('normalizes apostrophes vs smart quotes in pattern', () => {
-    // ASCII apostrophe stripped — the ship-time friction case.
-    expect(normalizeTestNamePattern("v0.0.10's hash")).toBe('v0.0.10s hash');
-    // Curly right/left single quotes stripped to the same form.
-    expect(normalizeTestNamePattern('v0.0.10’s hash')).toBe('v0.0.10s hash');
-    expect(normalizeTestNamePattern('‘start’')).toBe('start');
-    // Curly + ASCII double quotes stripped.
-    expect(normalizeTestNamePattern('“hello”')).toBe('hello');
-    expect(normalizeTestNamePattern('"hello"')).toBe('hello');
-    // Backticks stripped.
+  test('normalizeTestNamePattern preserves apostrophes (v0.0.14 fix)', () => {
+    // Regression-pin: apostrophes are now treated as literal characters on both
+    // sides of the comparison. Stripping them caused 5 phantom no-converge
+    // iterations in the v0.0.13 BASELINE.
+    expect(normalizeTestNamePattern("v0.0.10's hash")).toBe("v0.0.10's hash");
+    expect(normalizeTestNamePattern('v0.0.10’s hash')).toBe('v0.0.10’s hash');
+    expect(normalizeTestNamePattern('‘start’')).toBe('‘start’');
+    expect(normalizeTestNamePattern("slug's log")).toBe("slug's log");
+  });
+
+  test('normalizeTestNamePattern still converts curly double-quotes to ASCII', () => {
+    // Curly→ASCII double-quote conversion retained for paste-from-rich-text.
+    expect(normalizeTestNamePattern('“hello”')).toBe('"hello"');
+    // ASCII double-quotes pass through unchanged.
+    expect(normalizeTestNamePattern('"hello"')).toBe('"hello"');
+    // Backticks still stripped (existing behavior).
     expect(normalizeTestNamePattern('`hello`')).toBe('hello');
     // Plain alphanumerics + spaces pass through unchanged.
     expect(normalizeTestNamePattern('plain pattern 123')).toBe('plain pattern 123');

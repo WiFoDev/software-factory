@@ -66,46 +66,61 @@ jobs:
         run: pnpm check
 
       - name: publish
-        # Idempotent per-package publish via npm Trusted Publishing (OIDC).
-        # The `permissions: id-token: write` block at the workflow level
-        # provides ACTIONS_ID_TOKEN_REQUEST_{URL,TOKEN} env vars; npm CLI
-        # reads them to mint an OIDC token and exchange it with npm's
-        # registry. npm verifies the token's claims against each package's
-        # "Trusted Publishers" config on npmjs.com — no long-lived
-        # NPM_TOKEN secret. See RELEASING.md for the per-package setup.
+        # Two-step per-package publish: `pnpm pack` rewrites workspace:* →
+        # real semver in the tarball's package.json (purpose-built for the
+        # transformation); `npm publish <tarball>` uploads via npm Trusted
+        # Publishing OIDC (purpose-built for the auth handshake). Splitting
+        # the responsibilities across the right tools fixes the v0.0.13
+        # regression where `npm publish` (without pnpm's rewrite) shipped
+        # `workspace:*` to npm — every fresh `npx @wifo/factory-core init`
+        # consumer hit EUNSUPPORTEDPROTOCOL.
         #
-        # Uses `npm publish` directly (not `pnpm publish`) because pnpm's
-        # bundled publish logic doesn't reliably forward the OIDC env to
-        # the underlying npm CLI. Each package is published from its own
-        # directory; the dist/ artifacts were built earlier in the job.
+        # OIDC: the workflow-level `permissions: id-token: write` provides
+        # ACTIONS_ID_TOKEN_REQUEST_{URL,TOKEN} env vars; npm CLI reads them
+        # to mint a short-lived token verified against each package's
+        # Trusted Publishers config on npmjs.com. No NPM_TOKEN secret.
+        # `--provenance` opts into sigstore attestations (required by
+        # Trusted Publishing). `npx -y npm@latest` sidesteps the
+        # `npm install -g npm@latest` self-upgrade bug.
         #
-        # `--provenance` opts into sigstore attestations alongside the
-        # publish — required for Trusted Publishing AND visible on the
-        # package's npm page as a verifiable provenance link.
-        #
-        # Per-package skip-if-already-published guard makes re-tagging
-        # safe (e.g., for GitHub Releases page hygiene after a partial
-        # publish). The publish step runs once per package whose local
-        # version differs from npm's.
+        # Per-package skip-if-already-published guard via `npm view ...
+        # version` makes re-tagging safe (e.g., GitHub Releases hygiene
+        # after a partial publish). Post-publish verification re-fetches
+        # each just-published manifest and fails the workflow if any
+        # `workspace:` substring leaked through — regression-pin against
+        # future shape regressions.
         run: |
           set -e
+          mkdir -p /tmp/factory-tarballs
           published=0
           skipped=0
+          published_pkgs=()
           for pkg_dir in packages/*/; do
             name=$(jq -r '.name' "${pkg_dir}package.json")
             local_version=$(jq -r '.version' "${pkg_dir}package.json")
             remote_version=$(npm view "$name" version 2>/dev/null || echo "0.0.0")
             if [ "$local_version" != "$remote_version" ]; then
               echo "::notice::Publishing $name@$local_version (registry was at $remote_version) via Trusted Publishing"
-              # `npx -y npm@latest` runs a recent npm CLI without the
-              # `npm install -g npm@latest` self-upgrade bug (where
-              # promise-retry resolves against the in-progress install).
-              # npm 11.5+ has native Trusted Publishing OIDC support.
-              (cd "$pkg_dir" && npx -y npm@latest publish --access public --provenance)
+              pnpm pack --pack-destination /tmp/factory-tarballs --filter "$name"
+              tarball="/tmp/factory-tarballs/$(echo "$name" | sed 's|^@||; s|/|-|g')-${local_version}.tgz"
+              npx -y npm@latest publish "$tarball" --access public --provenance
               published=$((published + 1))
+              published_pkgs+=("$name@$local_version")
             else
               echo "::notice::Skipping $name@$local_version (already on npm)"
               skipped=$((skipped + 1))
             fi
           done
           echo "::notice::publish summary — published=$published skipped=$skipped"
+
+          # Post-publish verification — re-fetch each just-published
+          # manifest from npm and grep for the `workspace:` substring in
+          # the dependency surface. If any leak through, fail the workflow
+          # so the next release ships the fix before users hit it.
+          for entry in "${published_pkgs[@]}"; do
+            manifest=$(npm view "$entry" dependencies peerDependencies --json)
+            if echo "$manifest" | grep -q "workspace:"; then
+              echo "::error::$entry was published with workspace:* still in its manifest"
+              exit 1
+            fi
+          done

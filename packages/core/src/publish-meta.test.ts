@@ -35,12 +35,12 @@ function readPackageJson(rel: string): PackageJson {
 }
 
 describe('publish-meta — workspace package metadata (S-1)', () => {
-  test('every workspace package has v0.0.13 + publishConfig + npm metadata fields', () => {
+  test('every workspace package has v0.0.14 + publishConfig + npm metadata fields', () => {
     for (const name of WORKSPACE_PACKAGES) {
       const pkgPath = `packages/${name}/package.json`;
       const pkg = readPackageJson(pkgPath);
 
-      expect(pkg.version).toMatch(/^0\.0\.13$/);
+      expect(pkg.version).toMatch(/^0\.0\.14$/);
       expect(pkg.license).toBe('MIT');
       expect(pkg.author).toBe('Luis (WiFoDev)');
 
@@ -133,7 +133,7 @@ describe('publish-meta — pnpm pack --dry-run (S-2)', () => {
       if (!tarball) continue;
 
       expect(tarball.name).toBe(`@wifo/factory-${name}`);
-      expect(tarball.version).toMatch(/^0\.0\.13$/);
+      expect(tarball.version).toMatch(/^0\.0\.14$/);
 
       const paths = tarball.files.map((f) => f.path);
       expect(paths).toContain('README.md');
@@ -191,7 +191,7 @@ describe('publish-meta — caveat sweep (S-4)', () => {
   });
 });
 
-describe('publish-meta — v0.0.13 cycle-break (S-1)', () => {
+describe('publish-meta — v0.0.14 cycle-break (S-1)', () => {
   test('factory-core declares @wifo/factory-spec-review as a non-optional peer dependency', () => {
     const pkg = readPackageJson('packages/core/package.json') as PackageJson & {
       peerDependencies?: Record<string, string>;
@@ -210,7 +210,7 @@ describe('publish-meta — v0.0.13 cycle-break (S-1)', () => {
   });
 });
 
-describe('publish-meta — v0.0.13 schema-emitter Node-native (S-2)', () => {
+describe('publish-meta — v0.0.14 schema-emitter Node-native (S-2)', () => {
   test('factory-core build script uses tsx instead of bun run', () => {
     const pkg = readPackageJson('packages/core/package.json');
     const build = pkg.scripts?.build ?? '';

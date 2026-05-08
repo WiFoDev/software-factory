@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type CliIo, runCli } from './cli';
@@ -208,30 +215,103 @@ describe('runCli — top-level dispatch', () => {
   });
 });
 
-describe('runCli — v0.0.13 spec review cycle-break (S-2)', () => {
-  test('factory spec review resolves @wifo/factory-spec-review without optional-dep fallback', async () => {
-    const mod = await import('@wifo/factory-spec-review/cli');
-    expect(typeof mod.runReviewCli).toBe('function');
+describe('runCli — v0.0.14 spec review subprocess transition (S-1, S-2, S-3)', () => {
+  const CLI_PATH = resolve(import.meta.dir, 'cli.ts');
+  // Use the running bun's absolute path so we don't depend on PATH lookup
+  // for the test runner itself — only for resolving `factory-spec-review`.
+  const BUN_BIN = process.execPath;
 
-    const cliSource = readFileSync(resolve(import.meta.dir, 'cli.ts'), 'utf8');
-    expect(cliSource).not.toContain('spec/review-unavailable');
-    expect(cliSource).not.toContain('function findPackageRoot');
+  function makeFakeBinDir(scriptBody: string): string {
+    const dir = tmpDir();
+    const bin = join(dir, 'factory-spec-review');
+    writeFileSync(bin, scriptBody);
+    chmodSync(bin, 0o755);
+    return dir;
+  }
+
+  test('factory spec review spawns factory-spec-review bin (v0.0.14 — subprocess transition)', async () => {
+    const fakeDir = makeFakeBinDir(
+      [
+        '#!/usr/bin/env bash',
+        'echo "fake-bin-stdout: $@"',
+        'echo "fake-bin-stderr" >&2',
+        'exit 0',
+        '',
+      ].join('\n'),
+    );
+    const proc = Bun.spawn([BUN_BIN, 'run', CLI_PATH, 'spec', 'review', 'docs/specs/foo.md'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      // PATH points only at the fake-bin dir — proves the dispatcher
+      // resolves `factory-spec-review` via PATH, not via package resolution.
+      // Include /usr/bin:/bin so the fake bin's `#!/usr/bin/env bash`
+      // shebang can resolve. factory-spec-review is NOT in those system
+      // dirs, so this still proves the dispatcher resolves via PATH.
+      env: { ...process.env, PATH: `${fakeDir}:/usr/bin:/bin` },
+    });
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('fake-bin-stdout: docs/specs/foo.md');
+    expect(stderr).toContain('fake-bin-stderr');
   });
 
-  test('core/cli.ts uses createRequire for runReviewCli (peer-dep cycle workaround)', () => {
-    // v0.0.13 moved spec-review to peerDependencies of core, but pnpm
-    // treats peer deps as cycle edges — the build-graph cycle survived.
-    // The createRequire workaround (originally v0.0.12) stays: it lets
-    // tsc avoid resolving spec-review's types at build time, while the
-    // runtime resolves the package via the standard resolver.
-    const cliSource = readFileSync(resolve(import.meta.dir, 'cli.ts'), 'utf8');
-    expect(cliSource).toContain('createRequire(import.meta.url)');
-    expect(cliSource).toContain("requireSpecReview('@wifo/factory-spec-review/cli')");
-    expect(cliSource).toContain("import { createRequire } from 'node:module';");
+  test('factory spec review surfaces ENOENT cleanly when bin is not on PATH', async () => {
+    const emptyDir = tmpDir();
+    const proc = Bun.spawn([BUN_BIN, 'run', CLI_PATH, 'spec', 'review', 'foo.md'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { ...process.env, PATH: emptyDir },
+    });
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain('factory-spec-review not found on PATH');
+    expect(stderr).toContain('npm install @wifo/factory-spec-review');
+  });
+
+  test('core/cli.ts no longer imports createRequire', () => {
+    // v0.0.14 retired the cycle-break workaround in favor of
+    // child_process.spawn — process boundary eliminates the CJS/ESM
+    // mismatch against spec-review's ESM-only exports map.
+    const cliSource = readFileSync(CLI_PATH, 'utf8');
+    expect(cliSource).not.toContain("import { createRequire } from 'node:module'");
+    expect(cliSource).not.toContain('createRequire(import.meta.url)');
+    expect(cliSource).not.toContain("from 'node:module'");
+  });
+
+  test('core/cli.ts uses node:child_process.spawn for the spec-review dispatcher', () => {
+    const cliSource = readFileSync(CLI_PATH, 'utf8');
+    expect(cliSource).toContain("import { spawn } from 'node:child_process';");
+    expect(cliSource).toContain("spawn('factory-spec-review'");
+  });
+
+  test('factory spec review exit code propagates from spawned bin', async () => {
+    const fakeDir = makeFakeBinDir(
+      ['#!/usr/bin/env bash', 'echo "running"', 'echo "boom" >&2', 'exit 1', ''].join('\n'),
+    );
+    const proc = Bun.spawn([BUN_BIN, 'run', CLI_PATH, 'spec', 'review', 'x.md'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      // Include /usr/bin:/bin so the fake bin's `#!/usr/bin/env bash`
+      // shebang can resolve. factory-spec-review is NOT in those system
+      // dirs, so this still proves the dispatcher resolves via PATH.
+      env: { ...process.env, PATH: `${fakeDir}:/usr/bin:/bin` },
+    });
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain('running');
+    expect(stderr).toContain('boom');
   });
 });
 
-describe('runCli — v0.0.13 factory finish-task (S-3)', () => {
+describe('runCli — v0.0.14 factory finish-task (S-3)', () => {
   // The CLI subcommand `factory finish-task <id>` calls the library helper
   // `finishTask({ specId, dir, contextDir })` (exported from
   // `packages/core/src/index.ts`). These tests exercise that helper directly —
@@ -411,7 +491,7 @@ describe('runCli — v0.0.13 factory finish-task (S-3)', () => {
   });
 });
 
-describe('runCli — v0.0.13 factory finish-task --all-converged (S-3 mutual-exclusion)', () => {
+describe('runCli — v0.0.14 factory finish-task --all-converged (S-3 mutual-exclusion)', () => {
   test('factory finish-task rejects positional id + --all-converged combination', () => {
     const io = makeIo();
     run(['finish-task', 'my-spec', '--all-converged'], io.io);
@@ -419,6 +499,30 @@ describe('runCli — v0.0.13 factory finish-task --all-converged (S-3 mutual-exc
     expect(io.stderr()).toContain(
       'factory: --all-converged is mutually exclusive with positional <spec-id>',
     );
+  });
+});
+
+// ----- v0.0.14: resolveContextDir precedence (S-3) ----------
+
+describe('runCli — v0.0.14 resolveContextDir precedence (S-3)', () => {
+  test('resolveContextDir precedence: CLI flag > config > universal default', async () => {
+    const { resolveContextDir, FACTORY_CONTEXT_DIR_DEFAULT } = await import('./context-dir.js');
+
+    // CLI flag wins over everything.
+    expect(resolveContextDir({ cliFlag: './from-cli', configValue: './from-config' })).toBe(
+      './from-cli',
+    );
+    expect(resolveContextDir({ cliFlag: './from-cli' })).toBe('./from-cli');
+
+    // Config wins over default when no CLI flag.
+    expect(resolveContextDir({ configValue: './from-config' })).toBe('./from-config');
+
+    // Universal default applies when neither flag nor config is set.
+    expect(resolveContextDir({})).toBe('./.factory');
+    expect(FACTORY_CONTEXT_DIR_DEFAULT).toBe('./.factory');
+
+    // Undefined inputs (explicit) treated like missing inputs.
+    expect(resolveContextDir({ cliFlag: undefined, configValue: undefined })).toBe('./.factory');
   });
 });
 

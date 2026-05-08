@@ -108,12 +108,29 @@ export interface AgentSpawnResult {
  * (`--allowedTools`, headless `-p`, structured `--output-format json`)
  * for reproducibility. The spec's intent (subscription auth, headless,
  * structured capture) is preserved.
+ *
+ * v0.0.14 — `--setting-sources project,local` excludes user-level
+ * settings (`~/.claude/settings.json`) where global plugin/skill
+ * auto-suggestion hooks live (e.g., the Vercel/Next.js skill injection
+ * the v0.0.13 implement-phase agent reported as false-positive noise).
+ * OAuth/keychain auth is unaffected because credentials live outside
+ * settings.json, so subscription auth is preserved. Project-level
+ * (`<cwd>/.claude/settings.json`) and local (`*.local.json`) hooks
+ * still load — only user-level global noise is filtered.
  */
 export function spawnAgent(opts: SpawnAgentOptions): Promise<AgentSpawnResult> {
   return new Promise<AgentSpawnResult>((resolvePromise, rejectPromise) => {
     const child = spawn(
       opts.claudePath,
-      ['-p', '--allowedTools', opts.allowedTools, '--output-format', 'json'],
+      [
+        '-p',
+        '--allowedTools',
+        opts.allowedTools,
+        '--output-format',
+        'json',
+        '--setting-sources',
+        'project,local',
+      ],
       {
         cwd: opts.cwd,
         env: opts.env,

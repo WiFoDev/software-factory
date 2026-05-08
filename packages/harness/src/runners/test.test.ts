@@ -138,6 +138,49 @@ describe('runTestSatisfaction', () => {
     }, 30_000);
   });
 
+  describe('regex-no-match safety net (v0.0.14)', () => {
+    beforeAll(() => {
+      chmodSync(FAKE_BUN, 0o755);
+    });
+
+    test('regex matched 0 tests + nonzero exit classified as error with harness/test-name-regex-no-match prefix', async () => {
+      const result = await runTestSatisfaction(
+        { kind: 'test', value: 'regex-no-match.test.ts "missing-name"', line: 1 },
+        { cwd: HARNESS_ROOT, timeoutMs: 30_000, bunPath: FAKE_BUN },
+      );
+      expect(result.status).toBe('error');
+      expect(result.detail).toContain('harness/test-name-regex-no-match');
+      expect(result.detail).toContain('matched 0 tests');
+      expect(result.detail).toContain('regex-no-match.test.ts');
+      expect(result.exitCode).not.toBe(0);
+    }, 30_000);
+
+    test('regex matched 0 tests path does not collide with v0.0.13 coverage-trip path', async () => {
+      // When both signals appear, the coverage-trip path wins (it gates on
+      // `0 fail` + the threshold marker, both true here). The regex-no-match
+      // detector must NOT fire and the result stays `pass`.
+      const result = await runTestSatisfaction(
+        { kind: 'test', value: 'regex-no-match-with-coverage.test.ts "x"', line: 1 },
+        { cwd: HARNESS_ROOT, timeoutMs: 30_000, bunPath: FAKE_BUN },
+      );
+      expect(result.status).toBe('pass');
+      expect(result.detail).toContain('harness/coverage-threshold-tripped');
+      expect(result.detail).not.toContain('harness/test-name-regex-no-match');
+    }, 30_000);
+
+    test('real test failures still classify as fail (v0.0.14 regression-pin)', async () => {
+      const result = await runTestSatisfaction(
+        { kind: 'test', value: 'real-fail.test.ts', line: 1 },
+        { cwd: HARNESS_ROOT, timeoutMs: 30_000, bunPath: FAKE_BUN },
+      );
+      expect(result.status).toBe('fail');
+      expect(result.detail).not.toContain('harness/test-name-regex-no-match');
+      expect(result.detail).not.toContain('harness/coverage-threshold-tripped');
+      expect(result.detail).toContain('1 fail');
+      expect(result.exitCode).not.toBe(0);
+    }, 30_000);
+  });
+
   test('times out cleanly without crashing the process', async () => {
     const result = await runTestSatisfaction(
       { kind: 'test', value: 'test-fixtures/slow.test.ts', line: 1 },

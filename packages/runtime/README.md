@@ -105,6 +105,14 @@ Pass `--check-holdouts` (or set `runtime.checkHoldouts: true` in `factory.config
 
 Default `false`: only visible scenarios run (v0.0.10 behavior preserved).
 
+### Skill-injection noise (v0.0.14)
+
+`implementPhase` spawns `claude -p` with `--setting-sources project,local`. This excludes user-level settings (`~/.claude/settings.json`) — where global plugin/skill auto-suggestion hooks live (e.g., the Vercel/Next.js skill-injection that the v0.0.13 implement-phase agent reported as false-positive noise). Project-level (`<cwd>/.claude/settings.json`) and local (`*.local.json`) settings still load, so per-repo hooks are preserved.
+
+Subscription auth (Claude Pro/Max) is unaffected: OAuth tokens live in the system keychain (or `~/.config/claude/`), never in `settings.json`. `--bare` would also skip hooks, but explicitly disables OAuth/keychain reads — incompatible with the locked subscription-auth model. `--setting-sources` is the surgical fix.
+
+The flag is internal to `spawnAgent` — no public API surface change. The `fake-claude.ts` test fixture reads the flag from `process.argv` and emits `_setting_sources_arg: 'project,local'` plus `_home_set: true` markers in its envelope so the no-hooks plus auth-preservation tests can pin both invariants.
+
 ### Worktree sandbox (v0.0.11+)
 
 Pass `--worktree` to materialize an isolated `git worktree` for the run. Default location: `<projectRoot>/.factory/worktrees/<runId>/`; default branch: `factory-run/<runId>`. The implement / validate / DoD phases all execute against that checkout — so the agent's edits, the harness's `bun test` invocation, and the DoD shell bullets resolve against the worktree's tree. The maintainer's main tree is never touched.

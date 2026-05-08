@@ -40,8 +40,14 @@ happy path requires it.
 
 The shift from `dependencies` to `peerDependencies` in v0.0.13 breaks the
 core ↔ spec-review workspace cycle that bit during the v0.0.12 publish.
-The runtime resolution is unchanged: `import '@wifo/factory-spec-review/cli'`
-works zero-config under any modern package manager.
+
+**v0.0.14: subprocess transition.** `factory spec review` now invokes the
+`factory-spec-review` bin via `child_process.spawn` (auto-linked onto PATH
+by npm/pnpm install). Core no longer imports from spec-review at all —
+the process boundary eliminates the v0.0.12/v0.0.13 `createRequire(import.meta.url)`
+CJS/ESM resolution mismatch against spec-review's ESM-only exports map (which
+silently exit-0'd on the published artifact). If the bin isn't on PATH, the
+dispatcher emits `factory: factory-spec-review not found on PATH` and exits 2.
 
 ## When to reach for it
 
@@ -66,6 +72,8 @@ factory spec schema                           # Emit JSON Schema for editor inte
 factory finish-task <id> [--dir <p>] [--context-dir <p>]   # Move converged spec to done/ + emit factory-spec-shipped (v0.0.12+)
 factory finish-task --all-converged [--since <factorySequenceId>] [--dir <p>] [--context-dir <p>]
                                               # Batch-ship every converged spec under a factory-sequence (v0.0.13+)
+                                              # v0.0.14+: --context-dir defaults to ./.factory (was ./context); auto-detects
+                                              # factory.config.json runtime.contextDir. Precedence: CLI flag > config > default.
 ```
 
 `factory init --adopt` (v0.0.12+) is the brownfield-adopter onramp: walks the same template plan as `factory init` but **skips** files in `IGNORE_IF_PRESENT` (`package.json`, `tsconfig.json`, `biome.json`, `bunfig.toml`, `README.md`) when they already exist, **appends** factory entries (`.factory`, `.factory-spec-review-cache`) to a pre-existing `.gitignore`, and **creates** only the factory-specific bits (`docs/specs/done/`, `docs/technical-plans/done/`, `factory.config.json`, `.claude/commands/scope-project.md`). Idempotent — running twice never duplicates `.gitignore` entries. Does NOT mutate your `package.json` (a future `--write-deps` will opt-in to that).
@@ -74,12 +82,15 @@ factory finish-task --all-converged [--since <factorySequenceId>] [--dir <p>] [-
 
 `factory finish-task --all-converged` (v0.0.13+) batch-ships every converged spec under a single `factory-sequence` — the natural counterpart to `factory-runtime run-sequence`, which already ships clusters of 4-6 specs in one invocation. With no flag, it walks the **most recent** factory-sequence (largest `recordedAt`; tie-break on lex-larger id). `--since <factorySequenceId>` overrides the default to target a specific sequence (full id only — no prefix matching). Mutually exclusive with the positional `<spec-id>` form (passing both exits 2). Errored specs in the same sequence stay at `<dir>/<id>.md` for the maintainer to retry; per-spec move failures abort the batch.
 
+**Status-aggregator semantic (v0.0.14+).** `--all-converged`'s "converged" predicate now matches `run-sequence`'s `no-converge` verdict: it walks each candidate factory-run's `factory-phase` records grouped by iteration and keys off the **FINAL iteration's** terminal phase (`status: 'pass'` → ship; anything else → skip). Earlier iterations' failures are part of the implement-validate-iterate loop, not a verdict. The v0.0.13 BASELINE caught the inverse drift — finish-task shipped specs that run-sequence considered no-converge. Per-skip log: `factory: skipped <id> (run <runId-short> did not converge — last phase: <status>)`. Summary line always reports both counts: `factory: shipped <N> specs from sequence <seqId-short> (<M> skipped)`. An all-no-converge sequence is a safe no-op (exit 0, shipped=0).
+
 ```sh
 # Ship every converged spec from the most recent run-sequence:
 factory finish-task --all-converged
 # → factory: shipped core-store-and-slug → done/ (run aa000000)
 #   factory: shipped shorten-endpoint → done/ (run bb000000)
-#   factory: shipped 2 specs from sequence 00112233
+#   factory: skipped redirect (run cc000000 did not converge — last phase: fail)
+#   factory: shipped 2 specs from sequence 00112233 (1 skipped)
 
 # Retroactively ship from an earlier sequence:
 factory finish-task --all-converged --since 00112233aabbccdd
@@ -157,7 +168,7 @@ import { FrontmatterError } from '@wifo/factory-core';
 
 **`watchSpecs` (v0.0.10+).** Long-running watcher returning `{ stop }`. Re-runs lint (+ optionally review) per-file with a 200ms debounce. SIGINT-aware in the CLI wrapper.
 
-**Lint codes + NOQA.** Format-level errors block; quality-level warnings inform. Codes include `frontmatter/*`, `scenario/*`, `scenarios/*`, `spec/invalid-depends-on`, `spec/depends-on-missing`, `spec/wide-blast-radius`, `spec/test-name-quote-chars` (v0.0.12+ — `test:` patterns using curly `‘ ’ “ ”` get rewritten ASCII-clean before run-time), and `spec/dod-needs-explicit-command` (v0.0.12+ — DoD bullets that look like runtime gates but don't embed a backtick-wrapped shell command; pairs with the runtime's literal-command DoD contract). Suppress warnings via `<!-- NOQA: spec/<code> -->` HTML comment anywhere in the spec body (v0.0.10+; warnings only — errors cannot be suppressed). See [`AGENTS.md` § 6](../../AGENTS.md#6-the-full-primitives-reference) for the full code table.
+**Lint codes + NOQA.** Format-level errors block; quality-level warnings inform. Codes include `frontmatter/*`, `scenario/*`, `scenarios/*`, `spec/invalid-depends-on`, `spec/depends-on-missing`, `spec/wide-blast-radius`, `spec/test-name-quote-chars` (v0.0.12+ — `test:` patterns using curly `‘ ’ “ ”` get rewritten ASCII-clean before run-time), `spec/dod-needs-explicit-command` (v0.0.12+ — DoD bullets that look like runtime gates but don't embed a backtick-wrapped shell command; pairs with the runtime's literal-command DoD contract), and `spec/yaml-colon-needs-quoting` (v0.0.14+ — top-level frontmatter values that contain an unquoted colon-space, which YAML parses as a nested mapping and trips `BLOCK_AS_IMPLICIT_KEY`; wrap the value in single quotes — e.g., `why: 'clicks: Map<string, Click[]>'`). Suppress warnings via `<!-- NOQA: spec/<code> -->` HTML comment anywhere in the spec body (v0.0.10+; warnings only — errors cannot be suppressed). See [`AGENTS.md` § 6](../../AGENTS.md#6-the-full-primitives-reference) for the full code table.
 
 ## Slash commands
 
@@ -187,6 +198,11 @@ Output: 4-6 spec files under `docs/specs/`, first `status: ready`, rest `status:
 - **`biome.json` schema migrates to Biome 2.x.** The scaffold pins `@biomejs/biome ^2.4.4` (a 2.x release) but until v0.0.13 emitted the Biome 1.x `files.include` key, so `pnpm check` errored on first run. v0.0.13 emits `files.includes` (Biome 2.x) and adds `formatter.indentStyle: 'space'` so the JSON-stringified config is self-consistent. The schema major must stay locked to the pinned biome major.
 - **`.factory/` is pre-created via `.gitkeep`.** Pre-v0.0.13, `.factory/` was created lazily by the runtime, so any pre-runtime tooling (e.g., `tee .factory/run-sequence.log`) failed until first run. v0.0.13 ships `.factory/.gitkeep` in the scaffold so the dir exists from `git clone` time. `.gitignore` now lists `.factory/worktrees/` and `.factory/twin-recordings/` (the per-record subdirs the runtime writes); `.factory/` itself is tracked so users see the dir without ambiguity.
 - **`factory.config.json` gains `dod.template`.** A `string[]` of literal-command DoD bullet bodies derived from the scaffold's `package.json` scripts (typecheck, test, check). `/scope-project` reads this at spec-author time and emits the same block into every generated spec's `## Definition of Done`, so the v0.0.12 `spec/dod-needs-explicit-command` lint stays green from the very first author. `build` is intentionally excluded — build is a publish prereq, not a per-spec DoD gate. Override per-project by editing `factory.config.json.dod.template`.
+
+**Day-zero scaffold polish (v0.0.14+).** Two follow-on frictions surfaced in the v0.0.13 BASELINE close in this release — the scaffold can now pass its own DoD gates on day zero (`pnpm typecheck && pnpm test && pnpm check` all exit 0):
+
+- **`biome.json` short arrays are single-line.** The v0.0.13 template wrote `files.includes` as a multi-line JSON array (a side-effect of `JSON.stringify(..., null, 2)`); biome's lineWidth=100 rule self-flags multi-line arrays of 1-2 elements, so the scaffold's own `pnpm check` errored on biome.json's own format. v0.0.14 ships biome.json (and tsconfig.json) as pre-formatted strings with single-line short arrays, and widens `files.includes` to `["**"]` so `pnpm check` validates the whole scaffold (not just an empty src/).
+- **Stub `src/index.ts` + `src/index.test.ts`.** The v0.0.13 scaffold's `src/` was empty (only a `.gitkeep`), so `pnpm typecheck` and `pnpm test` had nothing to operate on — `bun test src` errored "no tests found" and tsc compiled zero files. v0.0.14 ships a one-line stub `export const VERSION = "0.0.0";` plus a four-line bun:test that imports it, replacing the v0.0.13 `src/.gitkeep`. The stubs are intentionally tiny so `/scope-project` and the agent overwrite them on first feature scope without ceremony.
 
 ### `/scope-task`
 

@@ -41,3 +41,6 @@ export type { WatchSpecsOptions } from './watch.js';
 
 export { finishTask } from './finish-task.js';
 export type { FinishTaskOptions, FinishTaskResult } from './finish-task.js';
+
+export { FACTORY_CONTEXT_DIR_DEFAULT, resolveContextDir } from './context-dir.js';
+export type { ResolveContextDirInput } from './context-dir.js';

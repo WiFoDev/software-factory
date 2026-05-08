@@ -42,7 +42,7 @@ factory-context get <id> [--context-dir <path>]
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--context-dir <path>` | `./context` | Where records persist. Synonym for `--dir` (deprecated, removed in v0.1.0). |
+| `--context-dir <path>` | `./.factory` (v0.0.14+) | Where records persist. Falls back to `factory.config.json runtime.contextDir` when the flag is omitted. Precedence: CLI flag > config > universal default. Synonym for `--dir` (deprecated, removed in v0.1.0). **Breaking change in v0.0.14:** the default flipped from `./context` to `./.factory` (the directory `factory init` creates) — pass `--context-dir ./context` to keep the old behavior. |
 | `--direction up\|down` | `up` | `up` walks ancestors via `parents[]`; `down` walks descendants by inverting the parent index. |
 | `--type <name>` | all | Filter `list` by record type. |
 

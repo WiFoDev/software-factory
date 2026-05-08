@@ -42,6 +42,12 @@ export interface FinishTaskBatchResult {
   factorySequenceId: string;
   /** Per-spec ship results, one entry per converged + moved spec. */
   shipped: FinishTaskResult[];
+  /**
+   * v0.0.14 — per-spec skip records for runs whose final iteration's terminal
+   * phase did NOT pass. Mirrors run-sequence's `no-converge` verdict so
+   * `--all-converged` no longer ships specs the runtime considered un-shipped.
+   */
+  skipped: Array<{ specId: string; runId: string; terminalPhase: string }>;
 }
 
 interface ContextRecordEnvelope {
@@ -110,9 +116,66 @@ async function readAllRecords(dir: string): Promise<ContextRecordEnvelope[]> {
 }
 
 /**
+ * v0.0.14 — status-aggregator helper for `--all-converged`. Walks
+ * factory-phase records belonging to `runId`, groups by iteration, and
+ * returns the FINAL iteration's terminal phase status (`{ converged,
+ * terminalPhase }`).
+ *
+ * Aligns finish-task's batch predicate with run-sequence's verdict — both
+ * count only the FINAL iteration, since earlier iterations' failures are
+ * part of the implement-validate-iterate loop, not a verdict. The canonical
+ * cousin lives in `factory-runtime/src/sequence.ts` (`verifyRunConverged`,
+ * v0.0.12); this duplicate avoids cross-package coupling deferred per the
+ * v0.0.14 spec.
+ *
+ * Exported within the package so the helper unit tests in
+ * `finish-task.test.ts` can call it directly. NOT re-exported from
+ * `index.ts` — it's a package-internal helper.
+ */
+export async function getRunConvergenceStatus(
+  contextDir: string,
+  runId: string,
+): Promise<{ converged: boolean; terminalPhase: string }> {
+  const all = await readAllRecords(resolve(contextDir));
+  return computeConvergenceFromRecords(runId, all);
+}
+
+function computeConvergenceFromRecords(
+  runId: string,
+  records: ContextRecordEnvelope[],
+): { converged: boolean; terminalPhase: string } {
+  const phases = records.filter((r) => r.type === 'factory-phase' && r.parents.includes(runId));
+  if (phases.length === 0) return { converged: false, terminalPhase: 'unknown' };
+  const byIter = new Map<number, ContextRecordEnvelope[]>();
+  for (const p of phases) {
+    const it = (p.payload as { iteration?: unknown }).iteration;
+    if (typeof it !== 'number') continue;
+    const list = byIter.get(it);
+    if (list === undefined) byIter.set(it, [p]);
+    else list.push(p);
+  }
+  if (byIter.size === 0) return { converged: false, terminalPhase: 'unknown' };
+  let maxIter = Number.NEGATIVE_INFINITY;
+  for (const it of byIter.keys()) if (it > maxIter) maxIter = it;
+  const finalPhases = byIter.get(maxIter);
+  if (finalPhases === undefined || finalPhases.length === 0) {
+    return { converged: false, terminalPhase: 'unknown' };
+  }
+  finalPhases.sort((a, b) =>
+    a.recordedAt < b.recordedAt ? -1 : a.recordedAt > b.recordedAt ? 1 : 0,
+  );
+  const terminal = finalPhases[finalPhases.length - 1];
+  if (terminal === undefined) return { converged: false, terminalPhase: 'unknown' };
+  const status = (terminal.payload as { status?: unknown }).status;
+  const terminalPhase = typeof status === 'string' ? status : 'unknown';
+  return { converged: terminalPhase === 'pass', terminalPhase };
+}
+
+/**
  * Walks `factory-phase` records grouped by iteration; an iteration's terminal
  * phase (last by `recordedAt`) must have `status: 'pass'` for the run to
- * count as converged. Mirrors the verifyRunConverged logic in sequence.ts.
+ * count as converged. Used by the positional `finishTask({ specId })` path —
+ * v0.0.14 leaves this predicate unchanged for backward compatibility (S-3).
  */
 function isRunConverged(runId: string, allRecords: ContextRecordEnvelope[]): boolean {
   const phases = allRecords.filter((r) => r.type === 'factory-phase' && r.parents.includes(runId));
@@ -267,18 +330,30 @@ async function finishTaskBatch(opts: FinishTaskBatchOptions): Promise<FinishTask
   const sequenceId = target.id;
 
   // Walk descendant factory-run records (parents include this sequence id).
-  // Dedup by specId — keep the most recent converged run per spec.
+  // Dedup by specId — keep the MOST RECENT run per spec (regardless of
+  // convergence). v0.0.14: classify each spec's latest run via the
+  // status-aggregator helper. Converged → ship. Not converged → skip + log.
   const runs = all
     .filter((r) => r.type === 'factory-run')
     .filter((r) => r.parents.includes(sequenceId));
-  const bySpec = new Map<string, ContextRecordEnvelope>();
+  const latestRunBySpec = new Map<string, ContextRecordEnvelope>();
   for (const run of runs) {
     const payload = run.payload as { specId?: unknown };
     if (typeof payload.specId !== 'string') continue;
-    if (!isRunConverged(run.id, all)) continue;
-    const existing = bySpec.get(payload.specId);
+    const existing = latestRunBySpec.get(payload.specId);
     if (existing === undefined || existing.recordedAt < run.recordedAt) {
-      bySpec.set(payload.specId, run);
+      latestRunBySpec.set(payload.specId, run);
+    }
+  }
+
+  const bySpec = new Map<string, ContextRecordEnvelope>();
+  const skippedBySpec = new Map<string, { run: ContextRecordEnvelope; terminalPhase: string }>();
+  for (const [specId, run] of latestRunBySpec) {
+    const status = computeConvergenceFromRecords(run.id, all);
+    if (status.converged) {
+      bySpec.set(specId, run);
+    } else {
+      skippedBySpec.set(specId, { run, terminalPhase: status.terminalPhase });
     }
   }
 
@@ -293,18 +368,27 @@ async function finishTaskBatch(opts: FinishTaskBatchOptions): Promise<FinishTask
     const id = topoOrder[i];
     if (id !== undefined) orderIndex.set(id, i);
   }
-  const ordered = Array.from(bySpec.entries()).sort(([aId], [bId]) => {
+  const orderBySpecId = (aId: string, bId: string): number => {
     const ai = orderIndex.get(aId) ?? Number.MAX_SAFE_INTEGER;
     const bi = orderIndex.get(bId) ?? Number.MAX_SAFE_INTEGER;
     if (ai !== bi) return ai - bi;
     return aId < bId ? -1 : aId > bId ? 1 : 0;
-  });
+  };
+  const ordered = Array.from(bySpec.entries()).sort(([aId], [bId]) => orderBySpecId(aId, bId));
+  const orderedSkips = Array.from(skippedBySpec.entries()).sort(([aId], [bId]) =>
+    orderBySpecId(aId, bId),
+  );
 
   const shipped: FinishTaskResult[] = [];
   for (const [specId, run] of ordered) {
     const result = await shipOneSpec(specId, run.id, dirAbs, contextDirAbs);
     shipped.push(result);
   }
+  const skipped = orderedSkips.map(([specId, info]) => ({
+    specId,
+    runId: info.run.id,
+    terminalPhase: info.terminalPhase,
+  }));
 
-  return { factorySequenceId: sequenceId, shipped };
+  return { factorySequenceId: sequenceId, shipped, skipped };
 }

@@ -427,188 +427,21 @@ Lean: ship (b) + (c) together in v0.0.9. (a) is too crude. (d) is v0.1.0+ territ
 ---
 
 
-## Validator strips apostrophes from `bun test -t <pattern>` — phantom no-converge *(NEW, surfaced by v0.0.13 BASELINE — friction #1, MUST-FIX, regression of v0.0.12)*
 
-**What:** v0.0.12's `factory-harness-v0-0-12` spec shipped `normalizeTestNamePattern` to strip curly quotes / apostrophes / backticks from BOTH the spec's `test:` line pattern AND the harvested test name — so a spec that wrote `"v0.0.10's hash"` would still match an `it()` named `"v0.0.10s hash"` (auto-stylized by the agent). The implementation strips apostrophes from BOTH sides… BEFORE passing the pattern to `bun test -t <regex>`. Result: spec-side pattern `"...slug's log"` becomes `"...slugs log"`, but the actual test in the file STILL has the apostrophe (the agent wrote it correctly per the spec) — bun's regex matches zero tests, runtime reports validate-fail, the loop iterates re-implementing already-correct code.
+## Shipped in v0.0.14 (kept here briefly for history)
 
-The v0.0.13 BASELINE caught this: 4 wasted iterations on `click-tracking` (~248s + 11k tokens burned) on a phantom failure. Implement passed every iter; DoD passed every iter; only validate failed because the regex matcher can never find an apostrophe-bearing test name.
+The "v0.0.13 recovery — must-fix correctness bugs + scaffold/CLI ergonomics polish" cluster shipped in v0.0.14. Eight specs scoped via `/scope-project` (seventh dogfood) + run via `factory-runtime run-sequence` with `--include-drafting --skip-dod-phase --max-agent-timeout-ms 1800000` across 2 invocations (recovery from a stale-dist apostrophe issue identical to v0.0.12's pattern):
 
-**Why:** This is a correctness regression of v0.0.12 + the deepest soundness bug the runtime has hit since the trust contract shipped. The implement-validate loop's invariant is "if validate fails, the implementation is wrong" — when the validator's test discovery is lossy on a character class, that invariant breaks and the loop becomes an unbounded token-burn. Closing this is more important than closing whatever else v0.0.14 ships.
+- ✅ **Harness apostrophe-strip removal + regex-no-match safety net** — drops apostrophe-stripping from `normalizeTestNamePattern` (the v0.0.12 fix that solved a non-problem and caused the v0.0.13 phantom no-converge). New runner safety net: `regex matched 0 tests` + nonzero exit → classify as `error` with `harness/test-name-regex-no-match:` prefix instead of `fail`.
+- ✅ **CI publish two-step: `pnpm pack` + `npm publish <tarball>`** — pnpm rewrites `workspace:*` → real semver; npm publishes via OIDC + `--provenance`. Post-publish verification fails workflow if `workspace:` leaks. Closes the v0.0.13 npx-fail.
+- ✅ **`factory spec review` via subprocess** — replaces v0.0.12's `createRequire` workaround with `child_process.spawn('factory-spec-review', ...)`. Process boundary eliminates the CJS/ESM exports-map mismatch + the build-time cycle.
+- ✅ **`finish-task --all-converged` status-aggregator** — only ships specs where each iteration's terminal phase is `'pass'`. Skipped specs surface in the summary.
+- ✅ **`--context-dir` universal `./.factory` default + `resolveContextDir` helper** — all 3 CLIs unified; auto-detect from `factory.config.json`. Public surface: factory-core 34 → 35.
+- ✅ **Day-zero scaffold passes its own DoD** — single-line `BIOME_JSON_TEMPLATE` + stub `src/index.ts` + `src/index.test.ts`.
+- ✅ **`spec/yaml-colon-needs-quoting` lint code** — detects unquoted frontmatter values containing `: `; `/scope-project` updated to auto-quote.
+- ✅ **`--setting-sources project,local` on `claude -p` spawns** — excludes user-level skill-auto-suggestion hooks; subscription auth preserved.
 
-**Shape options:**
-- (a) **Don't strip apostrophes from the SPEC-SIDE pattern; only normalize the harvested test-name from `bun test --json`.** The original v0.0.12 BACKLOG motivation was "agent stylizes apostrophes out of `it()` names" — which means the IMPLEMENTATION drifts; the SPEC stays canonical. Normalize the agent's output, not the source-of-truth pattern. ~10 LOC change in `parse-test-line.ts` (drop apostrophes from `normalizeTestNamePattern`'s strip set; keep curly-quote → ASCII conversion).
-- (b) **Escape apostrophes for the regex** — bun's `-t` is regex; an apostrophe is literal but if any other character class is involved, escape via `escapeRegex`. (Already escaped — but `normalizeTestNamePattern` runs AFTER `escapeRegex` on output and BEFORE on input — re-order so escape runs last.)
-- (c) **Match by exact string instead of regex** — bun supports `--test-name-pattern <regex>` only; no exact-string flag. Would need to escape ALL regex specials in the pattern, making it functionally an exact-match. Heavier; (a) is simpler.
-- (d) **Detect "regex matched 0 tests + bun test exited 0" as a tooling mismatch** (similar shape to v0.0.13's coverage-trip detection). Surface a clear diagnostic instead of looping.
-
-Lean: (a) for the must-fix; (d) as a complementary safety net so the next pattern-quirk we forget doesn't re-burn iterations silently. Drop apostrophe stripping entirely from `normalizeTestNamePattern` — the friction the v0.0.12 spec described (agent stylizes test names) actually doesn't manifest in modern Claude (it preserves apostrophes). The fix was solving a non-problem and creating a real one.
-
-**Touches:** `packages/harness/src/parse-test-line.ts` (drop apostrophe from strip set in `normalizeTestNamePattern`), `packages/harness/src/parse-test-line.test.ts` (regression-pin: `"slug's log"` matches `"slug's log"`), `packages/harness/src/runners/test.ts` (verify the helper's invocation is post-escape), tests, README. ~30 LOC. Plus optional (d): `packages/harness/src/runners/test.ts` parse stdout for "regex matched 0 tests" + nonzero exit + harvested-test-name list nonempty → surface `harness/test-name-regex-no-match` as a distinct status. ~40 LOC.
-
-**Phasing suggestion:** v0.0.14 lead candidate. The "smoking gun" of the v0.0.13 BASELINE — closes a real soundness bug AND restores trust that validate's signal is meaningful.
-
----
-
-## `workspace:*` shipped to npm — `npx @wifo/factory-core init` fails for fresh users *(NEW, surfaced by v0.0.13 BASELINE — friction #2, MUST-FIX)*
-
-**What:** v0.0.13's published manifests for `factory-spec-review`, `factory-runtime`, `factory-harness`, `factory-twin`, and `factory-core` declare their internal `@wifo/factory-*` deps as `workspace:*`. The publish pipeline didn't rewrite these to real semver. Result: `npx @wifo/factory-core@0.0.13 init` fails immediately with `EUNSUPPORTEDPROTOCOL — Unsupported URL Type "workspace:":` because npm can't resolve `workspace:*` outside a pnpm workspace. `pnpm dlx` works (pnpm understands the protocol); `npx` doesn't.
-
-The BASELINE dogfooder workaround: add `pnpm.overrides` pinning every `@wifo/factory-*` to `0.0.13` in their generated `package.json` — making the scaffold "dirty" (uncommitted edits) the moment it's created. Every greenfield user pays this tax.
-
-**Why:** Root cause: v0.0.13.x's CI publish step switched from `pnpm publish` (which auto-rewrites `workspace:*` to `^<currentVersion>` at publish time) to `npm publish` (which doesn't). The switch was needed because `pnpm publish`'s OIDC handshake didn't propagate properly to bun's bundled npm — but in fixing that, we broke the rewrite. The two concerns weren't separable in a single change.
-
-**Shape options:**
-- (a) **Pre-publish step: run `pnpm pack --pack-destination /tmp/factory-tarballs` per package, then `npm publish /tmp/factory-tarballs/<name>-<version>.tgz`.** `pnpm pack` does the rewrite; `npm publish <tarball>` consumes the rewritten manifest. ~10 LOC in publish.yml. Cleanest split — pnpm rewrites, npm uploads.
-- (b) **Restore `pnpm publish` and find a different OIDC fix.** Revert the v0.0.13.x switch to npm; debug pnpm's OIDC propagation. Higher risk — pnpm 10.x's bundled npm might have OIDC support now (npm 11.5+ shipped recently).
-- (c) **Manual rewrite via jq before `npm publish`:** scan each `package.json`, replace `workspace:*` with `^<version>`, commit to disk before `npm publish` runs. ~20 LOC of jq + bash. Works but reinvents what pnpm already does.
-
-Lean: (a). `pnpm pack` is purpose-built for this; npm publish on the resulting tarball is purpose-built for the OIDC handshake. The two tools each do what they're best at.
-
-**Touches:** `.github/workflows/publish.yml` (per-package: `pnpm pack` to tmpdir, then `npx -y npm@latest publish <tmpdir>/<tarball>.tgz --access public --provenance`), `packages/core/src/ci-publish.test.ts` (update buildIdx/publishIdx matchers if needed), tests, README. ~30 LOC.
-
-**Phasing suggestion:** v0.0.14 lead candidate. Every fresh user hits this on first-contact — easily the highest-volume friction in the v0.0.13 ship.
-
----
-
-## `factory spec review` broken on published packages — `createRequire` hits CJS resolution against ESM-only exports map *(NEW, surfaced by v0.0.13 BASELINE — friction #3, MUST-FIX)*
-
-**What:** v0.0.13 kept the v0.0.12 `createRequire(import.meta.url)` workaround in `packages/core/src/cli.ts` to defer spec-review type resolution past the build cycle. `createRequire` does CJS-style resolution. `factory-spec-review`'s `package.json` declares `exports['./cli']` with only `import` + `types` conditions (no `require`). On the published packages: `createRequire('@wifo/factory-spec-review/cli')` cannot satisfy the resolution because the exports map blocks CJS. The error path catches this, prints nothing, and exits 0. **The reviewer cannot review on the published package.**
-
-In the workspace: workspace symlinks bypass the exports-map enforcement — that's why local development works and CI tests pass. Only the npm-published artifact is broken.
-
-**Why:** v0.0.13's "cycle-break" spec moved spec-review to peerDependencies (peer deps don't escape pnpm's cycle detector). The createRequire workaround stayed because pnpm's build still needed it. We didn't realize createRequire and the exports map are incompatible at runtime — the published artifact silently fails the documented happy path (`npx @wifo/factory-core spec review <path>`).
-
-**Shape options:**
-- (a) **Add `require` condition to `factory-spec-review`'s `exports['./cli']`.** Make the package CJS-and-ESM-friendly. ~5 LOC of JSON. But: spec-review's source is ESM-only; CJS consumers would need a separate compile target. Not really viable.
-- (b) **Replace `createRequire` with `await import()`** in `core/cli.ts`. ESM dynamic import respects exports map. Reintroduces the build-time cycle for tsc — but the v0.0.13 per-package build sequence in publish.yml already handles cycles. Requires tsc to either skip type-checking the dynamic import (via type-only declaration trick) OR accept the cycle.
-- (c) **Ship a `factory-cli` umbrella package** (option b deferred from v0.0.13 BACKLOG): thin package depending on both core + spec-review, providing the unified `factory` bin. core stops shipping a CLI; everything routes through factory-cli. Bigger blast radius (every adopter's `bin: factory` reference moves) but architecturally clean — eliminates the cycle entirely.
-- (d) **Spawn the reviewer as a subprocess via the `factory-spec-review` bin** instead of importing it. core's CLI dispatcher does `child_process.spawn('factory-spec-review', rest)` rather than reaching inside the spec-review package. Crosses a process boundary — slightly heavier but eliminates the type-resolution problem entirely.
-
-Lean: (d) for v0.0.14 (smallest, ships fast, isolates the import problem behind a process boundary; reviewer's bin already exists). (c) is the right v1.0.0 architecture but deferrable.
-
-**Touches:** `packages/core/src/cli.ts` (replace createRequire block with `child_process.spawn` of the factory-spec-review bin), `packages/core/package.json` (no change — peerDeps declaration stays, runtime resolves spec-review's bin from PATH via npm's bin-linking), `packages/core/src/cli.test.ts` (update v0.0.13 cycle-break tests — the createRequire pin reverts), tests, README. ~40 LOC.
-
-**Phasing suggestion:** v0.0.14 lead candidate. Closes the most-hidden of the three must-fix bugs — silent exit 0 means nobody notices until they realize spec review never produced output.
-
----
-
-## `factory finish-task --all-converged` ships specs that `run-sequence` called `no-converge` *(NEW, surfaced by v0.0.13 BASELINE — friction #4)*
-
-**What:** Run-1 of the v0.0.13 BASELINE explicitly reported `click-tracking: no-converge` (validate phase failed 5 times due to friction #1). Run-2's `factory finish-task --all-converged --since <run-1-id>` then **shipped click-tracking to `done/` despite the prior no-converge**. The dogfooder had to manually `mv` it back. Two parts of the toolchain disagree on what "converged" means: run-sequence's `SequenceReport.specs[].status === 'converged'` vs finish-task's predicate (likely just "a `factory-run` record exists with `implement: pass`").
-
-**Why:** The v0.0.12 finish-task spec defined "converged" as "the spec's most-recent factory-run reached `'converged'` status" but the implementation may have only checked for record existence + implement-phase success. The v0.0.12 dedup-status correctness fix (in `factory-runtime-v0-0-12-correctness`) closed a similar bug for run-sequence's already-converged dedup; finish-task wasn't audited for the same shape.
-
-**Shape options:**
-- (a) **`finish-task --all-converged` walks `factory-phase` records (same logic as v0.0.12's run-sequence dedup) and verifies all iterations' terminal phase is `'pass'`** before adding the spec to the move-list. Reuses the same helper. ~30 LOC.
-- (b) **`finish-task` reads the run's `RunReport.status` field directly** if persisted (v0.0.12 might persist this; otherwise reconstruct from phases per (a)).
-- (c) **Add a confirmation prompt** when finish-task moves a spec whose RunReport.status was anything but 'converged'. Worse — doesn't auto-progress.
-
-Lean: (a). Reuse the v0.0.12 helper; one source of truth for "did this spec converge?".
-
-**Touches:** `packages/core/src/finish-task.ts` (call into the existing aggregator), `packages/core/src/finish-task.test.ts` (regression-pin: a spec with no-converge factory-run is NOT moved by `--all-converged`), tests, README. ~50 LOC.
-
-**Phasing suggestion:** v0.0.14. Pairs with friction #1 (the apostrophe bug exposed this) — both are "iteration trust gone wrong" bugs.
-
----
-
-## `--context-dir` default differs across `factory-runtime` / `factory finish-task` / `factory-context` *(NEW, surfaced by v0.0.13 BASELINE — friction #5)*
-
-**What:** Three CLIs that consume the same context store have three different defaults: `factory-runtime` defaults to `./.factory`, `factory finish-task` defaults to `./context`, `factory-context` historically defaulted to `./context` and gained `--context-dir` as a synonym for `--dir` in v0.0.10. Forgetting the flag silently looks for records in the wrong directory and reports `no factory-sequence found` — the records exist, the lookup just doesn't see them.
-
-**Why:** Each CLI's default landed in a different release without cross-CLI coordination. v0.0.13's `factory finish-task` is the most recent addition and inherited the wrong default — should have matched runtime's `./.factory` (the directory `factory init` actually creates). Trivial fix; high frustration cost when forgotten.
-
-**Shape options:**
-- (a) **Universal default: `./.factory`** — the directory `factory init` actually creates. Update `finish-task` (default was `./context`); update `factory-context` (default was `./context`). Document the breaking change in CHANGELOG; preserve old default behind `--legacy-context-dir-default` for one release if needed.
-- (b) **Auto-detect from `factory.config.json`** in cwd. If the config has `runtime.contextDir`, use it; otherwise fall back to `./.factory`. ~30 LOC.
-- (c) **Both** — auto-detect from config, fall back to `./.factory`.
-
-Lean: (c). The factory.config.json field already exists (v0.0.6+); the CLIs just need to read it. ~50 LOC across 3 CLIs.
-
-**Touches:** `packages/core/src/finish-task.ts`, `packages/core/src/cli.ts` (finish-task default), `packages/context/src/cli.ts` (default change), all three packages' test suites + READMEs. ~60 LOC.
-
-**Phasing suggestion:** v0.0.14. Small lift; high-frequency annoyance.
-
----
-
-## Scaffold's `biome.json` fails its own `pnpm check` until `--write` runs *(NEW, surfaced by v0.0.13 BASELINE — friction #6)*
-
-**What:** v0.0.13's `factory-core-v0-0-13-init-ergonomics` spec migrated `biome.json` from Biome 1.x's `"include"` to 2.x's `"includes"`. The schema-key migration is correct. But the template's actual format — multi-line `"includes": [\n  "**"\n]` array — fails biome's own lineWidth=100 single-vs-multi-line rule on a fresh `pnpm check`. `pnpm check --write` heals it (collapses to single-line). The scaffold can't pass its own DoD on day zero.
-
-**Why:** Biome's formatter rule for short arrays prefers single-line. The template was written multi-line for human readability; biome's auto-format disagrees. Either format the template through biome at write time, OR write it in the format biome expects.
-
-**Shape options:**
-- (a) **Single-line the template:** `"includes": ["**"]` (biome's preferred format). Trivial. ~3 LOC.
-- (b) **Run `biome format --write` on the template at init time** — `factory init` formats the just-written biome.json through the locally-installed biome. Heavier; assumes biome is already installed at init time (pnpm install runs after init).
-- (c) **Run a self-test in `factory init.test.ts`**: scaffold a tmp tree, run `pnpm check`, assert exit 0. Catches this class of bug going forward without changing the template format.
-
-Lean: (a) + (c). Single-line the template (matches biome's preference) AND add a regression-pin that scaffold passes `pnpm check` on day zero (this is the v0.0.13 init-ergonomics spec's stated DoD — the test was missing).
-
-**Touches:** `packages/core/src/init-templates.ts` (single-line BIOME_JSON_TEMPLATE arrays), `packages/core/src/init.test.ts` (new test: scaffold + `pnpm check` exit 0), tests, README. ~30 LOC.
-
-**Phasing suggestion:** v0.0.14. Closes the regression-pin gap that v0.0.13's spec promised but didn't actually verify.
-
----
-
-## Day-0 DoD gates fail on freshly-scaffolded tree *(NEW, surfaced by v0.0.13 BASELINE — friction #7)*
-
-**What:** `factory init`'s scaffolded `src/` contains only `.gitkeep` (v0.0.13). Running the scaffold's documented DoD gates immediately:
-- `pnpm typecheck` — empty src/, no .ts files: tsc errors out with "no inputs."
-- `pnpm test` — `bun test src` finds zero `.test.ts` files; bun returns nonzero ("no tests found").
-- `pnpm check` — fails per friction #6 above.
-
-Reasonable for a blank project, but the `dod.template` v0.0.13 ships claims these gates work. A new user runs `factory init`, runs `pnpm <gate>`, sees three failures, loses trust in the toolchain.
-
-**Why:** v0.0.13 shipped `.gitkeep` to ensure `.factory/` directory exists, but didn't add a stub `src/index.ts` + `src/index.test.ts` so the gates the DoD template claims pass actually do pass. Friction #6 is the same shape — scaffold doesn't pass its own DoD claims.
-
-**Shape options:**
-- (a) **Scaffold ships `src/index.ts` (`export const VERSION = '0.0.0';`) + `src/index.test.ts` (`test('VERSION exists', () => expect(VERSION).toBe('0.0.0'))`).** Day-0 typecheck + test pass. The agent overwrites them when scoping the first feature.
-- (b) **Scaffold ships a `// TODO: implement` placeholder** that satisfies tsc but leaves test empty (skipped via `test.skip`). Less "real" but doesn't ship dead code.
-- (c) **`factory init` doesn't write `src/`** — let the maintainer create it. DoD template adjusts to acknowledge "tests pass when src/ is non-empty."
-
-Lean: (a). The stub is small (~10 LOC), real, and overwritten on first feature scope. Day-0 DoD passes cleanly.
-
-**Touches:** `packages/core/src/init-templates.ts` (new INDEX_TS_TEMPLATE + INDEX_TEST_TEMPLATE; init writes them alongside `.gitkeep`), `packages/core/src/init.test.ts` (regression-pin: day-0 `pnpm typecheck && pnpm test && pnpm check` all exit 0), tests, README. ~50 LOC.
-
-**Phasing suggestion:** v0.0.14. Pairs with friction #6 — both "scaffold passes its own DoD" promises that v0.0.13 made and didn't deliver.
-
----
-
-## YAML colon-in-string parse trap on frontmatter *(NEW, surfaced by v0.0.13 BASELINE — friction #8)*
-
-**What:** A spec frontmatter value containing an unquoted colon — e.g., `why: \`clicks: Map<string, Click[]>\`` (using backtick quoting) — gets parsed by YAML as a nested mapping (the inner `: ` is read as a key/value separator). Lint catches it at scoping time as a parse error, but the message is YAML-jargon-y and the spec author has to debug "what's wrong with this colon?". Small friction, high re-discovery rate.
-
-**Why:** YAML's bare-string vs quoted-string parsing rules are notoriously confusing. The fix is structural — auto-quote any frontmatter value that contains a colon during `/scope-project`'s authoring step, OR upgrade lint to detect the pattern and emit a friendlier message.
-
-**Shape options:**
-- (a) **Lint upgrade: detect colons in unquoted frontmatter values and emit `spec/yaml-colon-needs-quoting`** with a fix-suggestion message ("wrap the value in single or double quotes"). Severity warning. ~30 LOC.
-- (b) **`/scope-project` auto-quotes values containing colons.** The slash-command source's authoring rules add: "if a frontmatter value contains `:`, wrap in single quotes." Prevents the bomb at scoping time.
-- (c) **Both.** Lint catches at scoping time; slash command writes correctly by default.
-
-Lean: (c). Both are small; combined they close the issue from author-side AND tool-side.
-
-**Touches:** `packages/core/src/lint.ts` (new lint code), `packages/core/commands/scope-project.md` (frontmatter-quoting rule), `packages/core/src/lint.test.ts`, `packages/core/src/scope-project-source.test.ts`, tests, READMEs. ~70 LOC.
-
-**Phasing suggestion:** v0.0.14. Smaller; pairs with friction #6 + #7 in the "scaffold ergonomics" cluster.
-
----
-
-## Skill-injection noise reaches subprocess agents *(NEW, surfaced by v0.0.13 BASELINE — friction #9)*
-
-**What:** When the runtime spawns `claude -p` for the implement phase, the spawned Claude's session-start hooks inject Vercel/Next.js/AI-SDK skill-best-practice context into its prompt. The implement agent in the v0.0.13 BASELINE explicitly noted in its result field: *"I noticed and ignored several Vercel/Next.js/bootstrap skill auto-suggestions from session-start hooks — they were false positives (this is a Bun-only project with no Vercel or Next.js)."* The noise is constant per-subprocess; even when ignored, the implement agent's prompt budget gets eaten by hook context.
-
-**Why:** Session-start hooks fire on every `claude -p` invocation. The runtime's `claude -p` invocations are headless + scoped to a specific spec — they don't benefit from session-start chrome (most session-start hooks are user-environment-aware, not spec-scoped). The runtime should suppress them.
-
-**Shape options:**
-- (a) **Pass `--no-session-start-hooks` (or equivalent) to `claude -p` in `implementPhase`.** Check what claude CLI supports; v2.x has a `--no-hooks` option. ~5 LOC if the flag exists.
-- (b) **Spawn `claude -p` with a clean env (`HOME=/tmp/factory-claude-home`)** so user-level hooks don't fire. Heavier; might disable subscription auth too.
-- (c) **Filter agent stdout/stderr to drop hook output** — too late; the hooks already fired and consumed prompt budget.
-- (d) **Document the limitation in factory-runtime/README.md** — punt the fix to upstream claude. Don't ship a workaround.
-
-Lean: (a) if claude supports `--no-hooks`; otherwise (d). Investigate first. The fix is tiny if the flag exists.
-
-**Touches:** `packages/runtime/src/phases/implement.ts` (add the flag to the `claude -p` arg list), tests, README. ~10 LOC if (a); 0 LOC + docs if (d).
-
-**Phasing suggestion:** v0.0.14. Smallest of the 9 entries; ships with the cluster if the flag exists, otherwise documents.
+**v0.0.14 dogfood summary:** 8 specs across 2 invocations (recovery from stale-dist on the apostrophe fix). 7/8 first-iter; 1/8 (claude-no-hooks) agent-exit-nonzero with work correctly landed (same v0.0.11 worktree-spec friction shape). Total ~145 min wall-clock; ~282k charged tokens. All work in tree; tests confirm: 232 core / 71 harness / 255 runtime / 106 spec-review. Public API surface: factory-core 34 → 35 (+`resolveContextDir`); other packages unchanged.
 
 ---
 

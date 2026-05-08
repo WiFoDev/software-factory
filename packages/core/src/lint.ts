@@ -52,19 +52,38 @@ export function lintSpec(source: string, opts: LintOptions = {}): LintError[] {
     throw err;
   }
 
+  // v0.0.14 — detect unquoted colon-space in top-level frontmatter values.
+  // Common trap: `why: \`clicks: Map<string, Click[]>\`` parses as a nested
+  // mapping (BLOCK_AS_IMPLICIT_KEY). We scan the source pre-parse so we can
+  // emit a friendly warning instead of the cryptic YAML error.
+  const colonTrapLines = detectYamlColonTrapLines(split.yaml, split.yamlStartLine);
+  for (const line of colonTrapLines) {
+    push({
+      line,
+      severity: 'warning',
+      code: 'spec/yaml-colon-needs-quoting',
+      message:
+        "frontmatter value contains an unquoted colon-space; wrap in single quotes (e.g., 'clicks: Map<string, Click[]>')",
+    });
+  }
+
   let yamlValue: unknown = null;
   try {
     yamlValue = parseYaml(split.yaml, { prettyErrors: true });
   } catch (err) {
     if (err instanceof YAMLParseError) {
-      const offset = split.yamlStartLine - 1;
-      const yamlLine = err.linePos?.[0]?.line;
-      push({
-        line: typeof yamlLine === 'number' ? yamlLine + offset : split.fenceStartLine,
-        severity: 'error',
-        code: 'frontmatter/yaml',
-        message: `YAML parse error: ${err.message}`,
-      });
+      // Suppress the cryptic YAML parse error when our colon-trap scanner
+      // already explained the issue with a friendlier warning.
+      if (colonTrapLines.length === 0) {
+        const offset = split.yamlStartLine - 1;
+        const yamlLine = err.linePos?.[0]?.line;
+        push({
+          line: typeof yamlLine === 'number' ? yamlLine + offset : split.fenceStartLine,
+          severity: 'error',
+          code: 'frontmatter/yaml',
+          message: `YAML parse error: ${err.message}`,
+        });
+      }
     } else {
       throw err;
     }
@@ -332,3 +351,25 @@ const NON_ASCII_QUOTE_RE = /[‘’“”]/;
 const DOD_BULLET_RE = /^\s*[-*]\s+(.*)$/;
 const DOD_BACKTICK_SPAN_RE = /`[^`]+`/;
 const DOD_GATE_KEYWORDS_RE = /\b(typecheck|tests?|lint|check|build|green|clean|passes?)\b/i;
+
+// Top-level frontmatter `key: value` line (zero-indent, simple key, inline value).
+const TOP_LEVEL_KEY_VALUE_RE = /^([A-Za-z_][\w-]*):[ \t]+(.+?)\s*$/;
+// Colon followed by a space anywhere in the value (the YAML nested-mapping trigger).
+const COLON_SPACE_IN_VALUE_RE = /:[ \t]/;
+
+function detectYamlColonTrapLines(yamlSource: string, yamlStartLine: number): number[] {
+  const hits: number[] = [];
+  const lines = yamlSource.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line === undefined) continue;
+    const m = TOP_LEVEL_KEY_VALUE_RE.exec(line);
+    if (!m) continue;
+    const value = m[2];
+    if (value === undefined || value === '') continue;
+    if (value.startsWith("'") || value.startsWith('"')) continue;
+    if (!COLON_SPACE_IN_VALUE_RE.test(value)) continue;
+    hits.push(yamlStartLine + i);
+  }
+  return hits;
+}

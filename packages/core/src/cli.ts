@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process';
 import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { constants as osConstants } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { readContextDirFromConfig, resolveContextDir } from './context-dir.js';
 import { finishTask } from './finish-task.js';
 import { runInit } from './init.js';
 import { getFrontmatterJsonSchema } from './json-schema.js';
@@ -73,26 +75,37 @@ export function runCli(argv: string[], io: CliIo = defaultIo): void {
     return;
   }
   if (command === 'review') {
-    // Resolved via `createRequire` rather than a static import to avoid
-    // a build-time cycle. v0.0.13 moved `@wifo/factory-spec-review` to
-    // `peerDependencies` of `@wifo/factory-core` — but pnpm treats peer
-    // deps as cycle edges, so the build-graph cycle (core ← spec-review
-    // ← core via the spec-review → core dep) remains. The runtime
-    // resolution still goes through the standard package resolver, so
-    // `npx -p @wifo/factory-core factory spec review` works zero-config.
-    void (async () => {
-      try {
-        const requireSpecReview = createRequire(import.meta.url);
-        const { runReviewCli } = requireSpecReview('@wifo/factory-spec-review/cli') as {
-          runReviewCli: (argv: string[], io: CliIo) => Promise<void>;
-        };
-        await runReviewCli(rest, io);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        io.stderr(`${msg}\n`);
+    // v0.0.14: spawn the factory-spec-review bin as a subprocess.
+    // The process boundary eliminates the CJS/ESM resolution friction
+    // that bit v0.0.12/v0.0.13 against spec-review's ESM-only exports
+    // map. npm/pnpm auto-link `factory-spec-review` onto PATH via the
+    // peer-dep relationship, so this works zero-config under any
+    // modern package manager.
+    const child = spawn('factory-spec-review', rest, {
+      stdio: ['inherit', 'pipe', 'pipe'],
+      env: process.env,
+    });
+    child.stdout?.on('data', (chunk: Buffer) => io.stdout(chunk.toString('utf8')));
+    child.stderr?.on('data', (chunk: Buffer) => io.stderr(chunk.toString('utf8')));
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') {
+        io.stderr(
+          'factory: factory-spec-review not found on PATH. With pnpm 8+/npm 7+ it should auto-install as a peer dep of factory-core. For legacy npm: npm install @wifo/factory-spec-review\n',
+        );
         io.exit(2);
+        return;
       }
-    })();
+      io.stderr(`${err.message}\n`);
+      io.exit(2);
+    });
+    child.on('exit', (code, signal) => {
+      if (signal !== null) {
+        const signum = (osConstants.signals as Record<string, number>)[signal] ?? 2;
+        io.exit(128 + signum);
+        return;
+      }
+      io.exit(code ?? 0);
+    });
     return;
   }
   if (command === 'watch') {
@@ -146,8 +159,13 @@ function runFinishTask(args: string[], io: CliIo): void {
   }
 
   const dir = typeof parsed.values.dir === 'string' ? parsed.values.dir : 'docs/specs';
-  const contextDirRaw =
-    typeof parsed.values['context-dir'] === 'string' ? parsed.values['context-dir'] : './context';
+  const cliContextDirFlag =
+    typeof parsed.values['context-dir'] === 'string' ? parsed.values['context-dir'] : undefined;
+  const configContextDir = readContextDirFromConfig(process.cwd());
+  const contextDirRaw = resolveContextDir({
+    cliFlag: cliContextDirFlag,
+    configValue: configContextDir,
+  });
   const dirAbs = resolve(process.cwd(), dir);
   const contextDir = resolve(process.cwd(), contextDirRaw);
 
@@ -163,8 +181,16 @@ function runFinishTask(args: string[], io: CliIo): void {
         for (const r of result.shipped) {
           io.stdout(`factory: shipped ${r.specId} → done/ (run ${r.runId.slice(0, 8)})\n`);
         }
+        for (const s of result.skipped) {
+          io.stdout(
+            `factory: skipped ${s.specId} (run ${s.runId.slice(0, 8)} did not converge — last phase: ${s.terminalPhase})\n`,
+          );
+        }
+        const shippedCount = result.shipped.length;
+        const skippedCount = result.skipped.length;
+        const shippedWord = shippedCount === 1 ? 'spec' : 'specs';
         io.stdout(
-          `factory: shipped ${result.shipped.length} specs from sequence ${result.factorySequenceId.slice(0, 8)}\n`,
+          `factory: shipped ${shippedCount} ${shippedWord} from sequence ${result.factorySequenceId.slice(0, 8)} (${skippedCount} skipped)\n`,
         );
         io.exit(0);
         return;

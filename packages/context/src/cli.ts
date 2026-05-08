@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -14,9 +14,13 @@ const USAGE = `Usage:
 
 Flags:
   --type <name>           For list: filter by record type
-  --context-dir <path>    Records directory (default: ./context). Synonym: --dir (deprecated, removed in v0.1.0).
+  --context-dir <path>    Records directory (default: ./.factory, v0.0.14+). Synonym: --dir (deprecated, removed in v0.1.0).
   --direction <up|down>   For tree: walk ancestors (up) or descendants (down). Default: up.
 `;
+
+// v0.0.14 universal default — matches the directory `factory init` creates.
+// Mirrors `FACTORY_CONTEXT_DIR_DEFAULT` exported from `@wifo/factory-core`.
+const FACTORY_CONTEXT_DIR_DEFAULT = './.factory';
 
 const DEPRECATION_NOTICE =
   'context/deprecated-flag: --dir is deprecated; use --context-dir (will be removed in v0.1.0)\n';
@@ -40,9 +44,24 @@ const defaultIo: CliIo = {
   },
 };
 
-function resolveDir(value: unknown): string {
-  const dir = typeof value === 'string' ? value : './context';
-  return resolve(process.cwd(), dir);
+/**
+ * v0.0.14 — read `runtime.contextDir` from `<cwd>/factory.config.json` if
+ * present. Returns undefined for missing/malformed/non-string values. Mirrors
+ * `readContextDirFromConfig` in `@wifo/factory-core` (duplicated to avoid
+ * adding a workspace dep across packages that don't already share one).
+ */
+function readContextDirFromConfig(cwd: string): string | undefined {
+  const path = resolve(cwd, 'factory.config.json');
+  if (!existsSync(path)) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    const runtime = (parsed as { runtime?: unknown }).runtime;
+    if (runtime === null || typeof runtime !== 'object') return undefined;
+    const v = (runtime as { contextDir?: unknown }).contextDir;
+    return typeof v === 'string' ? v : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -50,13 +69,20 @@ function resolveDir(value: unknown): string {
  * When `--dir` is passed (with or without `--context-dir`), emit a one-line
  * deprecation notice on stderr exactly once. When both are passed,
  * `--context-dir` wins (canonical takes precedence over alias).
+ *
+ * v0.0.14 — when neither flag is set, fall back to
+ * `factory.config.json runtime.contextDir`, then to the universal default
+ * `./.factory`. Precedence: CLI flag > config > universal default.
  */
 function resolveContextDir(values: { 'context-dir'?: string; dir?: string }, io: CliIo): string {
   if (values.dir !== undefined) {
     io.stderr(DEPRECATION_NOTICE);
   }
-  const chosen = values['context-dir'] ?? values.dir;
-  return resolveDir(chosen);
+  const cliFlag = values['context-dir'] ?? values.dir;
+  if (cliFlag !== undefined) return resolve(process.cwd(), cliFlag);
+  const configValue = readContextDirFromConfig(process.cwd());
+  const chosen = configValue ?? FACTORY_CONTEXT_DIR_DEFAULT;
+  return resolve(process.cwd(), chosen);
 }
 
 export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<void> {

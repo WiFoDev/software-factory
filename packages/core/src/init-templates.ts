@@ -20,14 +20,14 @@ export const PACKAGE_JSON_TEMPLATE = {
     build: 'tsc -p tsconfig.build.json',
   },
   dependencies: {
-    '@wifo/factory-context': '^0.0.13',
-    '@wifo/factory-core': '^0.0.13',
-    '@wifo/factory-runtime': '^0.0.13',
+    '@wifo/factory-context': '^0.0.14',
+    '@wifo/factory-core': '^0.0.14',
+    '@wifo/factory-runtime': '^0.0.14',
   },
   devDependencies: {
     '@biomejs/biome': '^2.4.4',
     '@types/bun': '^1.1.14',
-    '@wifo/factory-spec-review': '^0.0.13',
+    '@wifo/factory-spec-review': '^0.0.14',
     typescript: '^5.6.0',
   },
 } as const;
@@ -36,27 +36,33 @@ export const PACKAGE_JSON_TEMPLATE = {
 // monorepo-relative path doesn't resolve outside this repo). Inlines the
 // strict + ES2022 + verbatimModuleSyntax + noUncheckedIndexedAccess settings
 // the examples rely on so a fresh repo gets the same compiler discipline.
-export const TSCONFIG_TEMPLATE = {
-  compilerOptions: {
-    target: 'ES2022',
-    module: 'ESNext',
-    moduleResolution: 'Bundler',
-    lib: ['ES2022'],
-    types: ['bun'],
-    strict: true,
-    noUncheckedIndexedAccess: true,
-    noImplicitOverride: true,
-    noFallthroughCasesInSwitch: true,
-    esModuleInterop: true,
-    skipLibCheck: true,
-    forceConsistentCasingInFileNames: true,
-    resolveJsonModule: true,
-    isolatedModules: true,
-    verbatimModuleSyntax: true,
+//
+// v0.0.14 — pre-formatted string (not JSON.stringify'd) so short array values
+// (`lib`, `types`, `include`, `exclude`) stay single-line. With BIOME_JSON_TEMPLATE's
+// `files.includes: ["**"]`, biome scans tsconfig.json on `pnpm check`; multi-line
+// 1-2-element arrays would self-flag biome's lineWidth=100 rule.
+export const TSCONFIG_TEMPLATE = `{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "types": ["bun"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true
   },
-  include: ['src/**/*'],
-  exclude: ['node_modules', '.factory'],
-} as const;
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", ".factory"]
+}
+`;
 
 // v0.0.13 — `.factory/` itself is tracked (a `.gitkeep` is committed) so users
 // see the dir exists from the start; only the per-record subdirs the runtime
@@ -111,25 +117,43 @@ export const FACTORY_CONFIG_TEMPLATE = {
 
 // Minimal biome.json shipped with the scaffold so `pnpm check` resolves a real
 // config out of the box. Mirrors the monorepo's biome.json shape (linter +
-// formatter both on; recommended ruleset; src/** scoped) without project-
-// specific overrides. Internal-only — NOT exported from `core/src/index.ts`.
+// formatter both on; recommended ruleset) without project-specific overrides.
+// Internal-only — NOT exported from `core/src/index.ts`.
 //
-// v0.0.13 — schema migrates from Biome 1.x's `files.include` key to Biome 2.x's
+// v0.0.14 — pre-formatted string (not JSON.stringify'd) so short array values
+// stay single-line: `"includes": ["**"]` not the multi-line array JSON.stringify
+// would emit. The v0.0.13 BASELINE caught `pnpm check` self-flagging biome.json's
+// own multi-line `includes` array under biome's lineWidth=100 rule. The
+// `["**"]` glob also widens the scan to all scaffold files (biome.json,
+// tsconfig.json, package.json, factory.config.json, src/**) so the day-zero
+// `pnpm check` actually validates the scaffold rather than no-op'ing.
+//
+// v0.0.13 — schema migrated from Biome 1.x's `files.include` key to Biome 2.x's
 // `files.includes` key. The schema major MUST stay in lockstep with the
 // `@biomejs/biome` major pinned in `PACKAGE_JSON_TEMPLATE.devDependencies`
 // (currently `^2.4.4`). If a future scaffold change bumps Biome to 3.x, this
 // template must update in the same commit; otherwise `pnpm check` errors on
 // schema-key parse failures against a freshly-scaffolded tree.
-export const BIOME_JSON_TEMPLATE = {
-  $schema: 'https://biomejs.dev/schemas/2.4.4/schema.json',
-  linter: { enabled: true, rules: { recommended: true } },
-  // `indentStyle: 'space'` matches the 2-space JSON.stringify output `init.ts`
-  // serializes this template to. Without it, Biome 2.x's default `tab`
-  // indentStyle would self-flag the scaffolded biome.json on the very first
-  // `pnpm check` run — exactly the friction this v0.0.13 spec closes.
-  formatter: { enabled: true, indentStyle: 'space', indentWidth: 2, lineWidth: 100 },
-  files: { includes: ['src/**/*.ts', 'src/**/*.tsx'] },
-} as const;
+export const BIOME_JSON_TEMPLATE = `{
+  "$schema": "https://biomejs.dev/schemas/2.4.4/schema.json",
+  "linter": { "enabled": true, "rules": { "recommended": true } },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "files": { "includes": ["**"] }
+}
+`;
+
+// v0.0.14 — stub source + test shipped in `src/` so the day-zero DoD gates
+// (`pnpm typecheck`, `pnpm test`) have real input to operate on. Without these,
+// tsc would compile zero files (exit 0 trivially is fine, but `bun test src`
+// errors `no tests found`). Both stubs are intentionally tiny — agents
+// overwrite them on first feature scope without ceremony.
+export const INDEX_TS_TEMPLATE = `export const VERSION = "0.0.0";\n`;
+
+export const INDEX_TEST_TEMPLATE = `import { expect, test } from "bun:test";
+import { VERSION } from "./index.js";
+
+test("VERSION exists", () => expect(VERSION).toBe("0.0.0"));
+`;
 
 export const README_TEMPLATE = `# {{name}}
 

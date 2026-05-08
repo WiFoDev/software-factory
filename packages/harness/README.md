@@ -64,6 +64,14 @@ import type {
 
 **Quote-char normalization in test-name patterns (v0.0.12+).** Stylistic apostrophes drift between a spec's `test:` line (e.g. `"v0.0.10's hash"`) and the test's actual `it()` name (e.g. `'v0.0.10s hash'` — auto-stylized during implementation), so an exact substring match no-matches correct work. The harness now normalizes quote-like characters (ASCII + curly apostrophes, ASCII + curly double-quotes, backticks) on the pattern before passing `-t` to bun. The companion `factory spec lint` rule `spec/test-name-quote-chars` catches non-ASCII quote chars at scoping time so authors can rewrite cleanly.
 
+**Test-name regex matching (v0.0.14).** The v0.0.12 strip-everything carve-out caused the opposite bug: a spec that genuinely uses `"slug's log"` got stripped to `"slugs log"` before `-t`, while the actual test in the file kept the apostrophe → bun's regex matched 0 tests → 5 phantom no-converge iterations on the v0.0.13 BASELINE. v0.0.14 narrows the strip set:
+
+- **Apostrophes (ASCII `'` and curly `‘’`)**: preserved as literal characters on both sides of the comparison. Modern Claude reliably emits apostrophes in `it()` names; the strip caused false negatives.
+- **Curly double-quotes (`“”`)**: still converted to ASCII `"` (helpful when authors paste from rich-text editors).
+- **Backticks**: still stripped (existing behavior).
+
+A complementary safety net: when bun reports `regex "<pattern>" matched 0 tests` *and* exits non-zero, the satisfaction is classified as `status: 'error'` (NOT `fail`) with detail prefix `harness/test-name-regex-no-match: <marker> in <file>; <existing tail>`. The runtime treats `error` as a tooling-mismatch halting condition rather than re-running the implement phase trying to fix non-existent assertion failures. The detector mirrors the v0.0.13 coverage-trip shape; the coverage-trip path takes precedence when both signals appear.
+
 **`JudgeClient` interface.** A single method `judge(args)` that takes `{ criterion, scenario, artifact, model, timeoutMs }` and returns `{ pass, score, reasoning }`. The runtime ships `claudeCliJudgeClient` (subprocess-based) in `@wifo/factory-spec-review`; you can implement your own (e.g., for a different LLM provider).
 
 **Status enum.** Each scenario's satisfaction lines aggregate into one of `pass`, `fail`, `error`, `skipped`. `runHarness` aggregates per-scenario results into the report.

@@ -6,6 +6,48 @@ For the project's forward direction and shipped-release retrospectives, see [`RO
 
 ---
 
+## [0.0.14] — 2026-05-08
+
+**Theme: v0.0.13 recovery — 3 must-fix correctness bugs + 6 scaffold/CLI ergonomics polish.** v0.0.13's URL-shortener BASELINE surfaced 3 hard regressions (apostrophe-strip phantom no-converge, `workspace:*` shipped to npm, `factory spec review` broken on published packages) plus 6 honorable-mention polishes. v0.0.14 ships all 9 in 8 sibling specs — 7/8 first-iter, 1/8 agent-exit-nonzero with work landed (same v0.0.11 worktree-spec friction shape; the implementation is correct).
+
+### Added
+
+- **Harness regex-no-match safety net** *(factory-harness)*. When `bun test -t <pattern>` exits nonzero AND its output contains `regex .+ matched 0 tests`, the runner classifies the satisfaction as `status: 'error'` with detail prefix `harness/test-name-regex-no-match: <pattern> matched 0 tests in <file>` instead of `'fail'`. The runtime treats `error` as a tooling-mismatch signal (not as "implementation broken — re-implement"), which prevents the v0.0.13 phantom-no-converge loop. Mirrors v0.0.13's coverage-trip detection shape.
+- **`factory finish-task --all-converged` status-aggregator** *(factory-core)*. Walks each candidate factory-run's descendant `factory-phase` records, finds the FINAL iteration's terminal phase, and only ships when `terminalPhase === 'pass'`. Skipped specs surface as `factory: skipped <id> (run <runId> did not converge — last phase: <status>)`. The all-no-converge sequence case is a safe no-op (exit 0, shipped=0). Closes the v0.0.13 BASELINE friction where finish-task disagreed with run-sequence on what "converged" means.
+- **`resolveContextDir` helper** *(factory-core)*. Pure function exported from `@wifo/factory-core` that resolves the precedence chain `cliFlag → configValue → './.factory'`. Used by `factory finish-task`; mirrored in `factory-context`. Public API surface delta: `@wifo/factory-core` 34 → 35 (+1).
+- **Day-zero scaffold passes its own DoD gates** *(factory-core)*. `factory init` now writes a stub `src/index.ts` (`export const VERSION = '0.0.0';`) + `src/index.test.ts` (1 test) so `pnpm typecheck && pnpm test && pnpm check` all exit 0 on the freshly-scaffolded tree. Single-line `BIOME_JSON_TEMPLATE` arrays so biome's lineWidth=100 rule doesn't trip on the template's own format. The agent overwrites the stubs on first feature scope.
+- **Lint code `spec/yaml-colon-needs-quoting`** *(factory-core)*. Severity warning. Detects unquoted frontmatter values containing `: ` (which YAML parses as a nested mapping) and emits a friendly fix-suggestion ("wrap the value in single quotes"). `/scope-project`'s authoring rules updated to auto-quote — prevents the bomb at scoping time so the lint warning rarely fires in practice.
+- **`--setting-sources project,local` on `claude -p` spawns** *(factory-runtime)*. Excludes user-level `~/.claude/settings.json` global plugin/skill auto-suggestion hooks (e.g., the Vercel/Next.js skill injection the v0.0.13 implement-phase agent reported as false-positive noise). Subscription auth is preserved (OAuth/keychain credentials live outside settings.json). Project-level `.claude/settings.json` and `*.local.json` hooks still load — only user-level global noise is filtered.
+
+### Changed
+
+- **`normalizeTestNamePattern` no longer strips apostrophes** *(factory-harness)*. v0.0.12's apostrophe-stripping (added to handle hypothetical agent stylization of `it()` names) caused a real soundness bug: specs that genuinely used `"slug's log"` had the apostrophe stripped to `"slugs log"` before passing to bun's `-t` regex, but the actual test still had the apostrophe → bun matched 0 tests → 5 wasted iterations on phantom no-converge in the v0.0.13 BASELINE. The strip set is reduced to curly-double-quotes only; apostrophes (ASCII + curly) are now treated as literals. Modern Claude preserves apostrophes correctly in test names; the original motivation didn't manifest.
+- **`factory spec review` dispatches via `child_process.spawn` instead of `createRequire`** *(factory-core)*. v0.0.13's `createRequire(import.meta.url)` workaround for the workspace cycle hit CJS resolution against `factory-spec-review`'s ESM-only exports map → silent exit 0 on the npm-published artifact (the workspace symlink-bypass masked it). v0.0.14 spawns the `factory-spec-review` bin as a subprocess; process boundary eliminates the type-resolution AND the CJS/ESM mismatch. Subscription auth preserved via env propagation. The factory-cli umbrella package option stays deferred for v1.0.0.
+- **`--context-dir` universal default flips from `./context` to `./.factory`** *(factory-core, factory-context)*. `factory init` creates `./.factory`, so the previous split — `factory-runtime` defaulted to `./.factory` while `factory finish-task` and `factory-context` defaulted to `./context` — silently looked in the wrong directory. v0.0.14 unifies all three CLIs on `./.factory` AND adds auto-detect from `factory.config.json runtime.contextDir`. Precedence: CLI flag (`--context-dir`) > `factory.config.json runtime.contextDir` > universal default `./.factory`. **Breaking** for users who relied on the old `./context` default — pass `--context-dir ./context` to keep the v0.0.13 behavior.
+- **CI publish flow uses `pnpm pack` + `npm publish <tarball>` two-step** *(workflow)*. v0.0.13.x's switch from `pnpm publish` to `npm publish` (for OIDC handshake) lost pnpm's automatic `workspace:*` → `^<version>` rewrite, breaking `npx @wifo/factory-core init` for fresh users. v0.0.14 splits the responsibilities: `pnpm pack` does the manifest rewrite + produces a tarball; `npm publish <tarball> --provenance` uploads via OIDC. Post-publish verification re-fetches each manifest and fails the workflow if `workspace:` leaks through — regression-pin against future shape regressions.
+- **All six `@wifo/factory-*` packages bumped to `0.0.14`** in lockstep. `init-templates.ts` `PACKAGE_JSON_TEMPLATE.dependencies` bumped from `^0.0.13` to `^0.0.14` for every `@wifo/factory-*` dep.
+
+### Public API surface
+
+| Package | v0.0.13 | v0.0.14 |
+|---|---|---|
+| `@wifo/factory-core` | 34 | 35 (+`resolveContextDir`) |
+| `@wifo/factory-context` | 18 | 18 |
+| `@wifo/factory-harness` | ~16 | ~16 |
+| `@wifo/factory-runtime` | 26 | 26 |
+| `@wifo/factory-spec-review` | 10 | 10 |
+| `@wifo/factory-twin` | ~7 | ~7 |
+
+### Reconciliations worth knowing
+
+- **8 specs across 2 run-sequence invocations.** Run-1 hit the same stale-dist issue as v0.0.12 (the runtime process loaded harness/dist at startup with the OLD apostrophe-strip code; spec A's fix landed mid-run but the running process never reloaded). Spec D phantom-no-converged on its own apostrophe-bearing test name; sequence stopped. Recovery: rebuild dist, fresh runtime process, re-run on remaining 5 specs (4/5 converged; spec H — claude-no-hooks — agent-exit-nonzero with work landed, same v0.0.11 worktree-sandbox friction shape). All 8 specs' work is correct; 232 core / 71 harness / 255 runtime / 106 spec-review tests pass.
+- **`--context-dir` change is breaking.** Users with scripts hard-coded to `./context` need to pass `--context-dir ./context` explicitly, OR rename their dir to `./.factory`. The universal default is the dir `factory init` creates.
+- **`createRequire` dropped from core/cli.ts.** v0.0.12's workaround → v0.0.13's persistence → v0.0.14's removal. The subprocess path eliminates the CJS/ESM friction entirely.
+- **bun stays as the test runner.** Every package's test script is `bun test src` — unchanged. v0.0.13's bun-as-test-only documentation continues to apply.
+- **v0.0.14 explicitly does NOT ship**: the factory-cli umbrella package (deferred to v1.0.0); custom hook authoring (out of scope; `--setting-sources` is enough); a `--legacy-context-dir-default` flag (rejected — the migration is one flag added per invocation); `claude --no-hooks` (the actual flag that exists is `--setting-sources`; we use it).
+
+---
+
 ## [0.0.13] — 2026-05-06
 
 **Theme: init-script ergonomics + brownfield-adopter polish + architectural cycle-break.** v0.0.13 closes 8 BACKLOG entries surfaced across the v0.0.12 BASELINE (5 init-script frictions + 1 carve-out re-shape) and the v0.0.12 tag-fire (2 architectural items). Six sibling specs ship together — first cluster to converge 6/6 first-iter in a single `run-sequence` invocation with zero recovery.

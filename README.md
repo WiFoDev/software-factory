@@ -6,25 +6,23 @@ A toolkit for **spec-driven, agent-friendly software development**. You write a 
 
 ---
 
-## v0.0.13: init-script ergonomics + brownfield-adopter polish + architectural cycle-break
+## v0.0.14: v0.0.13 recovery — 3 must-fix correctness bugs + 6 scaffold/CLI ergonomics polish
 
-**`factory init` first-contact polish.** Three init-template fixes that close every greenfield friction the v0.0.12 BASELINE flagged: (a) `BIOME_JSON_TEMPLATE` migrates to Biome 2.x's `"includes"` key (the scaffold's `^2.4.4` Biome dep no longer mismatches the schema); (b) scaffold writes `.factory/.gitkeep` + extends `.gitignore` with `.factory/worktrees/`, `.factory/twin-recordings/` (idempotent); (c) `factory.config.json` gains `dod.template?: string[]` derived from `package.json` scripts at init time, and `/scope-project` reads it as the canonical DoD section body — closes the per-cluster 4× `spec/dod-needs-explicit-command` warning the v0.0.12 BASELINE measured.
+**Validator soundness restored.** v0.0.12's apostrophe-stripping in `normalizeTestNamePattern` solved a non-problem (modern Claude doesn't stylize apostrophes out of `it()` names) and caused the v0.0.13 BASELINE's phantom no-converge: a spec that legitimately used `"slug's log"` had its apostrophe stripped before passing to bun's `-t` regex; bun matched 0 tests; the runtime burned 5 iterations re-implementing already-correct code. v0.0.14 drops apostrophe-stripping; adds a runner safety net that classifies `regex matched 0 tests + nonzero exit` as `harness/test-name-regex-no-match:` (an `error`, not a `fail`) so the runtime stops looping on tooling mismatches.
 
-**Auto-quiet for non-TTY stderr + `factory finish-task --all-converged`.** When `process.stderr.isTTY` is false (pipe / `tee` / CI capture), the `[runtime]` progress lines auto-suppress; new `--no-quiet` (and `--progress` alias) opts back in. New `factory finish-task --all-converged [--since <factorySequenceId>]` walks the most recent factory-sequence and moves every converged spec to `<dir>/done/` in one command — closes the only step that didn't auto-progress with the rest of `run-sequence`.
+**Publish pipeline split into the right tools.** v0.0.13.x's switch to `npm publish` lost pnpm's automatic `workspace:*` → `^<version>` rewrite, breaking `npx @wifo/factory-core init` for fresh users. v0.0.14 splits the responsibilities: `pnpm pack` rewrites the manifest + produces a tarball; `npm publish <tarball> --provenance` uploads via OIDC. Post-publish verification re-fetches each manifest and fails the workflow if `workspace:` leaks through.
 
-**Cycle-break: `@wifo/factory-spec-review` becomes a `peerDependency` of `@wifo/factory-core`.** v0.0.12's `dependencies` declaration created a workspace cycle that bit hard during the tag-fire (5 retry commits to make the publish workflow green). v0.0.13 moves spec-review to `peerDependencies` with auto-install on pnpm 8+ / npm 7+ — preserves the brownfield zero-config goal, eliminates the cycle. v0.0.12's `createRequire` workaround in `core/cli.ts` reverts to a static import; publish.yml reverts to `pnpm -r build`. Legacy npm < 7 caveat documented.
+**`factory spec review` works on published packages.** v0.0.13's `createRequire` workaround hit CJS resolution against spec-review's ESM-only exports map — silent exit 0 on the npm-published artifact. v0.0.14 replaces the in-process import with `child_process.spawn('factory-spec-review', ...)`. Process boundary eliminates the CJS/ESM mismatch AND the build-time cycle.
 
-**Bun-as-test-only.** `packages/core/scripts/emit-json-schema.ts` rewritten to use `node:fs` + standard ESM. Build script switches `bun run scripts/...` → `tsx scripts/...`. `pnpm build` and `pnpm typecheck` are now Node-only. **bun is required only for `pnpm test`** — every package's test runner is `bun test src` (intentional and unchanged).
+**Polish:** `finish-task --all-converged` aligns its "converged" predicate with run-sequence's (final-iteration terminal phase = `'pass'`); `--context-dir` universally defaults to `./.factory` (the dir `factory init` creates) with `factory.config.json runtime.contextDir` auto-detect; scaffold passes its own DoD on day zero (stub `src/index.ts` + `src/index.test.ts` + single-line `biome.json` arrays); `spec/yaml-colon-needs-quoting` lint warning + `/scope-project` auto-quote; `--setting-sources project,local` on `claude -p` spawns excludes user-level skill-auto-suggestion noise (subscription auth preserved).
 
-**Polish:** harness gains per-scenario coverage-trip detection (option b — parse `0 fail` + `coverage threshold ... not met` + nonzero exit → classify as `pass` with `harness/coverage-threshold-tripped:` detail prefix). Closes the CORE-836 friction v0.0.12 shipped a half-fix for. `--coverage=false` was descoped because bun 1.3.x rejects the flag.
-
-**Release lineage:** v0.0.1 framework → v0.0.2 single-shot agent → v0.0.3 closed loop → v0.0.4 spec quality + bootstrap → v0.0.5 npm publish + implement-guidelines → v0.0.6 v0.0.5.x cluster → v0.0.7 real-product workflow → v0.0.8 discoverability + scaffold drops → v0.0.9 status-aware sequence + per-spec timeout → v0.0.10 trust contract → v0.0.11 worktree-sandbox + trust-layer calibration → v0.0.12 validate-phase reliability + brownfield onramp + observability + DoD trust → **v0.0.13 init-script ergonomics + brownfield polish + architectural cycle-break**.
+**Release lineage:** v0.0.1 framework → v0.0.2 single-shot agent → v0.0.3 closed loop → v0.0.4 spec quality + bootstrap → v0.0.5 npm publish + implement-guidelines → v0.0.6 v0.0.5.x cluster → v0.0.7 real-product workflow → v0.0.8 discoverability + scaffold drops → v0.0.9 status-aware sequence + per-spec timeout → v0.0.10 trust contract → v0.0.11 worktree-sandbox + trust-layer calibration → v0.0.12 validate-phase reliability + brownfield onramp + observability + DoD trust → v0.0.13 init-script ergonomics + brownfield polish + architectural cycle-break → **v0.0.14 v0.0.13 recovery: must-fix correctness + scaffold/CLI ergonomics**.
 
 Inspired by the [StrongDM Software Factory](https://factory.strongdm.ai/) model.
 
 ---
 
-## The canonical workflow (v0.0.13)
+## The canonical workflow (v0.0.14)
 
 The recommended end-to-end shape from a fresh directory to a shipped product:
 
