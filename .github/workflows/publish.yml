@@ -117,8 +117,24 @@ jobs:
           # manifest from npm and grep for the `workspace:` substring in
           # the dependency surface. If any leak through, fail the workflow
           # so the next release ships the fix before users hit it.
+          #
+          # Retry-with-backoff handles npm CDN propagation lag — a fresh
+          # publish can take 5-30s before `npm view <pkg>@<version>` can
+          # see it. Without retry, the verification false-fails on the
+          # very-recently-published version it just produced.
           for entry in "${published_pkgs[@]}"; do
-            manifest=$(npm view "$entry" dependencies peerDependencies --json)
+            manifest=""
+            for attempt in 1 2 3 4 5 6; do
+              if manifest=$(npm view "$entry" dependencies peerDependencies --json 2>/dev/null) && [ -n "$manifest" ]; then
+                break
+              fi
+              echo "::notice::$entry not yet visible on npm (attempt $attempt/6) — backing off ${attempt}0s"
+              sleep $((attempt * 10))
+            done
+            if [ -z "$manifest" ]; then
+              echo "::error::$entry was published but npm view never returned a manifest after 6 attempts"
+              exit 1
+            fi
             if echo "$manifest" | grep -q "workspace:"; then
               echo "::error::$entry was published with workspace:* still in its manifest"
               exit 1
