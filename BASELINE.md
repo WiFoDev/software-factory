@@ -660,6 +660,76 @@ The "init-script ergonomics + brownfield-adopter polish + architectural cycle-br
 
 **Would you want to use the factory for the next product?** Per the agent: *"Yes — but only if v0.0.14 fixes the apostrophe-strip bug, the workspace:* publish bug, and the --all-converged definitional drift."* Net signal: **v0.0.13's friction is regression-tier, not polish-tier — the verdict held only because the 3 must-fix bugs all have known causes and small fixes.** v0.0.14 must ship the recovery cluster before the verdict can stay green.
 
+##### v0.0.14 — shipped 2026-05-07 (5/5 first-iter; per-spec invariant restored to v0.0.10-era ~79s; v0.0.13 must-fixes confirmed closed)
+
+The "v0.0.13 recovery — must-fix correctness bugs + scaffold/CLI ergonomics" cluster shipped (apostrophe-strip removal + regex-no-match safety net, `pnpm pack` + `npm publish <tarball>` two-step, `factory spec review` via subprocess, `finish-task --all-converged` status-aggregator, `--context-dir` universal `./.factory` default, day-zero scaffold, `spec/yaml-colon-needs-quoting` lint, `--setting-sources project,local` on `claude -p`). Run executed in `~/dev/url-shortener-v0.0.14/` against the published 0.0.14 packages.
+
+**Predictions (locked before the run):**
+
+1. v0.0.13's three must-fix bugs are closed: no apostrophe phantom no-converge; `npx @wifo/factory-core init` works end-to-end; `factory spec review` produces output on the published artifact.
+2. Per-spec wall-clock returns to the v0.0.10-era invariant (~78s) now that the apostrophe-fix removed phantom-iteration overhead.
+3. The 5/5 first-iter convergence streak resumes (v0.0.14 cluster shipped 7/8; the dogfood inherits).
+4. `dod.template` auto-emit + `--setting-sources` mean the implement phase's prompt is leaner (less hook noise, canonical DoD body).
+
+**Actuals:**
+
+| Spec | Iterations | Wall-clock | Tokens (charged) | Result |
+|---|---|---|---|---|
+| `slug-generator` | 1 | 79.9s | 3,926 | converged |
+| `url-store` | 1 | 51.8s | 2,506 | converged |
+| `shorten-endpoint` | 1 | 93.1s | 4,759 | converged |
+| `redirect-endpoint` | 1 | 104.9s | 6,070 | converged |
+| `stats-endpoint` | 1 | 66.9s | 3,431 | converged |
+| **Total (5 specs)** | **5** | **6m 37s (397.4s)** | **20,692** |
+
+| Metric | v0.0.7 | v0.0.8 | v0.0.9 | v0.0.10 | v0.0.11 | v0.0.12 | v0.0.13 | v0.0.14 |
+|---|---|---|---|---|---|---|---|---|
+| Specs shipped | 4 | 5 | 4 | 4 | 4 | 4 | 4 | **5 (linear)** |
+| Wall-clock | 5m 9s | 6m 26s | 6m 26s | 5m 12s | 6m 32s | 7m 35s | 9m 10s | **6m 37s** |
+| Wall-clock per spec | 77 s | 77 s | 77 s | 78 s | 98 s | 114 s | 138 s | **79 s** ✓ |
+| Charged tokens | 17,009 | 20,900 | 17,009 | 17,422 | 21,138 | 24,728 | 26,904 | **20,692** ✓ |
+| Iterations / spec | 1 each | 1 each | 1 each | 1 each | 1 each (3) + 2 (1) | 1 each | 1 each (3) + 5 phantom (1) | **1 each** ✓ |
+| Maintainer interventions | 32 | ~3-8 | ~3-8 | 7 | 1 invocation | 1 invocation | 2 invocations + recovery | **1 invocation** ✓ |
+
+**End-to-end smoke:** all `curl` calls in the cookbook behave per spec.
+
+**Top 3 friction points (per agent's JOURNAL — ranked by severity):**
+
+1. **`--no-judge` silently auto-passes every multi-command DoD bullet.** A bullet like `` - `pnpm typecheck`, `pnpm check`, and `bun test src` are green. `` gets classified `kind: judge` (multiple backticks → not a single shell command), and under `--no-judge` is auto-passed with reasoning `"--no-judge (skipped)"`. The dogfooder's run shipped with **36 hidden biome errors** undetected through final converge. The trust contract — "DoD passes = ship-ready" — is broken when the gate auto-passes its own multi-command idiom. **NEW v0.0.15 BACKLOG entry — MUST-FIX, lead candidate.**
+2. **Scaffold's `biome.json` lints the factory's own runtime state.** `factory init` writes `"includes": ["**"]` with no exclusions for `.factory/`, `.factory-spec-review-cache/`, `docs/specs/`, or `docs/technical-plans/`. First run of `factory spec review` (writes cache) or any `factory-runtime run` (writes records) → `pnpm check` fails on auto-generated artifacts. v0.0.13 closed the day-zero biome-rule mismatch; v0.0.14 surfaces a NEW shape — the gate becomes red the moment factory writes its own state. **NEW v0.0.15 BACKLOG entry.**
+3. **`run-sequence` auto-walks DAG; docs/rituals still assume manual flips.** Runtime walks `slug-generator → url-store → shorten → redirect → stats` in one invocation, auto-promoting on each converge — but doesn't touch `status:` on disk, doesn't expose `--on-converge <cmd>`, and the canonical baseline prompt's between-spec rituals (flip status, append to JOURNAL on converge, `git mv` to done/) collapse to end-of-run. The docs and runtime are misaligned: half-explained, half-deferred. **NEW v0.0.15 BACKLOG entry.**
+
+**Honorable mentions (per agent):**
+- `factory spec review` returns `OK` with no per-judge breakdown — couldn't tell whether `cross-doc-consistency` actually walked deps or no-op'd. Diagnostic transparency missing.
+- A `spec/route-collision-risk` lint would systematically catch what the dogfooder caught manually via the `/stats/:slug` ordering Constraint.
+- Implementer signature drift between specs 3 + 4 (`createFetch(store)` → `createFetch(store, clickLog)`); migration was documented in spec 4 prose but a longer chain would benefit from an explicit "migration" subtask convention.
+
+**Predicted-vs-actual scoring:**
+
+| Prediction | Outcome | Notes |
+|---|---|---|
+| #1 v0.0.13 must-fixes closed | ✅ Landed | No apostrophe phantom no-converge in any of 5 specs (the apostrophe normalization was structural; even apostrophe-free specs benefit from the safety net not firing). `npx @wifo/factory-core init` worked end-to-end (no EUNSUPPORTEDPROTOCOL). `factory spec review` ran via subprocess (the v0.0.12 createRequire silent-fail path is gone). |
+| #2 Per-spec wall-clock returns to ~78s | ✅ Landed | Average 79s/spec, restoring the v0.0.7-v0.0.10 invariant. The 78 → 98 → 114 → 138 trend was transient (smoke-boot + phantom-failure + cycle-break overhead) — not architectural drift. |
+| #3 5/5 first-iter convergence streak resumes | ✅ Landed | 5/5 first-iter converges. Cleanest BASELINE since v0.0.10 (5/5) and v0.0.7 (4/4). |
+| #4 dod.template + `--setting-sources` reduce hook noise | ✅ Landed | dod.template auto-emit gave every spec a clean DoD block from the start. The implement phase's agent didn't report Vercel/Next.js skill noise this run (the `--setting-sources project,local` flag did its job). |
+
+**Surprises (the high-value entries):**
+
+- **First BASELINE since v0.0.10 to converge 5/5 first-iter at the v0.0.10-era invariant.** v0.0.14 closed v0.0.13's 3 must-fixes AND restored the per-spec time/token invariant. The recovery worked.
+- **DoD-verifier's multi-command bullet classification IS the new must-fix.** The trust contract from v0.0.10 was "spec ships only when DoD passes." v0.0.14's BASELINE proved that under `--no-judge` (which the BASELINE prompt uses), multi-command bullets auto-pass with reasoning `"--no-judge (skipped)"`. **The gate the v0.0.10 spec promised exists in name but not enforcement** for the most natural way to write a DoD line. This is the highest-severity finding since v0.0.13's apostrophe-strip — and was completely invisible until a real run-sequence + real biome errors collided.
+- **v0.0.14's `--setting-sources project,local` wins were visible by absence.** The implement-phase agent in this BASELINE didn't report skill-injection noise (the friction the dogfooder explicitly flagged in v0.0.13). The fix worked even though there's no explicit "no Vercel/Next.js noise observed" line in the journal — silence IS the signal here.
+- **Verdict: cleaner trajectory than v0.0.13.** v0.0.13's 3 must-fixes were "yes if you fix all 3." v0.0.14's 1 must-fix + 2 ergonomics are "yes if you fix #1." The conditional-yes is shrinking; v0.0.16+ may be the first unconditional-yes since v0.0.10.
+
+**Mapped BACKLOG entries (6 total — 1 must-fix + 2 polish + 3 honorable mentions):**
+- Friction #1 (`--no-judge` silent multi-command pass) → NEW v0.0.15 entry — MUST-FIX, lead candidate.
+- Friction #2 (scaffold biome.json doesn't exclude .factory/) → NEW v0.0.15 entry.
+- Friction #3 (run-sequence on-converge hook + docs alignment) → NEW v0.0.15 entry.
+- Honorable mention #4 (spec review per-judge breakdown) → NEW v0.0.15 entry.
+- Honorable mention #5 (spec/route-collision-risk lint) → NEW v0.0.15 entry.
+- Honorable mention #6 (cross-spec migration subtask / import-shape lint) → NEW v0.0.15 entry.
+
+**Would you want to use the factory for the next product?** Per the agent: *"Yes — `/scope-project` plus `run-sequence` produced a working, all-gates-green URL shortener in 5 first-iteration converges, ~6.6 minutes wall-clock, and 20.7k charged tokens, with my role almost entirely confined to the review seat — but I want the three friction points above closed before I do it for anything bigger than four endpoints."* Net signal: **v0.0.14 brought the runtime back to its v0.0.10 peak; v0.0.15 needs to close the DoD silent-pass bug AND the scaffold-lints-its-own-state nit before the verdict goes from conditional-yes to unconditional-yes.**
+
 ##### v0.1.0 — pending
 
 After scheduler (Layer 5) ships. The maintainer prompt should reduce to "scope this product, ship it overnight" with no hand-driving. If we're not there by v0.1.0, the scheduler isn't done.

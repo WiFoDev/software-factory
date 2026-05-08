@@ -428,6 +428,121 @@ Lean: ship (b) + (c) together in v0.0.9. (a) is too crude. (d) is v0.1.0+ territ
 
 
 
+## `--no-judge` silently auto-passes multi-command DoD bullets *(NEW, surfaced by v0.0.14 BASELINE — friction #1, MUST-FIX, trust contract regression)*
+
+**What:** A DoD bullet written naturally — `` - `pnpm typecheck`, `pnpm check`, and `bun test src` are green. `` — gets classified by the dod-verifier as `kind: judge` (because it has multiple backtick commands; the parser's "shell-runnable" path requires a single backticked command). Under the `--no-judge` flag (which the canonical BASELINE prompt uses), every judge bullet is auto-passed with reasoning `"--no-judge (skipped)"`. The v0.0.14 BASELINE shipped with **36 hidden biome errors** — the gate looked green but wasn't enforced.
+
+**Why:** The trust contract from v0.0.10 ("spec ships only when DoD passes") is broken when the natural way to write a DoD line auto-passes its own enforcement. The dogfooder's verdict explicitly named this as the highest-severity finding: silent gate-pass is worse than explicit gate-fail. Closing this is more important than closing whatever else v0.0.15 ships.
+
+**Shape options:**
+- (a) **Auto-split multi-command bullets at parse time.** When a bullet contains N backtick spans where each span is a single shell-runnable command, treat it as N shell bullets (each `kind: shell`). Each command runs; the bullet aggregates `pass` only if ALL commands pass. ~50 LOC in the dod-verifier's bullet parser.
+- (b) **Lint warns on multi-command bullets at scoping time** (severity: warning, code: `spec/dod-multi-command-bullet`). Catches the friction at scope-project time so authors split the bullet into N single-command bullets manually. Doesn't fix already-shipped specs; complementary to (a).
+- (c) **`--no-judge` becomes a hard error when judge bullets are present in a spec's DoD.** Forces the maintainer to either remove the judge bullets or run with judges enabled. Heavy-handed; rejects the existing `--no-judge` flow.
+- (d) **Drop the `--no-judge` flag entirely.** All DoD bullets execute; judge bullets that need an LLM verdict are dispatched to `claude -p` regardless. Ties the runtime closer to subscription auth; eliminates the silent-pass surface.
+
+Lean: (a) + (b). (a) closes the soundness gap with no spec-author burden; (b) nudges authors toward single-command bullets so the implementation surface stays simple. (c) is too heavy; (d) couples the runtime to subscription auth more aggressively than the rest of the codebase warrants.
+
+**Touches:** `packages/runtime/src/phases/dod.ts` (auto-split logic in the bullet parser; aggregate pass/fail across the split commands), `packages/runtime/src/phases/dod.test.ts` (regression-pin: a multi-command bullet under `--no-judge` actually runs all commands and fails if any fail), `packages/core/src/lint.ts` (new `spec/dod-multi-command-bullet` lint code, severity warning), `packages/core/src/lint.test.ts`, READMEs. ~120 LOC.
+
+**Phasing suggestion:** v0.0.15 lead candidate. The most-severe finding since v0.0.13's apostrophe-strip — silently shipping with hidden lint errors is a real trust regression.
+
+---
+
+## Scaffold's `biome.json` doesn't exclude `.factory/` artifacts *(NEW, surfaced by v0.0.14 BASELINE — friction #2)*
+
+**What:** v0.0.14's `factory init` writes `biome.json` with `"files": { "includes": ["**"] }` — no exclusions for `.factory/`, `.factory-spec-review-cache/`, `docs/specs/`, or `docs/technical-plans/`. v0.0.13 closed the day-zero biome-rule mismatch (`pnpm check` exits 0 on a freshly-scaffolded tree); v0.0.14 surfaces a new shape — the gate becomes red the moment the factory writes its own state. First run of `factory spec review` (writes `.factory-spec-review-cache/`) or `factory-runtime run` (writes `.factory/<id>.json`), `pnpm check` fails on auto-generated artifacts. The dogfooder patched manually to `["**", "!.factory", "!.factory-spec-review-cache", "!docs/specs"]`.
+
+**Why:** Day-zero biome-clean is one promise; ongoing biome-clean as factory writes its own state is the harder promise. The v0.0.14 fix landed the easy half; the harder half requires excluding paths the factory creates after initialization.
+
+**Shape options:**
+- (a) **Scaffold's `BIOME_JSON_TEMPLATE` ships with the canonical exclusions:** `["**", "!.factory", "!.factory-spec-review-cache", "!docs/specs/done/**", "!docs/technical-plans/done/**"]`. Lock the exclusion list against the directories the factory writes. Add a regression-pin test that runs `pnpm check` after a fake `.factory/<id>.json` write — exit 0.
+- (b) **`factory init` writes `.biomeignore`** instead of changing `biome.json` — biome supports a separate ignore file. Cleaner separation; doesn't muddle `biome.json`'s `includes`.
+- (c) **Sync the scaffold's `$schema` URL with whatever `@biomejs/biome` actually resolves.** Pin is `^2.4.4` but resolves `2.4.14`; the schema URL might drift. Small edit; orthogonal to (a)/(b).
+
+Lean: (a) + (c). Single template, single source of truth; the schema-URL sync is a one-line edit.
+
+**Touches:** `packages/core/src/init-templates.ts` (`BIOME_JSON_TEMPLATE` exclusions + `$schema` URL sync), `packages/core/src/init.test.ts` (regression-pin: `pnpm check` exits 0 after a fake `.factory/<id>.json` write), tests, README. ~30 LOC.
+
+**Phasing suggestion:** v0.0.15. Pairs with friction #1 — both are gate-honesty fixes (the gate must be on AND must execute correctly).
+
+---
+
+## `factory-runtime run-sequence --on-converge <cmd>` hook (or doc reset to "batch end-of-run") *(NEW, surfaced by v0.0.14 BASELINE — friction #3)*
+
+**What:** v0.0.13's dynamic-DAG-walk shipped: the runtime walks the dep chain in one invocation and auto-promotes drafting → ready in-memory. But the docs (canonical baseline prompt, `/scope-project` source, `factory-runtime` README) still describe the workflow as "flip drafting → ready as each spec converges, append to JOURNAL on converge, `git mv` to done/ before moving on." None of that is possible mid-run because the runtime doesn't expose an on-converge hook AND doesn't touch `status:` on disk. The rituals collapse to end-of-run; the docs aren't honest about it.
+
+**Why:** Either ship the runtime hook so the rituals can fire mid-run, OR rewrite the docs to lean into "one invocation, batch the moves at the end" as the v0.0.15 blessed flow. Right now it's neither. The v0.0.14 BASELINE dogfooder explicitly flagged: *"half-explained, half-deferred."*
+
+**Shape options:**
+- (a) **`factory-runtime run-sequence --on-converge "<cmd>"` flag.** When each spec converges, runtime spawns `<cmd>` with env vars `FACTORY_SPEC_ID`, `FACTORY_RUN_ID`, `FACTORY_SEQUENCE_ID`. Maintainer can pass `--on-converge "factory finish-task $FACTORY_SPEC_ID --context-dir ./.factory"` to auto-move shipped specs to `done/`. ~40 LOC + tests.
+- (b) **Documentation reset:** rewrite the canonical baseline prompt + `/scope-project` source + READMEs to describe the v0.0.14 workflow honestly: "one `run-sequence` invocation walks the chain; batch the move-to-done with `factory finish-task --all-converged` at the end." Drop the per-spec ritual prose. ~30 LOC across docs.
+- (c) **Both.** Ship (a) so power users can automate; ship (b) so the canonical flow is the simpler version.
+
+Lean: (c). (b) is the higher-leverage fix (everyone reads the docs; few will use `--on-converge`); (a) is a small ergonomic win for the maintainer who wants per-spec automation.
+
+**Touches:** `packages/runtime/src/sequence.ts` (`--on-converge` flag + spawn hook), `packages/runtime/src/sequence.test.ts` (regression-pin: hook fires on each convergence with correct env vars), `docs/baselines/url-shortener-prompt.md` (canonical prompt reset — see also `BASELINE.md`'s reset-event log), `packages/core/commands/scope-project.md` (drop per-spec ritual prose), `packages/runtime/README.md`, top-level `README.md`. ~80 LOC.
+
+**Phasing suggestion:** v0.0.15. Closes the dogfooder's #3 friction; documentation reset is the bulk of the work.
+
+---
+
+## `factory spec review` per-judge breakdown on success *(NEW, surfaced by v0.0.14 BASELINE — honorable mention #1)*
+
+**What:** `factory spec review docs/specs/foo.md` returns `OK` on a clean spec with no findings — but no per-judge breakdown. The dogfooder couldn't tell whether `cross-doc-consistency` actually walked the `depends-on` edges or just no-op'd. Diagnostic transparency missing.
+
+**Why:** The reviewer is one of the factory's central trust mechanisms. When it returns OK, the maintainer needs to know which judges actually fired vs. were skipped (e.g., `cross-doc-consistency` skipped because no `depends-on` was declared, or `holdout-distinctness` skipped because no `## Holdout Scenarios` section). Without the breakdown, "OK" is opaque — the reviewer might be silently no-op'ing without the maintainer noticing.
+
+**Shape options:**
+- (a) **Print per-judge status on success:** `OK` becomes `OK (8 judges ran: ✓ internal-consistency, ✓ judge-parity, ✓ dod-precision, … skip cross-doc-consistency [no depends-on declared], ✓ feasibility, …)`. ~30 LOC change in spec-review's CLI output formatter.
+- (b) **`--verbose` flag** that prints the breakdown; default stays terse `OK`. Less noisy by default; explicit opt-in for diagnostic mode. Cleaner UX.
+- (c) **Always print breakdown to stderr; OK summary on stdout.** Maintainer captures stdout for "did it pass" boolean; stderr is for inspection. Tee-friendly.
+
+Lean: (b). Default stays clean for `pnpm exec factory spec review docs/specs/foo.md` (one-line output); `--verbose` opens the lid.
+
+**Touches:** `packages/spec-review/src/cli.ts` (verbose-flag handling + breakdown formatter), `packages/spec-review/src/review.ts` (track per-judge ran/skipped state), tests, README. ~60 LOC.
+
+**Phasing suggestion:** v0.0.15. Small lift; closes the diagnostic-transparency gap.
+
+---
+
+## Lint code `spec/route-collision-risk` for HTTP path conflicts *(NEW, surfaced by v0.0.14 BASELINE — honorable mention #2)*
+
+**What:** The v0.0.14 BASELINE's `redirect-endpoint` and `stats-endpoint` had path patterns that could collide (`/:slug` vs `/stats/:slug`). The dogfooder spelled out the ordering Constraint manually ("stats route must precede bare-slug redirect"), and the implementer followed it. But the systematic case — *"two endpoints whose paths could collide"* — has no automated detection today. Future spec authors who don't think to spell it out will hit a real router-ordering bug.
+
+**Why:** The factory's lint surface catches structural spec problems (missing required sections, format violations). Path-collision risk is structural in the same way — it's a guarantee about the spec's surface that can be checked at scoping time, not just at runtime.
+
+**Shape options:**
+- (a) **`spec/route-collision-risk` lint code (severity: warning).** Scans the spec body for HTTP method+path patterns (e.g., `GET /:slug`, `GET /stats/:slug`); if two patterns share the same method AND one is a prefix of the other (or matches the same input), emit a warning recommending an explicit ordering Constraint. ~50 LOC.
+- (b) **Per-product collision matrix in `/scope-project`.** When the slash command authors a product with multiple HTTP endpoints, it cross-checks the path patterns and emits an explicit ordering Constraint if collisions exist. Workflow-side fix; doesn't help specs authored outside `/scope-project`.
+- (c) **Both.** (a) catches universal cases; (b) prevents the bomb at scoping time.
+
+Lean: (a) for v0.0.15. (b) is a `/scope-project` polish that can defer; the lint catches it everywhere.
+
+**Touches:** `packages/core/src/lint.ts` (new lint code + path-pattern parser), `packages/core/src/lint.test.ts` (3 tests: collision detected; no collision; method differs), tests, README. ~60 LOC.
+
+**Phasing suggestion:** v0.0.15. Smaller; pairs with the other lint codes shipped in v0.0.13/v0.0.14.
+
+---
+
+## Cross-spec public-API drift detection (or migration subtask convention) *(NEW, surfaced by v0.0.14 BASELINE — honorable mention #3)*
+
+**What:** v0.0.14 BASELINE specs 3 + 4 had a public API drift — `createFetch(store)` (spec 3) → `createFetch(store, clickLog)` (spec 4). Spec 4 documented the migration in prose, but a longer chain would benefit from an explicit "migration" subtask convention OR automated detection of cross-spec import-shape drift.
+
+**Why:** Each spec ships one feature; a feature that EXTENDS a previously-shipped public API needs to either (a) re-document the migration explicitly so the implementer notices, or (b) get caught at lint time when the import shape doesn't match the prior spec's export shape. Today neither path exists; the maintainer has to spot the drift in review.
+
+**Shape options:**
+- (a) **`/scope-project` adds a "Migration:" subsection** to specs that change a previously-shipped public API. The slash command's prompt enumerates "if a spec imports a name that an earlier spec defined and the new shape differs, add a Migration subsection to the spec body documenting the breaking change." Workflow-side fix.
+- (b) **Lint code `spec/public-api-drift`** (severity: warning) that walks all specs in the directory, builds a map of "previously-shipped exports" from `done/`, and warns when a new spec's `exemplars[].why` (or constraint text) references a different shape than the most recent export of that name. Heuristic; would require structured exemplar metadata.
+- (c) **Both.** (a) is the easier fix; (b) is the systematic one.
+
+Lean: (a) for v0.0.15. (b) requires structured metadata that doesn't exist today; the slash-command edit is a one-paragraph prompt change.
+
+**Touches:** `packages/core/commands/scope-project.md` (new "Migration:" subsection guidance + worked example), `packages/core/src/scope-project-source.test.ts` (regression-pin: source contains the new rule), tests, README. ~40 LOC.
+
+**Phasing suggestion:** v0.0.15. Smallest of the 6 entries; pairs with #4 (spec review breakdown) — both are documentation/diagnostic surface fixes.
+
+---
+
 ## Shipped in v0.0.14 (kept here briefly for history)
 
 The "v0.0.13 recovery — must-fix correctness bugs + scaffold/CLI ergonomics polish" cluster shipped in v0.0.14. Eight specs scoped via `/scope-project` (seventh dogfood) + run via `factory-runtime run-sequence` with `--include-drafting --skip-dod-phase --max-agent-timeout-ms 1800000` across 2 invocations (recovery from a stale-dist apostrophe issue identical to v0.0.12's pattern):
